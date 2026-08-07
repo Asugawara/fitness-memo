@@ -1,0 +1,34 @@
+[package]
+name = "fitness-memo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"     # ★ default features を絶対に削らない（下記）
+
+# UI 系は wasm32 専用にする。cargo test（ホスト）が leptos の巨大な依存グラフを
+# ビルドしなくなり、「csr feature がホストで通るか」という未検証の前提自体が消える
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+leptos = { version = "0.8.20", features = ["csr"] }
+console_error_panic_hook = "0.1"
+# ★ 使う API は全て自前で宣言する。tachys 経由で「偶然」有効になっている feature に
+#   寄りかかると leptos のパッチ更新で無言に壊れる（Element は現状 tachys が有効化して
+#   いるが、Storage / MediaQueryList は有効化していない）
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Storage",         # Window::local_storage（leptos/tachys は有効化しない）
+    "Event",
+    "EventTarget",
+    "Element",         # Document::get_element_by_id / Element::scroll_into_view
+    "MediaQueryList",  # Window::match_media("(display-mode: standalone)")
+] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+# ★ strip は書かない: strip="symbols" は wasm 生成物を壊す（rust-lang/rust#93294 は現在も open）
+# ★ panic="abort" も書かない: wasm32-unknown-unknown はターゲット既定が既に Abort で冗長

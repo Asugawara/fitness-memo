@@ -1,0 +1,13 @@
+[build]
+target = "index.html"
+dist = "dist"
+public_url = "/"     # ローカル/E2E 用。リリース時は --public-url /fitness-memo/ で上書き
+# filehash / no_sri / minify は trunk の既定のまま（filehash=true, SRI 有効, minify=never）
+
+[serve]
+port = 8080          # ★ SW の dev 判定がこの値に依存するので明示コミットして固定する
+
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = ["scripts/stamp-sw.sh"]

@@ -1,0 +1,795 @@
+//! 今日タブ（メイン画面）。
+//!
+//! 「非常にシンプル」を満たすため**トレ前の情報とトレ中の情報を排他にする**。
+//! 経過時間ヒーローと部位チップは眺めるための情報で、セット入力中は不要なので
+//! 1 種目でも追加されたら 1 行に畳む。
+
+use chrono::NaiveDate;
+use leptos::prelude::*;
+
+use crate::core;
+use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, Kind, SetEntry};
+
+use super::{
+    fmt_date, fmt_metric, fmt_set, fmt_weight, is_standalone, kb_blur, kb_focus, now_ms,
+    parse_reps, parse_weight, recency_class, reps_unit, scroll_to_id, short_elapsed, use_dates,
+    use_db, use_kb,
+};
+
+/// 今日タブが表示しているカード 1 枚。
+///
+/// 日付キーを持つのは `<For>` のキーに混ぜるため。過去日へ切り替えたときにカードの
+/// DOM ごと作り直さないと、カード内の編集中文字列が前の日のまま残る。
+#[derive(Clone, PartialEq, Eq)]
+struct CardRef {
+    date: String,
+    ex: ExerciseId,
+}
+
+/// 編集中のセット 1 行。
+///
+/// **保存モデル（`SetEntry`）ではなく文字列で持つ。** `f32` / `u32` では空欄が表現できず
+/// 0 に落ちるうえ、`"6."` のような中間状態を保持できない。
+#[derive(Clone, Debug, PartialEq)]
+struct Row {
+    key: u32,
+    weight: String,
+    reps: String,
+}
+
+impl Row {
+    fn blank(key: u32) -> Self {
+        Self {
+            key,
+            weight: String::new(),
+            reps: String::new(),
+        }
+    }
+}
+
+fn card_dom_id(ex: ExerciseId) -> String {
+    format!("card-{ex}")
+}
+
+/// その日・その種目のセットを丸ごと差し替える。
+fn write_log(db: &mut Db, date: NaiveDate, ex: ExerciseId, sets: Vec<SetEntry>, is_today: bool) {
+    let key = core::date_key(date);
+    if sets.is_empty() {
+        if let Some(session) = db.sessions.get_mut(&key) {
+            session.logs.retain(|l| l.exercise_id != ex);
+        }
+    } else {
+        let session = db.sessions.entry(key.clone()).or_default();
+        match session.logs.iter_mut().find(|l| l.exercise_id == ex) {
+            Some(log) => {
+                log.sets = sets;
+                // ★ at は当日入力時のみ埋める。過去日バックフィルは None のまま。
+                //   ここで now を入れると「最後のトレーニングから」が「たった今」になり
+                //   明示要件の出力が嘘になる
+                if is_today {
+                    log.at = Some(now_ms());
+                }
+            }
+            None => session.logs.push(ExerciseLog {
+                exercise_id: ex,
+                sets,
+                at: is_today.then(now_ms),
+            }),
+        }
+    }
+    // ログも体重もメモも無くなった日は残さない（過去日を閲覧しただけで実施日にしない）
+    if db.sessions.get(&key).is_some_and(|s| s.is_empty()) {
+        db.sessions.remove(&key);
+    }
+}
+
+#[component]
+pub fn Today() -> impl IntoView {
+    let db = use_db();
+    let dates = use_dates();
+
+    let cards: RwSignal<Vec<CardRef>> = RwSignal::new(Vec::new());
+    let sheet = RwSignal::new(false);
+
+    // 日付が変わったらカードを Db から引き直す。
+    // db は untracked で読む（1 文字打つたびにカードが作り直されるのを防ぐ）
+    Effect::new(move |_| {
+        let key = core::date_key(dates.selected.get());
+        let ids = db.with_untracked(|d| {
+            d.sessions
+                .get(&key)
+                .map(|s| s.logs.iter().map(|l| l.exercise_id).collect::<Vec<_>>())
+                .unwrap_or_default()
+        });
+        cards.set(
+            ids.into_iter()
+                .map(|ex| CardRef {
+                    date: key.clone(),
+                    ex,
+                })
+                .collect(),
+        );
+    });
+
+    // ★ ヒーローと部位チップは「今日を始める前」の間隔を出す。
+    //   今日のセッションを外した snapshot に core の関数をそのまま当てることで、
+    //   1 セット入れた瞬間に「たった今」へ化けて意味を失うのを防ぐ。
+    //   Memo なので今日のキー入力では下流が再評価されない。
+    let before_today = Memo::new(move |_| {
+        let today = dates.today.get();
+        db.with(|d| {
+            let mut snapshot = d.clone();
+            snapshot.sessions.remove(&core::date_key(today));
+            snapshot
+        })
+    });
+
+    let elapsed = Memo::new(move |_| {
+        let today = dates.today.get();
+        before_today.with(|snapshot| core::elapsed_since_last(snapshot, now_ms(), today))
+    });
+
+    /// 部位チップ 1 個ぶんのデータ。
+    type Chip = (String, Option<crate::core::Elapsed>);
+
+    let all_chips = Memo::new(move |_| {
+        let today = dates.today.get();
+        before_today.with(|snapshot| {
+            let by_group = core::elapsed_by_group(snapshot, now_ms(), today);
+            let mut groups = snapshot.groups.clone();
+            groups.sort_by_key(|g| g.order);
+            groups
+                .into_iter()
+                .map(|g| {
+                    let e = by_group.get(&g.id).copied();
+                    (g.name, e) as Chip
+                })
+                .collect::<Vec<_>>()
+        })
+    });
+
+    // 畳んだヒーローに出すのは「今日やった部位」だけ（計画のモック: 最後から 2日5時間 · 胸 3d）
+    let today_chips = Memo::new(move |_| {
+        let today = dates.today.get();
+        let ids: Vec<ExerciseId> = cards.get().iter().map(|c| c.ex).collect();
+        before_today.with(|snapshot| {
+            let by_group = core::elapsed_by_group(snapshot, now_ms(), today);
+            let mut seen: Vec<GroupId> = Vec::new();
+            for ex in &ids {
+                if let Some(e) = snapshot.exercise(*ex)
+                    && !seen.contains(&e.group_id)
+                {
+                    seen.push(e.group_id);
+                }
+            }
+            seen.into_iter()
+                .filter_map(|gid| {
+                    snapshot
+                        .group(gid)
+                        .map(|g| (g.name.clone(), by_group.get(&gid).copied()) as Chip)
+                })
+                .collect::<Vec<_>>()
+        })
+    });
+
+    let training = move || !cards.get().is_empty();
+
+    let pick = move |ex: ExerciseId| {
+        sheet.set(false);
+        let date = core::date_key(dates.selected.get_untracked());
+        let exists = cards.with_untracked(|cs| cs.iter().any(|c| c.ex == ex));
+        if !exists {
+            cards.update(|cs| cs.push(CardRef { date, ex }));
+        }
+        // 既にあるなら新規カードを作らず既存カードへスクロールする
+        scroll_to_id(card_dom_id(ex));
+    };
+
+    let chip_row = move |chips: Vec<Chip>, class: &'static str| {
+        view! {
+            <div class=format!("chips {class}") data-testid="group-chips">
+                {chips
+                    .into_iter()
+                    .map(|(name, e)| {
+                        let label = e.map_or_else(|| "—".to_string(), short_elapsed);
+                        view! {
+                            <span class="chip" data-recency=recency_class(e) data-testid="group-chip">
+                                <b>{name}</b>
+                                <i>{label}</i>
+                            </span>
+                        }
+                    })
+                    .collect::<Vec<_>>()}
+            </div>
+        }
+    };
+
+    view! {
+        <section class="today" data-testid="screen-today">
+            // ★ iOS では Safari のタブと standalone PWA で localStorage が共有されない。
+            //   先に Safari で記録すると、ホーム画面に追加した後で全部見えなくなる
+            {(!is_standalone())
+                .then(|| {
+                    view! {
+                        <p class="install-hint" data-testid="install-hint">
+                            "記録を付ける前にホーム画面に追加してください。Safari のタブで付けた記録は引き継がれません"
+                        </p>
+                    }
+                })}
+
+            <header class="day-head" class:past=move || dates.is_past_edit()>
+                <h1 data-testid="today-date">{move || fmt_date(dates.selected.get())}</h1>
+                {move || {
+                    (!dates.is_past_edit()).then(|| view! { <span class="badge">"今日"</span> })
+                }}
+            </header>
+
+            {move || {
+                dates
+                    .is_past_edit()
+                    .then(|| {
+                        view! {
+                            <div class="past-banner" data-testid="past-banner">
+                                <span>
+                                    {move || format!("{} を編集中", fmt_date(dates.selected.get()))}
+                                </span>
+                                <button
+                                    class="link-btn"
+                                    data-testid="back-to-today"
+                                    on:click=move |_| dates.back_to_today()
+                                >
+                                    "今日へ戻る"
+                                </button>
+                            </div>
+                        }
+                    })
+            }}
+
+            // 経過時間ヒーロー。過去日編集中は「今」の情報なので出さない
+            {move || {
+                if dates.is_past_edit() {
+                    return None;
+                }
+                let value = elapsed.get().map_or_else(|| "—".to_string(), core::humanize);
+                Some(
+                    if training() {
+                        view! {
+                            <div class="hero folded" data-testid="hero">
+                                <span data-testid="elapsed">{format!("最後から {value}")}</span>
+                                {chip_row(today_chips.get(), "inline")}
+                            </div>
+                        }
+                            .into_any()
+                    } else {
+                        view! {
+                            <div class="hero" data-testid="hero">
+                                <p class="hero-label">"最後のトレーニングから"</p>
+                                <p class="hero-value" data-testid="elapsed">
+                                    {value}
+                                </p>
+                                {chip_row(all_chips.get(), "")}
+                            </div>
+                        }
+                            .into_any()
+                    },
+                )
+            }}
+
+            // 体重・体調メモ。日付が変わったら初期値ごと作り直す
+            {move || {
+                let _ = dates.selected.get();
+                view! { <ConditionRow /> }
+            }}
+
+            <div class="cards">
+                <For
+                    each=move || cards.get()
+                    key=|c| (c.date.clone(), c.ex)
+                    children=move |c| view! { <ExerciseCard ex=c.ex cards=cards /> }
+                />
+            </div>
+
+            <div class="add-wrap">
+                <button
+                    class="primary"
+                    data-testid="add-exercise"
+                    on:click=move |_| sheet.set(true)
+                >
+                    "種目を追加"
+                </button>
+            </div>
+
+            {move || {
+                sheet
+                    .get()
+                    .then(|| {
+                        view! {
+                            <div
+                                class="sheet-backdrop"
+                                on:click=move |_| sheet.set(false)
+                                data-testid="sheet-backdrop"
+                            ></div>
+                            <div
+                                class="sheet"
+                                role="dialog"
+                                aria-label="種目を追加"
+                                data-testid="add-sheet"
+                            >
+                                <header class="sheet-head">
+                                    <strong>"種目を追加"</strong>
+                                    <button class="link-btn" on:click=move |_| sheet.set(false)>
+                                        "閉じる"
+                                    </button>
+                                </header>
+                                <div class="sheet-body">
+                                    {move || {
+                                        db.with(|d| {
+                                            let mut groups = d.groups.clone();
+                                            groups.sort_by_key(|g| g.order);
+                                            groups
+                                                .into_iter()
+                                                .map(|g| {
+                                                    let mut exercises: Vec<_> = d
+                                                        .exercises
+                                                        .iter()
+                                                        .filter(|e| e.group_id == g.id && !e.archived)
+                                                        .cloned()
+                                                        .collect();
+                                                    exercises.sort_by_key(|e| e.order);
+                                                    view! {
+                                                        <section class="sheet-group">
+                                                            <h3 style=format!("--dot:{}", g.color)>{g.name}</h3>
+                                                            <div class="pick-list">
+                                                                {exercises
+                                                                    .into_iter()
+                                                                    .map(|e| {
+                                                                        let id = e.id;
+                                                                        let added = cards
+                                                                            .with_untracked(|cs| cs.iter().any(|c| c.ex == id));
+                                                                        view! {
+                                                                            <button
+                                                                                class="pick"
+                                                                                class:added=added
+                                                                                data-testid="pick-exercise"
+                                                                                on:click=move |_| pick(id)
+                                                                            >
+                                                                                {e.name}
+                                                                            </button>
+                                                                        }
+                                                                    })
+                                                                    .collect::<Vec<_>>()}
+                                                            </div>
+                                                        </section>
+                                                    }
+                                                })
+                                                .collect::<Vec<_>>()
+                                        })
+                                    }}
+                                </div>
+                            </div>
+                        }
+                    })
+            }}
+        </section>
+    }
+}
+
+/// 体重・体調メモの折りたたみ 1 行。
+#[component]
+fn ConditionRow() -> impl IntoView {
+    let db = use_db();
+    let dates = use_dates();
+    let kb = use_kb();
+
+    let date_key = core::date_key(dates.selected.get_untracked());
+    let (weight0, note0) = db.with_untracked(|d| {
+        d.sessions
+            .get(&date_key)
+            .map(|s| {
+                (
+                    s.body_weight.map(fmt_weight).unwrap_or_default(),
+                    s.note.clone(),
+                )
+            })
+            .unwrap_or_default()
+    });
+
+    let open = RwSignal::new(!weight0.is_empty() || !note0.is_empty());
+    let weight = RwSignal::new(weight0.clone());
+    let note = RwSignal::new(note0.clone());
+
+    // このコンポーネントは日付が変わるたび作り直されるので、キーはその都度引き直せばよい
+    // （`String` を capture すると commit が Copy でなくなり view! の FnMut 要件に落ちる）
+    let commit = move || {
+        let body_weight = weight.with_untracked(|w| {
+            w.trim()
+                .replace(',', ".")
+                .parse::<f32>()
+                .ok()
+                .filter(|v| v.is_finite() && *v > 0.0)
+        });
+        let text = note.get_untracked();
+        let key = core::date_key(dates.selected.get_untracked());
+        db.update(move |d| {
+            {
+                let session = d.sessions.entry(key.clone()).or_default();
+                session.body_weight = body_weight;
+                session.note = text;
+            }
+            if d.sessions.get(&key).is_some_and(|s| s.is_empty()) {
+                d.sessions.remove(&key);
+            }
+        });
+    };
+
+    view! {
+        <div class="condition" data-testid="condition">
+            <button
+                class="link-btn cond-toggle"
+                data-testid="condition-toggle"
+                on:click=move |_| open.update(|o| *o = !*o)
+            >
+                {move || if open.get() { "－ コンディション" } else { "＋ コンディション" }}
+            </button>
+            {move || {
+                open
+                    .get()
+                    .then(|| {
+                        view! {
+                            <div class="cond-fields">
+                                <label>
+                                    "体重"
+                                    <input
+                                        type="text"
+                                        inputmode="decimal"
+                                        pattern="[0-9]*([.,][0-9]*)?"
+                                        value=weight0.clone()
+                                        data-testid="body-weight"
+                                        on:focusin=move |_| kb_focus(kb)
+                                        on:focusout=move |_| kb_blur(kb)
+                                        on:input=move |ev| {
+                                            weight.set(event_target_value(&ev));
+                                            commit();
+                                        }
+                                    />
+                                    <span class="unit">"kg"</span>
+                                </label>
+                                <label class="note">
+                                    "メモ"
+                                    <input
+                                        type="text"
+                                        value=note0.clone()
+                                        data-testid="condition-note"
+                                        on:focusin=move |_| kb_focus(kb)
+                                        on:focusout=move |_| kb_blur(kb)
+                                        on:input=move |ev| {
+                                            note.set(event_target_value(&ev));
+                                            commit();
+                                        }
+                                    />
+                                </label>
+                            </div>
+                        }
+                    })
+            }}
+        </div>
+    }
+}
+
+#[component]
+fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView {
+    let db = use_db();
+    let dates = use_dates();
+    let kb = use_kb();
+
+    // Memo にするのは「値が変わったときだけ」下流を再描画させるため。
+    // 素の closure だと db が動くたびに構造ごと作り直され、入力中の文字列が消える
+    let kind = Memo::new(move |_| {
+        db.with(|d| d.exercise(ex).map(|e| e.kind))
+            .unwrap_or(Kind::Weighted)
+    });
+    let name = Memo::new(move |_| {
+        db.with(|d| d.exercise(ex).map(|e| e.name.clone()))
+            .unwrap_or_else(|| "(削除された種目)".to_string())
+    });
+    let group_name = Memo::new(move |_| {
+        db.with(|d| {
+            d.exercise(ex)
+                .and_then(|e| d.group(e.group_id))
+                .map(|g| g.name.clone())
+        })
+        .unwrap_or_default()
+    });
+
+    let last = Memo::new(move |_| {
+        let before = dates.selected.get();
+        db.with(|d| core::last_log_before(d, ex, before).map(|(date, l)| (date, l.clone())))
+    });
+
+    // ★「前回をコピー」はその種目の今日のセットが空のときだけ出す。
+    //   これで「置換か追記か」の曖昧さ・誤タップで入力済みセットを消す事故・undo の
+    //   必要性がまとめて消える
+    let show_copy = Memo::new(move |_| {
+        let key = core::date_key(dates.selected.get());
+        last.with(|l| l.is_some())
+            && db.with(|d| {
+                d.sessions
+                    .get(&key)
+                    .and_then(|s| s.log_of(ex))
+                    .is_none_or(|l| l.sets.is_empty())
+            })
+    });
+
+    let initial: Vec<Row> = db.with_untracked(|d| {
+        d.sessions
+            .get(&core::date_key(dates.selected.get_untracked()))
+            .and_then(|s| s.log_of(ex))
+            .map(|l| {
+                l.sets
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| Row {
+                        key: i as u32,
+                        weight: fmt_weight(s.weight),
+                        reps: s.reps.to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    let next_key = RwSignal::new(initial.len() as u32 + 1);
+    let rows = RwSignal::new(if initial.is_empty() {
+        vec![Row::blank(0)]
+    } else {
+        initial
+    });
+
+    let commit = move || {
+        let sets: Vec<SetEntry> = rows.with_untracked(|rs| {
+            rs.iter()
+                .filter_map(|r| {
+                    // 空行が 0×0 として保存されコピーで複製され続けるのを防ぐ
+                    let reps = parse_reps(&r.reps)?;
+                    Some(SetEntry {
+                        weight: parse_weight(&r.weight),
+                        reps,
+                    })
+                })
+                .collect()
+        });
+        let date = dates.selected.get_untracked();
+        let is_today = date == dates.today.get_untracked();
+        db.update(|d| write_log(d, date, ex, sets, is_today));
+    };
+
+    let fresh_key = move || {
+        let key = next_key.get_untracked();
+        next_key.set(key + 1);
+        key
+    };
+
+    let add_row = move |_| {
+        let key = fresh_key();
+        rows.update(|rs| rs.push(Row::blank(key)));
+    };
+
+    let remove_row = move |key: u32| {
+        rows.update(|rs| rs.retain(|r| r.key != key));
+        if rows.with_untracked(Vec::is_empty) {
+            let key = fresh_key();
+            rows.update(|rs| rs.push(Row::blank(key)));
+        }
+        commit();
+    };
+
+    let copy_last = move |_| {
+        let Some((_, log)) = last.get_untracked() else {
+            return;
+        };
+        // ★ 新しいキーを振る。既存キーを再利用すると <For> が DOM を作り直さないため
+        //   入力欄の value が古いまま残る
+        let base = next_key.get_untracked();
+        let filled: Vec<Row> = log
+            .sets
+            .iter()
+            .enumerate()
+            .map(|(i, s)| Row {
+                key: base + i as u32,
+                weight: fmt_weight(s.weight),
+                reps: s.reps.to_string(),
+            })
+            .collect();
+        next_key.set(base + filled.len() as u32 + 1);
+        rows.set(filled);
+        commit();
+    };
+
+    let close_card = move |_| {
+        let date = dates.selected.get_untracked();
+        db.update(|d| write_log(d, date, ex, Vec::new(), false));
+        cards.update(|cs| cs.retain(|c| c.ex != ex));
+    };
+
+    let today_metric = move || {
+        let key = core::date_key(dates.selected.get());
+        db.with(|d| {
+            d.sessions
+                .get(&key)
+                .and_then(|s| s.log_of(ex))
+                .map_or(0.0, |l| core::log_metric(kind.get(), l))
+        })
+    };
+
+    view! {
+        <article class="card" id=card_dom_id(ex) data-testid="exercise-card">
+            <header class="card-head">
+                <h2 data-testid="card-name">{move || name.get()}</h2>
+                <span class="group-name">{move || group_name.get()}</span>
+                <button
+                    class="icon-btn"
+                    aria-label="この種目をこの日から外す"
+                    data-testid="close-card"
+                    on:click=close_card
+                >
+                    "✕"
+                </button>
+            </header>
+
+            <div class="last-row">
+                {move || match last.get() {
+                    None => view! { <span class="muted" data-testid="last-log">"前回 —"</span> }.into_any(),
+                    Some((date, log)) => {
+                        let days = (dates.selected.get() - date).num_days();
+                        let when = core::humanize(core::Elapsed::Days(days));
+                        let k = kind.get();
+                        let sets = log
+                            .sets
+                            .iter()
+                            .map(|s| fmt_set(k, s))
+                            .collect::<Vec<_>>()
+                            .join("  ");
+                        let metric = format!(
+                            "{} {}",
+                            fmt_metric(core::log_metric(k, &log)),
+                            core::unit_of(k),
+                        );
+                        view! {
+                            <span class="when" data-testid="last-log">{format!("前回 {when}")}</span>
+                            <span class="sets">{sets}</span>
+                            <span class="metric">{metric}</span>
+                        }
+                            .into_any()
+                    }
+                }}
+            </div>
+
+            {move || {
+                show_copy
+                    .get()
+                    .then(|| {
+                        view! {
+                            <button
+                                class="secondary copy"
+                                data-testid="copy-last"
+                                on:click=copy_last
+                            >
+                                "前回をコピー"
+                            </button>
+                        }
+                    })
+            }}
+
+            <div class="sets-editor">
+                <For
+                    each=move || rows.get()
+                    key=|r| r.key
+                    children=move |row| {
+                        let key = row.key;
+                        let index = move || {
+                            rows.with(|rs| rs.iter().position(|r| r.key == key).map_or(0, |i| i + 1))
+                        };
+                        // Weighted で reps だけ入っている行は「入力忘れ」の可能性が高い。
+                        // 黙って指標を減らさず、行にヒントを出して保持する
+                        let weight_missing = move || {
+                            kind.get() == Kind::Weighted
+                                && rows.with(|rs| {
+                                    rs.iter()
+                                        .find(|r| r.key == key)
+                                        .is_some_and(|r| {
+                                            parse_reps(&r.reps).is_some()
+                                                && parse_weight(&r.weight) <= 0.0
+                                        })
+                                })
+                        };
+                        view! {
+                            <div class="set-row" data-testid="set-row">
+                                <span class="set-no">{index}</span>
+                                {move || {
+                                    (kind.get() != Kind::Duration)
+                                        .then(|| {
+                                            view! {
+                                                <input
+                                                    class="num"
+                                                    type="text"
+                                                    inputmode="decimal"
+                                                    pattern="[0-9]*([.,][0-9]*)?"
+                                                    value=row.weight.clone()
+                                                    aria-label="重量"
+                                                    data-testid="set-weight"
+                                                    on:focusin=move |_| kb_focus(kb)
+                                                    on:focusout=move |_| kb_blur(kb)
+                                                    on:input=move |ev| {
+                                                        let v = event_target_value(&ev);
+                                                        rows.update(|rs| {
+                                                            if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                                                                r.weight = v;
+                                                            }
+                                                        });
+                                                        commit();
+                                                    }
+                                                />
+                                                <span class="unit">"kg"</span>
+                                                <span class="times">"×"</span>
+                                            }
+                                        })
+                                }}
+                                <input
+                                    class="num"
+                                    type="text"
+                                    inputmode="numeric"
+                                    value=row.reps.clone()
+                                    aria-label="回数"
+                                    data-testid="set-reps"
+                                    on:focusin=move |_| kb_focus(kb)
+                                    on:focusout=move |_| kb_blur(kb)
+                                    on:input=move |ev| {
+                                        let v = event_target_value(&ev);
+                                        rows.update(|rs| {
+                                            if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                                                r.reps = v;
+                                            }
+                                        });
+                                        commit();
+                                    }
+                                />
+                                <span class="unit">{move || reps_unit(kind.get())}</span>
+                                <button
+                                    class="icon-btn"
+                                    aria-label="このセットを削除"
+                                    data-testid="remove-set"
+                                    on:click=move |_| remove_row(key)
+                                >
+                                    "✕"
+                                </button>
+                                {move || {
+                                    weight_missing()
+                                        .then(|| {
+                                            view! {
+                                                <span class="warn" data-testid="weight-missing">
+                                                    "重量未入力"
+                                                </span>
+                                            }
+                                        })
+                                }}
+                            </div>
+                        }
+                    }
+                />
+                <div class="add-set-wrap">
+                    <button class="secondary" data-testid="add-set" on:click=add_row>
+                        "+ セット"
+                    </button>
+                </div>
+            </div>
+
+            // 前回比はセッション中に出さない。途中の不完全な合計を前回の完了セッションと
+            // 比べても意味がないため（比較は推移タブで行う）
+            <footer class="card-foot">
+                <span>"今日"</span>
+                <strong data-testid="today-metric">
+                    {move || format!("{} {}", fmt_metric(today_metric()), core::unit_of(kind.get()))}
+                </strong>
+            </footer>
+        </article>
+    }
+}

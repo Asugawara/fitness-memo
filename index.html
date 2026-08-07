@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)">
+<title>筋トレメモ</title>
+<!-- 非推奨タグ。正は manifest の display: standalone。manifest 読込失敗時のフォールバックとして残す。
+     apple- 版だけだと Chromium が「Deprecated: use mobile-web-app-capable」を console に出し、
+     軽い側 E2E のノイズになるので標準名も併記する -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="筋トレ">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<link rel="manifest" href="./manifest.webmanifest">
+
+<link data-trunk rel="css" href="public/styles.css">
+<link data-trunk rel="copy-file" href="public/sw.js">
+<link data-trunk rel="copy-file" href="public/manifest.webmanifest">
+<link data-trunk rel="copy-dir" href="public/icons">
+<link data-trunk rel="rust" data-wasm-opt="z" data-weak-refs>
+</head>
+<body>
+<script>
+if ('serviceWorker' in navigator) {
+  if (location.port === '8080') {                     // trunk serve では SW を使わない
+    navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister()));
+  } else if (location.search.includes('sw=off')) {    // 脱出口
+    // unregister は現在ページの controller を外さないので、後始末が終わってから
+    // 自力でリロードする。standalone にはアドレスバーもリロード UI も無い
+    Promise.all([
+      navigator.serviceWorker.getRegistrations().then(rs => Promise.all(rs.map(r => r.unregister()))),
+      caches.keys().then(ks => Promise.all(
+        ks.filter(k => k.startsWith('fitness-memo-')).map(k => caches.delete(k)))),
+    ]).then(() => location.replace('./'));
+  } else {
+    navigator.serviceWorker.register('./sw.js').then(reg => {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') reg.update();
+      });
+    });
+  }
+}
+</script>
+</body>
+</html>

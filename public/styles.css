@@ -1,0 +1,543 @@
+/* 筋トレメモ — 素の CSS 1 ファイル + CSS 変数。ライブラリなし。 */
+
+:root {
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --text: #16171a;
+  --muted: #6b7280;
+  --line: #e3e4e8;
+  --accent: #2f6fd0;
+  --accent-text: #ffffff;
+  --warn: #b4560c;
+  --hero: #101114;
+
+  /* 経過の濃淡。★ 部位カラー × 経過濃淡の二重符号化は色から意味が読めないので
+     チップは単色系に統一し、濃さだけで新しさを示す */
+  --chip-0: #dfe6f2;
+  --chip-1: #c6d4ea;
+  --chip-2: #aec2e2;
+  --chip-3: #93aed8;
+  --chip-none: #eceef1;
+
+  --tabbar: 56px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b0b0c;
+    --surface: #17181b;
+    --text: #eceef1;
+    --muted: #9aa0aa;
+    --line: #2a2c31;
+    --accent: #6fa4ec;
+    --accent-text: #0b0b0c;
+    --warn: #e2a06a;
+    --hero: #ffffff;
+
+    --chip-0: #23303f;
+    --chip-1: #2b3f57;
+    --chip-2: #34506f;
+    --chip-3: #3d6188;
+    --chip-none: #1e1f23;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior-y: contain;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  /* ボトムタブに本文が隠れないぶんの余白 */
+  padding-bottom: calc(var(--tabbar) + env(safe-area-inset-bottom));
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+  touch-action: manipulation;
+}
+
+/* ★ 16px 未満だとフォーカス時に iOS がページごとズームする */
+input {
+  font-size: 16px;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+/* ── 画面の外枠 ─────────────────────────────────────────────────────────── */
+
+.screen {
+  padding: 12px 14px 24px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.stub {
+  color: var(--muted);
+  text-align: center;
+  padding: 48px 0;
+}
+
+/* ── ボトムタブ ─────────────────────────────────────────────────────────── */
+
+.bottom-tabs {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.tab-btn {
+  flex: 1;
+  min-height: 44px;
+  height: var(--tabbar);
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tab-btn.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ★ iOS のキーボード表示中は position:fixed 要素が入力欄に被る（standalone では
+   interactive-widget=resizes-visual が無視される既知バグ）。最小で確実な対策として
+   入力フォーカス中はタブバーごと隠す。DevTools では再現しない項目。 */
+.kb-open .bottom-tabs {
+  display: none;
+}
+
+/* ── 通知・注意書き ─────────────────────────────────────────────────────── */
+
+.notice,
+.install-hint {
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 14px 0;
+  background: var(--warn);
+  color: #fff;
+}
+
+.notice span {
+  flex: 1;
+}
+
+.install-hint {
+  background: var(--chip-0);
+  color: var(--text);
+  margin: 0 0 12px;
+}
+
+/* ── 今日タブ ───────────────────────────────────────────────────────────── */
+
+.day-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.day-head h1 {
+  font-size: 20px;
+}
+
+.day-head.past h1 {
+  color: var(--warn);
+}
+
+.badge {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.past-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  font-size: 13px;
+}
+
+.hero {
+  text-align: center;
+  padding: 20px 0 12px;
+}
+
+.hero-label {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.hero-value {
+  margin: 4px 0 16px;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--hero);
+}
+
+.hero.folded {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  text-align: left;
+  padding: 6px 0 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+
+.chips.inline {
+  justify-content: flex-start;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--chip-none);
+  color: var(--muted);
+}
+
+.chip b {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.chip[data-recency="fresh"] {
+  background: var(--chip-3);
+}
+.chip[data-recency="recent"] {
+  background: var(--chip-2);
+}
+.chip[data-recency="stale"] {
+  background: var(--chip-1);
+}
+.chip[data-recency="old"] {
+  background: var(--chip-0);
+}
+
+.chip i {
+  font-style: normal;
+}
+
+/* ── コンディション ─────────────────────────────────────────────────────── */
+
+.condition {
+  margin: 4px 0 12px;
+}
+
+.cond-fields {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.cond-fields label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.cond-fields .note {
+  flex: 1;
+}
+
+.cond-fields input {
+  min-height: 44px;
+  width: 5.5em;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.cond-fields .note input {
+  width: 100%;
+}
+
+/* ── 種目カード ─────────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+  scroll-margin-top: 12px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-head h2 {
+  flex: 1;
+  font-size: 16px;
+}
+
+.group-name {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.last-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.last-row .sets {
+  font-variant-numeric: tabular-nums;
+}
+
+.last-row .metric {
+  margin-left: auto;
+}
+
+.copy {
+  margin-top: 8px;
+}
+
+.sets-editor {
+  margin-top: 8px;
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 3px 0;
+}
+
+.set-no {
+  width: 1.4em;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.set-row .num {
+  width: 4.2em;
+  min-height: 44px;
+  padding: 4px 8px;
+  text-align: right;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  font-variant-numeric: tabular-nums;
+}
+
+.set-row .unit,
+.set-row .times {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.set-row .icon-btn {
+  margin-left: auto;
+}
+
+.warn {
+  flex-basis: 100%;
+  padding-left: 1.9em;
+  font-size: 11px;
+  color: var(--warn);
+}
+
+.add-set-wrap {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.card-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.card-foot strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── ボタン ─────────────────────────────────────────────────────────────── */
+
+.primary,
+.secondary {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.add-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 4px;
+}
+
+.icon-btn {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+
+.link-btn {
+  min-height: 44px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+}
+
+/* ── 種目を追加シート ───────────────────────────────────────────────────── */
+
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: 14px 14px 0 0;
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sheet-body {
+  overflow-y: auto;
+  padding: 8px 14px 16px;
+  overscroll-behavior: contain;
+}
+
+.sheet-group {
+  margin-bottom: 12px;
+}
+
+.sheet-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.sheet-group h3::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dot, var(--muted));
+}
+
+.pick-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pick {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.pick.added {
+  border-color: var(--accent);
+  color: var(--accent);
+}

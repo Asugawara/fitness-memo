@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+[ "${SKIP_HOOKS:-}" = "1" ] && exit 0
+
+# main に docs/ を入れない（release 専用。混入するとマージが停止する）
+if git diff --cached --name-only | grep -q '^docs/'; then
+  echo "docs/ は release 専用。main にコミット禁止"; exit 1
+fi
+
+cargo fmt --all -- --check
+cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings
+cargo test                                    # core.rs の純ロジック（ホスト）
+trunk build                                   # debug / 差分ビルド
+npx playwright test --project=chromium

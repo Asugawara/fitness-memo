@@ -25,8 +25,12 @@ export default defineConfig({
     reuseExistingServer: false,
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'iPhone 15 Pro', use: { ...devices['iPhone 15 Pro'] } },
-    { name: 'Pixel 7', use: { ...devices['Pixel 7'] } },
+    // harness.spec.mjs は dist/ に依存せず、自前で static-server.mjs を固定ポートで
+    // 起動する（e2e/harness.spec.mjs 参照）。他 project と並列実行するとポートが
+    // 衝突するので、この project だけに限定し、他 project からは除外する
+    { name: 'harness', testMatch: /harness\.spec\.mjs$/ },
+    { name: 'chromium', testIgnore: /harness\.spec\.mjs$/, use: { ...devices['Desktop Chrome'] } },
+    { name: 'iPhone 15 Pro', testIgnore: /harness\.spec\.mjs$/, use: { ...devices['iPhone 15 Pro'] } },
+    { name: 'Pixel 7', testIgnore: /harness\.spec\.mjs$/, use: { ...devices['Pixel 7'] } },
   ],
 });

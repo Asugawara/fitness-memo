@@ -1,0 +1,2 @@
+harness fixture placeholder. content-type is decided by static-server.mjs based on the
+.wasm extension, not by the actual bytes here, so plain text is fine for this test.

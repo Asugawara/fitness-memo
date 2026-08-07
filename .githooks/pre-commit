@@ -11,4 +11,4 @@ cargo fmt --all -- --check
 cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings
 cargo test                                    # core.rs の純ロジック（ホスト）
 trunk build                                   # debug / 差分ビルド
-npx playwright test --project=chromium
+npx playwright test --project=chromium --project=harness

@@ -4,7 +4,8 @@ use chrono::{Months, NaiveDate};
 use leptos::prelude::*;
 
 use crate::core;
-use crate::model::{Db, ExerciseId, GroupId, Kind};
+use crate::core::Metric;
+use crate::model::{Db, ExerciseId, GroupId};
 
 use super::chart::Chart;
 use super::{fmt_date, fmt_metric, fmt_set, use_dates, use_db};
@@ -64,8 +65,13 @@ fn parse_target(raw: &str) -> Option<Target> {
     }
 }
 
-/// セレクタに出す選択肢。**アーカイブ済み種目も末尾セクションに出す**
-/// （過去データが参照不能になるのを防ぐ）。
+/// セレクタに出す選択肢。
+///
+/// **記録がある種目だけ**を出す。プリセットは 28 種目あるので、全部並べると
+/// 一度も使っていない種目を選んで空グラフを眺める操作が普通に起きる。
+///
+/// **アーカイブ済みでも記録があれば末尾セクションに出す**（過去データが
+/// 参照不能になるのを防ぐ）。部位は「記録のある種目を持つ部位」だけ。
 #[derive(Clone, PartialEq, Default)]
 struct Options {
     groups: Vec<(GroupId, String)>,
@@ -73,7 +79,39 @@ struct Options {
     archived: Vec<(ExerciseId, String)>,
 }
 
+impl Options {
+    fn is_empty(&self) -> bool {
+        self.groups.is_empty() && self.active.is_empty() && self.archived.is_empty()
+    }
+
+    /// その対象が今も選択肢に残っているか。
+    fn contains(&self, t: Target) -> bool {
+        match t {
+            Target::Group(id) => self.groups.iter().any(|(g, _)| *g == id),
+            Target::Exercise(id) => self
+                .active
+                .iter()
+                .chain(&self.archived)
+                .any(|(e, _)| *e == id),
+        }
+    }
+
+    /// 先頭の選択肢。既定値と、対象が消えたときのフォールバックに使う。
+    fn first(&self) -> Option<Target> {
+        self.active
+            .first()
+            .map(|(id, _)| Target::Exercise(*id))
+            .or_else(|| self.archived.first().map(|(id, _)| Target::Exercise(*id)))
+            .or_else(|| self.groups.first().map(|(id, _)| Target::Group(*id)))
+    }
+}
+
 fn options(d: &Db) -> Options {
+    let used = core::used_exercise_ids(d);
+    if used.is_empty() {
+        return Options::default();
+    }
+
     let mut groups = d.groups.clone();
     groups.sort_by_key(|g| g.order);
     let group_rank = |gid: GroupId| {
@@ -83,11 +121,20 @@ fn options(d: &Db) -> Options {
             .unwrap_or(usize::MAX)
     };
 
-    let mut sorted = d.exercises.clone();
+    let mut sorted: Vec<_> = d
+        .exercises
+        .iter()
+        .filter(|e| used.contains(&e.id))
+        .cloned()
+        .collect();
     sorted.sort_by_key(|e| (group_rank(e.group_id), e.order, e.id));
 
     Options {
-        groups: groups.iter().map(|g| (g.id, g.name.clone())).collect(),
+        groups: groups
+            .iter()
+            .filter(|g| sorted.iter().any(|e| e.group_id == g.id))
+            .map(|g| (g.id, g.name.clone()))
+            .collect(),
         active: sorted
             .iter()
             .filter(|e| !e.archived)
@@ -136,25 +183,27 @@ pub fn Progress() -> impl IntoView {
     let db = use_db();
     let dates = use_dates();
 
-    // 既定は最初の種目（無ければ最初の部位）。要件の主眼が種目別の仕事量なので種目を優先する
-    let initial = db.with_untracked(|d| {
-        let opts = options(d);
-        opts.active
-            .first()
-            .map(|(id, _)| Target::Exercise(*id))
-            .or_else(|| opts.groups.first().map(|(id, _)| Target::Group(*id)))
-    });
-    let target = RwSignal::new(initial);
-    let period = RwSignal::new(Period::M3);
+    let opts = Memo::new(move |_| db.with(options));
 
-    let unit = Memo::new(move |_| match target.get() {
-        // 部位別は Kind 非依存の「セット数」（混在部位で volume を合算すると意味を失う）
-        Some(Target::Group(_)) => "セット".to_string(),
-        Some(Target::Exercise(ex)) => db
-            .with(|d| d.exercise(ex).map(|e| core::unit_of(e.kind).to_string()))
-            .unwrap_or_default(),
-        None => String::new(),
+    // 既定は最初の種目（無ければ最初の部位）。要件の主眼が種目別の仕事量なので種目を優先する
+    let target = RwSignal::new(opts.get_untracked().first());
+    let period = RwSignal::new(Period::M3);
+    let metric = RwSignal::new(Metric::default());
+
+    // ★ 表示中の種目の記録を全部消すと、その種目は候補から外れるのに target は残る。
+    //   select は先頭項目を表示しているのにグラフは消えた種目の空系列、という
+    //   食い違いが起きるので、候補の変化を購読して寄せ直す
+    Effect::new(move |_| {
+        let opts = opts.get();
+        let stale = target.get_untracked().is_none_or(|t| !opts.contains(t));
+        if stale {
+            target.set(opts.first());
+        }
     });
+
+    // ★ 単位は選んだ指標だけで決まる（対象種目では決まらない）。
+    //   対象を切り替えても軸の意味が変わらないのが、旧 Kind 方式との違い
+    let unit = Memo::new(move |_| metric.get().unit().to_string());
 
     let series = Memo::new(move |_| {
         let Some(t) = target.get() else {
@@ -162,11 +211,12 @@ pub fn Progress() -> impl IntoView {
         };
         let today = dates.today.get();
         let period = period.get();
+        let m = metric.get();
         db.with(|d| {
             let (from, to) = bounds(period, today, earliest_session(d));
             let raw = match t {
-                Target::Group(g) => core::group_set_series(d, g, from, to),
-                Target::Exercise(ex) => core::exercise_series(d, ex, from, to),
+                Target::Group(g) => core::group_series(d, g, m, from, to),
+                Target::Exercise(ex) => core::exercise_series(d, ex, m, from, to),
             };
             // ★「全期間」は週単位集約（1 年分 100 点超をそのまま描くと潰れる）
             if period == Period::All {
@@ -201,8 +251,18 @@ pub fn Progress() -> impl IntoView {
         };
         let today = dates.today.get();
         let period = period.get();
+        let m = metric.get();
         db.with(|d| {
             let (from, to) = bounds(period, today, earliest_session(d));
+            let unit = m.unit();
+            let show = |v: f64| {
+                let n = fmt_metric(v);
+                if unit.is_empty() {
+                    n
+                } else {
+                    format!("{n} {unit}")
+                }
+            };
             let mut rows: Vec<(NaiveDate, String, String)> = Vec::new();
             for (key, session) in &d.sessions {
                 let Some(date) = core::parse_date_key(key) else {
@@ -216,36 +276,27 @@ pub fn Progress() -> impl IntoView {
                         let Some(log) = session.log_of(ex).filter(|l| !l.sets.is_empty()) else {
                             continue;
                         };
-                        let kind = d.exercise(ex).map_or(Kind::Weighted, |e| e.kind);
-                        let detail = log
-                            .sets
-                            .iter()
-                            .map(|s| fmt_set(kind, s))
-                            .collect::<Vec<_>>()
-                            .join("  ");
-                        let metric = format!(
-                            "{} {}",
-                            fmt_metric(core::log_metric(kind, log)),
-                            core::unit_of(kind)
-                        );
-                        rows.push((date, detail, metric));
+                        let detail = log.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  ");
+                        rows.push((date, detail, show(core::log_value(m, log))));
                     }
                     Target::Group(g) => {
                         let ids = d.exercise_ids_of_group(g);
                         let mut names = Vec::new();
-                        let mut sets = 0usize;
+                        let mut total = 0.0;
+                        let mut hit = false;
                         for log in &session.logs {
                             if ids.contains(&log.exercise_id) && !log.sets.is_empty() {
-                                sets += log.sets.len();
+                                hit = true;
+                                total += core::log_value(m, log);
                                 if let Some(e) = d.exercise(log.exercise_id) {
                                     names.push(e.name.clone());
                                 }
                             }
                         }
-                        if sets == 0 {
+                        if !hit {
                             continue;
                         }
-                        rows.push((date, names.join("・"), format!("{sets} セット")));
+                        rows.push((date, names.join("・"), show(total)));
                     }
                 }
             }
@@ -267,9 +318,35 @@ pub fn Progress() -> impl IntoView {
         }
     };
 
+    let metric_button = move |m: Metric, label: &'static str| {
+        view! {
+            <button
+                class="seg-btn"
+                class:active=move || metric.get() == m
+                data-testid="metric-btn"
+                on:click=move |_| metric.set(m)
+            >
+                {label}
+            </button>
+        }
+    };
+
     view! {
         <section class="progress" data-testid="screen-progress">
             <h1 class="screen-title">"推移"</h1>
+
+            // 記録が 1 件も無いうちはセレクタも空になる。無言の空画面にしない
+            {move || {
+                opts.get()
+                    .is_empty()
+                    .then(|| {
+                        view! {
+                            <p class="muted" data-testid="progress-empty">
+                                "まだ記録がありません。記録タブで種目を追加すると、ここに推移が出ます"
+                            </p>
+                        }
+                    })
+            }}
 
             <div class="selectors">
                 <select
@@ -279,7 +356,7 @@ pub fn Progress() -> impl IntoView {
                     on:change=move |ev| target.set(parse_target(&event_target_value(&ev)))
                 >
                     {move || {
-                        let opts = db.with(options);
+                        let opts = opts.get();
                         let current = target.get();
                         let option = move |value: String, name: String, t: Target| {
                             let is_current = Some(t) == current;
@@ -329,6 +406,15 @@ pub fn Progress() -> impl IntoView {
                         }
                     }}
                 </select>
+
+                // ★ 指標は種目の属性ではなく画面の表示設定なので、対象と並べてここに置く。
+                //   単位もこの選択だけで決まる（種目を切り替えても軸の意味が変わらない）
+                <div class="segmented" role="group" aria-label="指標" data-testid="metric-select">
+                    {Metric::CHOICES
+                        .into_iter()
+                        .map(|(m, label)| metric_button(m, label))
+                        .collect::<Vec<_>>()}
+                </div>
 
                 <div class="segmented" role="group" aria-label="期間" data-testid="period-select">
                     {Period::CHOICES

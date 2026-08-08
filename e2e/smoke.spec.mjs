@@ -1,14 +1,11 @@
 import { test, expect } from '@playwright/test';
 
-// 計画の smoke ケースのうち 8 以外を実装（カレンダーは e2e/calendar.spec.mjs で
-// worker-c が担当）。src/views/{today,mod,progress,chart,menu}.rs の data-testid を使う。
+// 記録タブ（カレンダー + 選択日エディタ）と推移・種目タブの E2E。
+// src/views/{day,calendar,mod,progress,chart,menu}.rs の data-testid を使う。
 //
-// ケース4・5・7・9 は「前日の記録」を前提にするが、calendar.rs（過去日を選ぶ導線）
-// がまだ無く、today タブ単体には dates.selected を today 以外にする UI 操作が
-// 存在しない（mod.rs の DateCtx::open は calendar.rs からの呼び出しを想定した
-// pub fn だが、現時点でどこからも呼ばれていない）。そのため「UI からバックフィル
-// する」という書き込み経路そのものは検証できず、seedPastLogs() で localStorage に
-// バックフィル済み（at: null）のデータを直接注入し、読み込み〜表示側だけを検証する。
+// 「前日の記録がある状態」は seedPastLogs() で localStorage に直接注入して作る。
+// UI から過去日へ書き込む経路そのものの検証（ExerciseLog.at が null になること）は
+// e2e/calendar.spec.mjs が担当する。ここは読み込み〜表示側を見る。
 
 test.beforeEach(async ({ page }) => {
   // ★ baseURL がサブパス（例 /fitness-memo/）を持つとき、先頭 "/" は絶対パス参照として
@@ -24,8 +21,24 @@ function exactText(s) {
   return new RegExp(`^${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
 }
 
+/**
+ * フォーカスを外す。
+ *
+ * ★ 入力欄にフォーカスが残っていると `.app` に `kb-open` が付き、styles.css の
+ *   `.kb-open .bottom-tabs { display: none }` でタブバーごと消える（iOS の
+ *   キーボード対策なので設計どおり）。blur せずにタブを押すとクリックがタイムアウトする。
+ */
+async function blurActive(page) {
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+}
+
 /** 「種目を追加」シートからプリセットを選び、追加されたカードを返す。 */
 async function addExercise(page, name) {
+  // ★ 入力欄にフォーカスが残ると .kb-open で追加ボタンごと隠れる（iOS でキーボードの
+  //   裏に回るのを避ける仕様）。連続で種目を足すテストのために毎回 blur してから押す
+  await blurActive(page);
   await page.getByTestId('add-exercise').click();
   await page
     .getByTestId('add-sheet')
@@ -43,7 +56,7 @@ async function flushToStorage(page) {
   // page.goto() の解決は wasm(数十MBのdebugビルド)のロード完了を保証しない。
   // today 画面が出た時点なら App() の Effect::new が既に一度走っており
   // PENDING に初期 Db が積まれているので、それを待ってから flush する
-  await page.getByTestId('screen-today').waitFor({ state: 'visible' });
+  await page.getByTestId('screen-record').waitFor({ state: 'visible' });
   await page.evaluate(() => {
     Object.defineProperty(document, 'hidden', { value: true, configurable: true });
     document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
@@ -59,7 +72,7 @@ async function flushToStorage(page) {
 async function seedPastLogs(page, entries) {
   await flushToStorage(page);
   await page.evaluate((entries) => {
-    const KEY = 'fitness-memo/v1';
+    const KEY = 'fitness-memo/v2';
     const db = JSON.parse(localStorage.getItem(KEY));
 
     // Local::now().date_naive() と揃えるため UTC (toISOString) ではなく
@@ -86,9 +99,9 @@ async function seedPastLogs(page, entries) {
   await page.reload();
 }
 
-test('1. 初回起動でプリセットが投入され「今日」タブが出る', async ({ page }) => {
-  await expect(page.getByTestId('screen-today')).toBeVisible();
-  await expect(page.getByTestId('tab-today')).toHaveClass(/active/);
+test('1. 初回起動でプリセットが投入され記録タブが出る', async ({ page }) => {
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+  await expect(page.getByTestId('tab-record')).toHaveClass(/active/);
 
   // まだ何も記録していないので経過時間は「—」、部位チップは6部位分
   await expect(page.getByTestId('elapsed')).toHaveText('—');
@@ -113,7 +126,7 @@ test('2. 種目を追加してセットを2行入力すると指標表示が正�
   await rows.nth(1).getByTestId('set-weight').fill('60');
   await rows.nth(1).getByTestId('set-reps').fill('8');
 
-  await expect(card.getByTestId('today-metric')).toHaveText('1,080 kg·回');
+  await expect(card.getByTestId('today-metric')).toHaveText('1,080');
 });
 
 test('3. hidden への visibilitychange を発火してからリロードしても入力が残る', async ({ page }) => {
@@ -127,12 +140,12 @@ test('3. hidden への visibilitychange を発火してからリロードして�
   await page.reload();
 
   const reloadedCard = page.getByTestId('exercise-card');
-  await expect(reloadedCard.getByTestId('today-metric')).toHaveText('600 kg·回');
+  await expect(reloadedCard.getByTestId('today-metric')).toHaveText('600');
   await expect(reloadedCard.getByTestId('set-row').nth(0).getByTestId('set-weight')).toHaveValue('60');
   await expect(reloadedCard.getByTestId('set-row').nth(0).getByTestId('set-reps')).toHaveValue('10');
 });
 
-test('4. 前日にバックフィルした記録があると、今日タブの経過表示が「昨日」になる', async ({ page }) => {
+test('4. 前日にバックフィルした記録があると、経過表示が「昨日」になる', async ({ page }) => {
   // at: null（バックフィル済み）で注入する。これが at: Some(now) だと
   // 「たった今」になってしまい、要件「最後のトレーニングから」の出力が嘘になる
   await seedPastLogs(page, [
@@ -185,7 +198,7 @@ test('7. 部位チップは実施部位に日数、未実施の部位には「�
   await expect(page.getByTestId('group-chip').filter({ hasText: '体幹' })).toContainText('—');
 });
 
-test('9. 推移タブの種目別グラフに2点描かれ、単位は種目の Kind で決まる（推論ではない）', async ({ page }) => {
+test('9. 推移タブの種目別グラフに2点描かれ、重量なしの記録も指標を持つ', async ({ page }) => {
   await seedPastLogs(page, [
     { daysAgo: 2, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
     { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 8 }] },
@@ -195,20 +208,73 @@ test('9. 推移タブの種目別グラフに2点描かれ、単位は種目の 
   await page.getByTestId('tab-progress').click();
   await expect(page.getByTestId('screen-progress')).toBeVisible();
 
-  // 既定選択は最初の種目=ベンチプレス（Kind::Weighted）。2点入っていること
+  // 既定選択は記録のある最初の種目=ベンチプレス。2点入っていること
   const chart = page.getByTestId('chart');
   await expect(chart).toHaveAttribute('data-points', '2');
   // SVG 属性は無検査で setAttribute されるため、viewBox や stroke-width を snake_case で
   // 書くとコンパイルは通るのに実行時に黙って無視される罠がある。polyline が実際に
   // 描画されていることまで確認する（属性名だけでなく描画結果を見る）
   await expect(chart.locator('polyline')).toHaveCount(1);
-  await expect(page.getByTestId('stat-best')).toHaveText('600 kg·回');
+  await expect(page.getByTestId('stat-best')).toHaveText('600');
 
-  // Kind::Bodyweight（懸垂）に切り替えると単位が「回」になる。データからの推論では
-  // なく種目の明示属性で決まることの検証: 推論方式だと自重種目に加重した瞬間に
-  // 系列全体の単位が volume へ切り替わり、過去データが遡及的に潰れてしまう
+  // ★ 重量を入れない記録（懸垂 12 回）も 0 に潰れず 12 になる。
+  //   指標は「重量 × 回数、重量が空なら重量 1」の単一式なので、種目ごとに
+  //   式を切り替えなくても自重種目が実質レップ数として意味を持つ
   await page.getByTestId('target-select').selectOption({ label: '懸垂' });
-  await expect(page.getByTestId('stat-best')).toHaveText('12 回');
+  await expect(page.getByTestId('stat-best')).toHaveText('12');
+});
+
+test('推移タブの指標セグメントでボリューム / セット数 / 回数を切り替えられる', async ({ page }) => {
+  await seedPastLogs(page, [
+    {
+      daysAgo: 1,
+      exerciseName: 'ベンチプレス',
+      sets: [
+        { weight: 60, reps: 10 },
+        { weight: 60, reps: 8 },
+      ],
+    },
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+  const best = page.getByTestId('stat-best');
+  const metrics = page.getByTestId('metric-select').getByTestId('metric-btn');
+
+  // 既定はボリューム。60×10 + 60×8 = 1,080（単位表記なし）
+  await expect(best).toHaveText('1,080');
+
+  await metrics.filter({ hasText: 'セット数' }).click();
+  await expect(best).toHaveText('2 セット');
+
+  await metrics.filter({ hasText: '回数' }).click();
+  await expect(best).toHaveText('18 回');
+
+  // ★ 単位は指標だけで決まる。対象種目を切り替えても軸の意味は変わらない
+  //   （旧 Kind 方式では種目ごとに単位が変わっていた）
+  await page.getByTestId('target-select').selectOption({ label: '胸' });
+  await expect(best).toContainText('回');
+});
+
+test('推移タブの候補には記録のある種目だけが出る', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+
+  const options = page.getByTestId('target-select').locator('option');
+  await expect(options.filter({ hasText: exactText('ベンチプレス') })).toHaveCount(1);
+  // プリセットは 28 種目あるが、使っていないものは並べない
+  await expect(options.filter({ hasText: exactText('スクワット') })).toHaveCount(0);
+  await expect(options.filter({ hasText: exactText('プランク') })).toHaveCount(0);
+  // 記録のある種目を持たない部位も出ない
+  await expect(options.filter({ hasText: exactText('脚') })).toHaveCount(0);
+  await expect(options.filter({ hasText: exactText('胸') })).toHaveCount(1);
+});
+
+test('記録が 1 件も無いと推移タブは空状態の説明を出す', async ({ page }) => {
+  await page.getByTestId('tab-progress').click();
+  await expect(page.getByTestId('progress-empty')).toContainText('まだ記録がありません');
 });
 
 // worker-d が実機相当の網羅スイープで見つけた真バグの退行テスト。Y軸ラベルは
@@ -261,6 +327,7 @@ test('10. 同じ日に同じ種目を再度追加してもカードは増えず�
   await expect(page.getByTestId('exercise-card')).toHaveCount(1);
 
   // 既に追加済みの種目をもう一度ピックしても新規カードは作られない
+  await blurActive(page);
   await page.getByTestId('add-exercise').click();
   await page
     .getByTestId('add-sheet')
@@ -273,11 +340,11 @@ test('10. 同じ日に同じ種目を再度追加してもカードは増えず�
   await expect(row0.getByTestId('set-weight')).toHaveValue('70');
 });
 
-test('11. 種目タブでの改名・部位変更・Kind変更・新規追加が今日タブに反映され、アーカイブは推移タブから参照できる', async ({ page }) => {
+test('11. 種目タブでの改名・部位変更・新規追加が記録タブに反映され、アーカイブは推移タブから参照できる', async ({ page }) => {
   await page.getByTestId('tab-menu').click();
   await expect(page.getByTestId('screen-menu')).toBeVisible();
 
-  // 改名 + 部位変更（肩→腕）+ Kind変更（加重→自重）を1つの種目に対して行う
+  // 改名 + 部位変更（肩→腕）を1つの種目に対して行う
   await page.getByTestId('exercise-name').filter({ hasText: exactText('サイドレイズ') }).click();
   const menuSheet = page.getByTestId('menu-sheet');
   await expect(menuSheet).toBeVisible();
@@ -289,17 +356,10 @@ test('11. 種目タブでの改名・部位変更・Kind変更・新規追加が
     .filter({ hasText: exactText('腕') })
     .click();
 
-  // ★ Kind はデータから推論せず種目の明示属性。変更時は「グラフの単位が変わります」を
-  // 必ず挟む（自重種目に加重した瞬間に系列全体の単位が切り替わり過去データが遡及的に
-  // 壊れるのを防ぐ設計）。警告を経てから確定する
-  await page
-    .getByTestId('exercise-kinds')
-    .getByTestId('kind-option')
-    .filter({ hasText: /^自重/ })
-    .click();
-  await expect(page.getByTestId('kind-warning')).toContainText('単位が変わります');
-  await page.getByTestId('kind-confirm').click();
-  await expect(page.getByTestId('kind-warning')).toHaveCount(0);
+  // ★ 種目は「指標の種類」を持たない。加重 / 自重 / 時間の区別は種目名から読めるので
+  //   選ばせる意味が無かった（指標は core::set_volume の単一式に統一されている）
+  await expect(menuSheet.getByTestId('kind-option')).toHaveCount(0);
+  await expect(menuSheet).not.toContainText('種類');
 
   await page.getByTestId('menu-sheet-close').click();
 
@@ -316,15 +376,23 @@ test('11. 種目タブでの改名・部位変更・Kind変更・新規追加が
   await page.getByTestId('new-exercise-submit').click();
 
   // 今日タブの「種目を追加」シートに、改名後の名前・新規種目の両方が反映されている
-  await page.getByTestId('tab-today').click();
+  await page.getByTestId('tab-record').click();
   await page.getByTestId('add-exercise').click();
   const addSheet = page.getByTestId('add-sheet');
   await expect(addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('サイドレイズ改') })).toBeVisible();
   await expect(addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('サイドレイズ') })).toHaveCount(0);
   await expect(addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('テスト種目') })).toBeVisible();
-  // sheet-backdrop はビューポート全体を覆うが、クリック位置の中心はシート本体の
-  // 裏に隠れて弾かれる。「閉じる」ボタンには testid が無いので role+text で取る
-  await page.getByRole('button', { name: '閉じる' }).click();
+
+  // ★ 推移の候補は「記録がある種目」だけなので、アーカイブ後も参照できることを
+  //   確かめるには先に 1 件記録しておく必要がある
+  await addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('テスト種目') }).click();
+  const testCard = page
+    .getByTestId('exercise-card')
+    .filter({ has: page.getByTestId('card-name').filter({ hasText: exactText('テスト種目') }) });
+  await testCard.getByTestId('set-reps').first().fill('10');
+  // 入力欄にフォーカスが残ると .kb-open でタブバーごと消える（iOS のキーボード対策）。
+  // blur しないと次のタブ切り替えがヒットターゲット判定で落ちる
+  await blurActive(page);
 
   // アーカイブ: 今日タブの追加シートには出なくなるが、推移タブのセレクタでは
   // 末尾の「アーカイブ済み」セクションから参照できる（過去ログの exercise_id 参照を
@@ -334,7 +402,7 @@ test('11. 種目タブでの改名・部位変更・Kind変更・新規追加が
   await page.getByTestId('archive-exercise').click();
   await expect(page.getByTestId('menu-sheet')).toHaveCount(0);
 
-  await page.getByTestId('tab-today').click();
+  await page.getByTestId('tab-record').click();
   await page.getByTestId('add-exercise').click();
   await expect(
     page.getByTestId('add-sheet').getByTestId('pick-exercise').filter({ hasText: exactText('テスト種目') }),
@@ -372,7 +440,107 @@ test('12. 重量入力の中間状態("6.")でクラッシュせず、"6.5"ま�
   await expect(weight).toHaveValue('6.5');
 
   // 6.5 × 2 = 13。"6." で止まっていた/クラッシュしていれば 12 のままか反映されない
-  await expect(card.getByTestId('today-metric')).toHaveText('13 kg·回');
+  await expect(card.getByTestId('today-metric')).toHaveText('13');
+});
+
+// ── 実使用フィードバック（記録中の操作コストと誤操作）の退行テスト ──────────
+
+test('「+ セット」で直前行の重量がコピーされ、回数欄にフォーカスが移る', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  const rows = card.getByTestId('set-row');
+
+  await rows.nth(0).getByTestId('set-weight').fill('60');
+  await rows.nth(0).getByTestId('set-reps').fill('10');
+
+  await card.getByTestId('add-set').click();
+
+  // ★ 重量は打ち直さない（60×10 / 60×8 / 60×6 のように据え置くのが普通）
+  await expect(rows.nth(1).getByTestId('set-weight')).toHaveValue('60');
+  await expect(rows.nth(1).getByTestId('set-reps')).toHaveValue('');
+
+  // ★ 回数欄にフォーカスが来ているので、そのまま打てる（入力欄をタップしない）
+  await expect(rows.nth(1).getByTestId('set-reps')).toBeFocused();
+  await page.keyboard.type('8');
+  await expect(card.getByTestId('today-metric')).toHaveText('1,080');
+
+  // 重量だけ入った空行はゴーストセットにならない（parse_reps が None を返す）
+  await card.getByTestId('add-set').click();
+  await expect(card.getByTestId('today-metric')).toHaveText('1,080');
+});
+
+test('カードが増えても「種目を追加」が常に画面内にあり、force なしで押せる', async ({ page }) => {
+  for (const name of ['ベンチプレス', '懸垂', 'ショルダープレス', 'バーベルカール', 'スクワット']) {
+    const card = await addExercise(page, name);
+    await card.getByTestId('set-reps').first().fill('10');
+  }
+  await blurActive(page);
+  await expect(page.getByTestId('exercise-card')).toHaveCount(5);
+
+  // ★ sticky が効いていないとカード列の末尾まで押しやられ、ビューポート外になる。
+  //   force を付けないので、隠れていればここでタイムアウトする
+  const add = page.getByTestId('add-exercise');
+  // kb_blur の 150ms debounce が解けるまで .kb-open が残るので、可視化を待ってから測る
+  await expect(add).toBeVisible();
+  const viewport = page.viewportSize();
+  const box = await add.boundingBox();
+  expect(box, '「種目を追加」が描画されていない').not.toBeNull();
+  expect(box.y + box.height, 'ビューポートの下にはみ出している').toBeLessThanOrEqual(
+    viewport.height + 1,
+  );
+  await add.click();
+  await expect(page.getByTestId('add-sheet')).toBeVisible();
+});
+
+test('中身のあるセットの削除は確認を挟み、「やめる」で残る', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  const row0 = card.getByTestId('set-row').nth(0);
+  await row0.getByTestId('set-weight').fill('60');
+  await row0.getByTestId('set-reps').fill('10');
+
+  await row0.getByTestId('remove-set').click();
+  await expect(page.getByTestId('remove-set-confirm')).toBeVisible();
+  // 確認中は行がまだ生きている
+  await expect(card.getByTestId('today-metric')).toHaveText('600');
+
+  await page.getByTestId('remove-set-no').click();
+  await expect(page.getByTestId('remove-set-confirm')).toHaveCount(0);
+  await expect(row0.getByTestId('set-weight')).toHaveValue('60');
+
+  await row0.getByTestId('remove-set').click();
+  await page.getByTestId('remove-set-yes').click();
+  await expect(card.getByTestId('today-metric')).toHaveText('0');
+});
+
+test('空のセット行は確認なしで消える（消えるものが無いため）', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-reps').first().fill('10');
+  await card.getByTestId('add-set').click();
+  await expect(card.getByTestId('set-row')).toHaveCount(2);
+
+  // 2 行目は重量プリフィルのみで回数が空 = 中身なし扱い
+  await card.getByTestId('set-row').nth(1).getByTestId('remove-set').click();
+  await expect(page.getByTestId('remove-set-confirm')).toHaveCount(0);
+  await expect(card.getByTestId('set-row')).toHaveCount(1);
+});
+
+test('「この種目を外す」はカード末尾にあり、確認を経由する', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-reps').first().fill('10');
+  await blurActive(page);
+
+  // ★ 見出しの右端に削除ボタンを置かない（追加しようとして消す事故の元だった）
+  await expect(card.locator('.card-head button')).toHaveCount(0);
+
+  await card.getByTestId('close-card').click();
+  await expect(page.getByTestId('close-card-warning')).toContainText('記録が消えます');
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
+
+  await page.getByTestId('close-card-no').click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
+
+  await card.getByTestId('close-card').click();
+  await page.getByTestId('close-card-yes').click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(0);
 });
 
 // 以下2件は計画の12ケースには無い追加の退行テスト。worker-d が実機相当の検証で見つけた

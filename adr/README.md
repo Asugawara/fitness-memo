@@ -27,10 +27,11 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 |---|---|---|
 | [0005](data-model/0005-session-keyed-by-local-date.md) | セッションをローカル日付文字列で BTreeMap に持つ | 採用 |
 | [0006](data-model/0006-at-optional-same-day-only.md) | `at` を `Option<i64>` にし当日入力時のみ埋める | 採用 |
-| [0007](data-model/0007-exercise-kind-explicit.md) | 指標の種類を種目の明示属性にする（推論しない） | 採用 |
+| [0007](data-model/0007-exercise-kind-explicit.md) | 指標の種類を種目の明示属性にする（推論しない） | 置換済み → [0033](data-model/0033-metric-is-a-view-setting.md) |
 | [0008](data-model/0008-one-log-per-exercise-per-day.md) | 「1日1種目1ログ」を不変条件にする | 採用 |
-| [0009](data-model/0009-group-metric-is-set-count.md) | 部位別の指標を volume ではなくセット数にする | 採用 |
+| [0009](data-model/0009-group-metric-is-set-count.md) | 部位別の指標を volume ではなくセット数にする | 置換済み → [0033](data-model/0033-metric-is-a-view-setting.md) |
 | [0010](data-model/0010-sequential-ids-no-uuid.md) | ID を `next_id` の連番にし uuid を使わない | 採用 |
+| [0033](data-model/0033-metric-is-a-view-setting.md) | 指標を種目の属性ではなくグラフの表示設定にする | 採用 |
 
 ### storage — 永続化
 
@@ -40,6 +41,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0012](storage/0012-quarantine-on-parse-failure.md) | パース失敗時は上書きせず退避する | 採用 |
 | [0013](storage/0013-flush-on-visibilitychange.md) | `visibilitychange` の hidden で debounce を flush する | 採用 |
 | [0014](storage/0014-defer-export-import.md) | JSON エクスポート/インポートを v1 に入れない | 採用（リスク受容） |
+| [0034](storage/0034-storage-key-per-schema-generation.md) | 保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す | 採用 |
 
 ### pwa — オフライン動作と iOS 実機
 
@@ -57,9 +59,11 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | # | タイトル | 状態 |
 |---|---|---|
 | [0021](ux/0021-copy-button-only-when-empty.md) | 「前回をコピー」はセットが空のときだけ出す | 採用 |
-| [0022](ux/0022-pre-workout-and-in-workout-exclusive.md) | トレ前情報とトレ中情報を排他表示にする | 採用 |
+| [0022](ux/0022-pre-workout-and-in-workout-exclusive.md) | トレ前情報とトレ中情報を排他表示にする | 置換済み → [0035](ux/0035-record-tab-calendar-with-day-editor.md) |
 | [0023](ux/0023-text-input-not-number.md) | 数値入力に `type="number"` を使わない | 採用 |
-| [0024](ux/0024-calendar-add-from-empty-day.md) | カレンダーの空日からも記録を追加できるようにする | 採用 |
+| [0024](ux/0024-calendar-add-from-empty-day.md) | カレンダーの空日からも記録を追加できるようにする | 採用（導線は [0035](ux/0035-record-tab-calendar-with-day-editor.md) で改訂） |
+| [0035](ux/0035-record-tab-calendar-with-day-editor.md) | 記録タブをカレンダー + 選択日エディタの単一画面にする | 採用 |
+| [0036](ux/0036-set-entry-prefill-and-focus.md) | セット追加は直前行の重量をコピーして回数欄へフォーカスする | 採用 |
 
 ### deploy — 配信とブランチ運用
 

@@ -1,9 +1,14 @@
 # ADR-0024: カレンダーの空日からも記録を追加できるようにする
 
-- **状態**: 採用
+- **状態**: 採用（導線は [ADR-0035](0035-record-tab-calendar-with-day-editor.md) で改訂）
 - **日付**: 2026-08-08
 - **カテゴリ**: ux
 - **関連**: [ADR-0006](../data-model/0006-at-optional-same-day-only.md), [ADR-0005](../data-model/0005-session-keyed-by-local-date.md)
+
+> **改訂。** 「記録が無い日にも必ず追加導線を出す」という判断は生きているが、その導線は
+> 「この日に記録する」ボタン経由ではなく、**日セルをタップした時点で下の入力欄がその日の
+> ものになる**形に変わった。ボタンとタブ遷移は不要になっている。
+> → [ADR-0035](0035-record-tab-calendar-with-day-editor.md)
 
 ## 背景
 

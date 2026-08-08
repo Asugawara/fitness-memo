@@ -5,24 +5,29 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)">
-<title>筋トレメモ</title>
+<title>fitness-memo</title>
 <!-- 非推奨タグ。正は manifest の display: standalone。manifest 読込失敗時のフォールバックとして残す。
      apple- 版だけだと Chromium が「Deprecated: use mobile-web-app-capable」を console に出し、
      軽い側 E2E のノイズになるので標準名も併記する -->
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="筋トレ">
+<meta name="apple-mobile-web-app-title" content="fitness-memo">
+<!-- favicon はホーム画面アイコンと同じ絵。32 はタブ用に専用サイズを出してある
+     （192 からの縮小をブラウザ任せにすると眠くなる）。rel="icon" があれば
+     /favicon.ico への暗黙のリクエストも起きないので .ico は置かない -->
+<link rel="icon" href="./icons/icon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="./icons/icon-192.png" sizes="192x192" type="image/png">
 <link rel="apple-touch-icon" href="./icons/icon-192.png">
 <link rel="manifest" href="./manifest.webmanifest">
 
-<link rel="stylesheet" href="/fitness-memo/styles-d22f786ceb839f61.css" integrity="sha384-W5l5049cUPaQLRftLZqCzuLED36U3DHcU5wNz333M7ZR2VK3tHDeEGGYO/gIf65f"/>
+<link rel="stylesheet" href="/fitness-memo/styles-723fcfe5f50a99ae.css" integrity="sha384-Q2bcft3CApF4+0m4bzRAOBAP/389twDbW28pRStKnY6SDX7MbK9yc8SmzNkaEerb"/>
 
 
 
 
 <script type="module">
-import init, * as bindings from '/fitness-memo/fitness-memo-a06cd4738d777b71.js';
-const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-a06cd4738d777b71_bg.wasm' });
+import init, * as bindings from '/fitness-memo/fitness-memo-4e144419e16d39b5.js';
+const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-4e144419e16d39b5_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -31,7 +36,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-<link rel="modulepreload" href="/fitness-memo/fitness-memo-a06cd4738d777b71.js" crossorigin="anonymous" integrity="sha384-Lb/uQ1l/fp54D8sxOIawLWEpTKzzn08FpkIRaRmLhfKQ0lm429Nr1MkRmFlsnbUI"><link rel="preload" href="/fitness-memo/fitness-memo-a06cd4738d777b71_bg.wasm" crossorigin="anonymous" integrity="sha384-A8HVXbuvCDwvL+Nbw+oPZ5MGt5iCRWodhyRQ6uGGSs76tVlhG4qrMduiSkPGGT6m" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/fitness-memo/fitness-memo-4e144419e16d39b5.js" crossorigin="anonymous" integrity="sha384-lsl5fWvyYtgwpNFRYomFpxMUCkwsXBTLDz8UHO7ySE5VC9rjRy+PqkFp57tZZqwl"><link rel="preload" href="/fitness-memo/fitness-memo-4e144419e16d39b5_bg.wasm" crossorigin="anonymous" integrity="sha384-8ch4b4zZ51qj3X5Tl749j8q0NJ+sxa6l0nCuqiZJkv73LWWpIi3HIo6wfsqhEHdO" as="fetch" type="application/wasm"></head>
 <body>
 <script>
 if ('serviceWorker' in navigator) {

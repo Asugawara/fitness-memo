@@ -211,6 +211,47 @@ test('9. 推移タブの種目別グラフに2点描かれ、単位は種目の 
   await expect(page.getByTestId('stat-best')).toHaveText('12 回');
 });
 
+// worker-d が実機相当の網羅スイープで見つけた真バグの退行テスト。Y軸ラベルは
+// text-anchor="end" で x = X0 - 5.0（プロット領域の左マージン内）に描かれる前提だが、
+// volume が6桁以上になるとラベル文字数が伸びて viewBox（幅320）の左端から溢れ、
+// 先頭の桁が欠けて数値を誤読させる（例: "2,954,576" が "954,576" に見える）。
+// 単なるレイアウト崩れではなく数値の誤表示なので、force のような回避策は使わず
+// SVG のレンダリング結果（getBBox）そのものを viewBox と突き合わせて検証する。
+async function expectNoChartLabelOverflowsViewBox(page) {
+  const chart = page.getByTestId('chart');
+  await expect(chart).toBeVisible();
+  const overflowing = await chart.evaluate((svg) => {
+    const [, , viewWidth] = svg.getAttribute('viewBox').split(' ').map(Number);
+    return Array.from(svg.querySelectorAll('text.chart-label'))
+      .map((t) => {
+        const box = t.getBBox();
+        return { text: t.textContent, x: box.x, right: box.x + box.width };
+      })
+      .filter((l) => l.x < 0 || l.right > viewWidth);
+  });
+  expect(overflowing).toEqual([]);
+}
+
+test('推移タブのグラフ Y 軸ラベルは volume が6桁でも viewBox に収まる（先頭の桁が欠けない）', async ({ page }) => {
+  await seedPastLogs(page, [
+    // 1800 × 500 = 900,000（6桁）。y_max=990,000, 中間=495,000 もいずれも6桁
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 1800, reps: 500 }] },
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+  await expectNoChartLabelOverflowsViewBox(page);
+});
+
+test('推移タブのグラフ Y 軸ラベルは volume が7桁でも viewBox に収まる（先頭の桁が欠けない）', async ({ page }) => {
+  await seedPastLogs(page, [
+    // 50000 × 100 = 5,000,000（7桁）
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 50000, reps: 100 }] },
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+  await expectNoChartLabelOverflowsViewBox(page);
+});
+
 test('10. 同じ日に同じ種目を再度追加してもカードは増えず既存カードのまま', async ({ page }) => {
   const card = await addExercise(page, 'ベンチプレス');
   const row0 = card.getByTestId('set-row').nth(0);

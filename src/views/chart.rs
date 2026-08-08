@@ -62,6 +62,38 @@ fn fmt_md(d: NaiveDate) -> String {
     format!("{}/{}", d.month(), d.day())
 }
 
+/// Y 軸ラベル専用の表記。**6 桁（100,000）以上は千/百万単位の短縮表記に切り替える。**
+///
+/// `fmt_metric` の桁区切り表記のまま置くと、ラベルは `text-anchor="end"` で
+/// `x = X0 - 5.0`（プロット領域の左マージン内）に収まる前提で描かれているため、
+/// 文字数が伸びると viewBox の左端（x=0）から溢れて先頭の桁が欠ける
+/// （実測: "2,954,576" が x=-11.6 で描画され "954,576" に見える）。単なる見切れではなく
+/// 数値の誤読なので、桁区切りを増やす代わりに単位を切り替えて文字数を頭打ちにする。
+/// 6桁到達時点で既に "999,999"（7文字）が幅を超えるため、閾値は6桁（10^5）に置く。
+fn fmt_axis_label(v: f64) -> String {
+    const TIERS: [(f64, f64, &str); 3] = [
+        (1e9, 1e9, "B"),
+        (1e6, 1e6, "M"),
+        // "k" だけ判定閾値(1e5 = 6桁)と割る単位(1e3)が異なる。5桁以下は桁区切りのままで
+        // 幅に収まるため短縮しない
+        (1e5, 1e3, "k"),
+    ];
+    let abs = v.abs();
+    for (threshold, scale, suffix) in TIERS {
+        if abs >= threshold {
+            let scaled = v / scale;
+            // 3桁(100 以上)は小数を出さなくても "990k" のように十分な精度が残る。
+            // 2桁以下は小数1桁を残して丸めの粗さを抑える（"2.9M" 等）
+            return if scaled.abs() >= 100.0 {
+                format!("{scaled:.0}{suffix}")
+            } else {
+                format!("{scaled:.1}{suffix}")
+            };
+        }
+    }
+    fmt_metric(v)
+}
+
 fn layout(series: &[(NaiveDate, f64)]) -> Layout {
     if series.is_empty() {
         return Layout::default();
@@ -119,10 +151,11 @@ fn layout(series: &[(NaiveDate, f64)]) -> Layout {
         .collect::<Vec<_>>()
         .join(" ");
 
-    // グリッド 3 本（上端 / 中間 / 0）
+    // グリッド 3 本（上端 / 中間 / 0）。fmt_metric ではなく fmt_axis_label を使う
+    // 理由は同関数のコメントを参照（viewBox からの溢れ = 数値の誤読を防ぐため）
     let grid = [y_max, y_max / 2.0, 0.0]
         .into_iter()
-        .map(|v| (y_of(v), fmt_metric(v)))
+        .map(|v| (y_of(v), fmt_axis_label(v)))
         .collect();
 
     // X 軸ラベルは最初・中間・最後の 3 個。軸が時間に線形なので中間ラベルは

@@ -21,7 +21,8 @@ use crate::core::Metric;
 use crate::model::{Db, Group, GroupId, Session};
 
 use super::day::DayEditor;
-use super::{fmt_metric, is_standalone, use_dates, use_db};
+use super::help::InstallBanner;
+use super::{fmt_metric, use_dates, use_db};
 
 /// 日曜始まり。`Weekday::num_days_from_sunday()` の 0..=6 とインデックスが一致する。
 const WEEKDAYS: [&str; 7] = ["日", "月", "火", "水", "木", "金", "土"];
@@ -158,17 +159,6 @@ pub fn Calendar() -> impl IntoView {
 
     view! {
         <section class="calendar" data-testid="screen-record">
-            // ★ iOS では Safari のタブと standalone PWA で localStorage が共有されない。
-            //   先に Safari で記録すると、ホーム画面に追加した後で全部見えなくなる
-            {(!is_standalone())
-                .then(|| {
-                    view! {
-                        <p class="install-hint" data-testid="install-hint">
-                            "記録を付ける前にホーム画面に追加してください。Safari のタブで付けた記録は引き継がれません"
-                        </p>
-                    }
-                })}
-
             <header class="cal-nav">
                 <button
                     class="icon-btn"
@@ -274,6 +264,16 @@ pub fn Calendar() -> impl IntoView {
             //   日をタップした時点でここがその日のものになるので、記録がある日も無い日も
             //   同じ 1 手で書ける（要件「カレンダーに対して追加できる」の成立点）
             <DayEditor />
+
+            // ★ iOS では Safari のタブと standalone PWA で localStorage が共有されない。
+            //   先に Safari で記録すると、ホーム画面に追加した後で全部見えなくなる。
+            //
+            // ★ 置く場所は `DayEditor` の**外**の末尾。中に入れると `.add-wrap`
+            //   （「種目を追加」）の sticky な帯に覆われて読めない。sticky は
+            //   `<section class="day">` で完結するので、その後ろなら干渉しない。
+            //   記録の導線（カレンダー → 入力欄 → 種目を追加）より上に置くと
+            //   毎回目に入って邪魔なので、下に流す。出す条件と手順シートは help 側が持つ
+            <InstallBanner />
         </section>
     }
 }

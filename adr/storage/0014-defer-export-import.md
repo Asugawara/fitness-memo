@@ -3,7 +3,7 @@
 - **状態**: 履行済み（v1 では入れず、次リリースで実装した）
 - **日付**: 2026-08-08
 - **カテゴリ**: storage
-- **関連**: [ADR-0011](0011-localstorage-single-key-json.md), [ADR-0012](0012-quarantine-on-parse-failure.md), [ADR-0037](../data-model/0037-random-ids-for-safe-merge.md), [ADR-0038](0038-share-sheet-over-download.md)
+- **関連**: [ADR-0011](0011-localstorage-single-key-json.md), [ADR-0012](0012-quarantine-on-parse-failure.md), [ADR-0037](../data-model/0037-random-ids-for-safe-merge.md), [ADR-0038](0038-share-sheet-over-download.md), [ADR-0040](../ux/0040-install-guide-banner-and-sheet.md)
 
 > **この ADR が「次リリースの必須項目」と書いた約束は果たされた。**
 > 実装は [ADR-0038](0038-share-sheet-over-download.md)（書き出しの経路）と
@@ -44,6 +44,11 @@ iOS では Safari のタブとホーム画面に追加した standalone PWA で 
 > 記録を付ける前にホーム画面に追加してください。Safari のタブで付けた記録は引き継がれません
 
 これは**注意書きであって解決策ではない**。読まなかった人は同じ穴に落ちる。
+
+> [!NOTE]
+> この注意書きは [ADR-0037](../ux/0037-install-guide-banner-and-sheet.md) で改訂した。押せるバナーになり、図解つきの手順シートが開く。トーンは枠線を `--warn` に上げた一方、位置は記録タブの最上部から**末尾**（「種目を追加」より下）へ移した。出す条件も「Android を除く」形に変えて、iPad の desktop-class UA を取りこぼさないようにしてある。
+>
+> **ただしこの段落の結論は変わっていない。** 手順を書いたことで「読んだが実行できない人」は減るが、読まなかった人は同じ穴に落ちる。下に挙げた 3 つの経路はどれも閉じていない。解決策はこの ADR が必須項目に格上げしたエクスポート／インポートである。
 
 ### 2. WebKit の 7 日ルールは「対象外」ではなく "we do not expect"
 

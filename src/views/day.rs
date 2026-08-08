@@ -1,22 +1,26 @@
-//! 今日タブ（メイン画面）。
+//! 記録タブの下半分。**カレンダーで選んだ 1 日**の入力欄。
 //!
-//! 「非常にシンプル」を満たすため**トレ前の情報とトレ中の情報を排他にする**。
-//! 経過時間ヒーローと部位チップは眺めるための情報で、セット入力中は不要なので
-//! 1 種目でも追加されたら 1 行に畳む。
+//! 単独のタブではなく [`super::calendar`] が自分の下に置くコンポーネント。
+//! 書き込み対象の日付は `DateCtx::selected` だけが決める（カレンダーの選択日と同一）。
+//!
+//! 経過時間と部位チップは「今日どこを鍛えるか」を決めるための情報なので、
+//! カレンダーと入力欄に挟まれた**常時 1 行**に圧縮してある。以前は種目を 1 つでも
+//! 追加したら畳む排他表示にしていたが、上にカレンダーが載って画面が縦に伸びた今は
+//! 大きいヒーローを置く余地が無く、出し分ける意味も無くなった。
 
 use chrono::NaiveDate;
 use leptos::prelude::*;
 
 use crate::core;
-use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, Kind, SetEntry};
+use crate::core::Metric;
+use crate::model::{Db, ExerciseId, ExerciseLog, SetEntry};
 
 use super::{
-    fmt_date, fmt_metric, fmt_set, fmt_weight, is_standalone, kb_blur, kb_focus, now_ms,
-    parse_reps, parse_weight, recency_class, reps_unit, scroll_to_id, short_elapsed, use_dates,
-    use_db, use_kb,
+    fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms, parse_reps, parse_weight,
+    recency_class, scroll_to_id, short_elapsed, use_dates, use_db, use_kb,
 };
 
-/// 今日タブが表示しているカード 1 枚。
+/// 選択日に並べているカード 1 枚。
 ///
 /// 日付キーを持つのは `<For>` のキーに混ぜるため。過去日へ切り替えたときにカードの
 /// DOM ごと作り直さないと、カード内の編集中文字列が前の日のまま残る。
@@ -49,6 +53,10 @@ impl Row {
 
 fn card_dom_id(ex: ExerciseId) -> String {
     format!("card-{ex}")
+}
+
+fn confirm_dom_id(ex: ExerciseId) -> String {
+    format!("confirm-{ex}")
 }
 
 /// その日・その種目のセットを丸ごと差し替える。
@@ -84,7 +92,7 @@ fn write_log(db: &mut Db, date: NaiveDate, ex: ExerciseId, sets: Vec<SetEntry>, 
 }
 
 #[component]
-pub fn Today() -> impl IntoView {
+pub fn DayEditor() -> impl IntoView {
     let db = use_db();
     let dates = use_dates();
 
@@ -129,7 +137,7 @@ pub fn Today() -> impl IntoView {
         before_today.with(|snapshot| core::elapsed_since_last(snapshot, now_ms(), today))
     });
 
-    /// 部位チップ 1 個ぶんのデータ。
+    // 部位チップ 1 個ぶんのデータ。
     type Chip = (String, Option<crate::core::Elapsed>);
 
     let all_chips = Memo::new(move |_| {
@@ -148,32 +156,6 @@ pub fn Today() -> impl IntoView {
         })
     });
 
-    // 畳んだヒーローに出すのは「今日やった部位」だけ（計画のモック: 最後から 2日5時間 · 胸 3d）
-    let today_chips = Memo::new(move |_| {
-        let today = dates.today.get();
-        let ids: Vec<ExerciseId> = cards.get().iter().map(|c| c.ex).collect();
-        before_today.with(|snapshot| {
-            let by_group = core::elapsed_by_group(snapshot, now_ms(), today);
-            let mut seen: Vec<GroupId> = Vec::new();
-            for ex in &ids {
-                if let Some(e) = snapshot.exercise(*ex)
-                    && !seen.contains(&e.group_id)
-                {
-                    seen.push(e.group_id);
-                }
-            }
-            seen.into_iter()
-                .filter_map(|gid| {
-                    snapshot
-                        .group(gid)
-                        .map(|g| (g.name.clone(), by_group.get(&gid).copied()) as Chip)
-                })
-                .collect::<Vec<_>>()
-        })
-    });
-
-    let training = move || !cards.get().is_empty();
-
     let pick = move |ex: ExerciseId| {
         sheet.set(false);
         let date = core::date_key(dates.selected.get_untracked());
@@ -185,42 +167,60 @@ pub fn Today() -> impl IntoView {
         scroll_to_id(card_dom_id(ex));
     };
 
-    let chip_row = move |chips: Vec<Chip>, class: &'static str| {
-        view! {
-            <div class=format!("chips {class}") data-testid="group-chips">
-                {chips
-                    .into_iter()
-                    .map(|(name, e)| {
-                        let label = e.map_or_else(|| "—".to_string(), short_elapsed);
-                        view! {
-                            <span class="chip" data-recency=recency_class(e) data-testid="group-chip">
-                                <b>{name}</b>
-                                <i>{label}</i>
-                            </span>
-                        }
-                    })
-                    .collect::<Vec<_>>()}
-            </div>
-        }
-    };
-
     view! {
-        <section class="today" data-testid="screen-today">
-            // ★ iOS では Safari のタブと standalone PWA で localStorage が共有されない。
-            //   先に Safari で記録すると、ホーム画面に追加した後で全部見えなくなる
-            {(!is_standalone())
-                .then(|| {
-                    view! {
-                        <p class="install-hint" data-testid="install-hint">
-                            "記録を付ける前にホーム画面に追加してください。Safari のタブで付けた記録は引き継がれません"
-                        </p>
-                    }
-                })}
+        <section class="day" data-testid="screen-day">
+            // ★ 経過と部位チップは常時 1 行。カレンダーのドットは「いつやったか」しか
+            //   示さないので、「どの部位が空いているか」はここでしか読めない
+            <div class="hero" data-testid="hero">
+                // ラベルと値を分けて持つ（値だけを読めるようにしておく）
+                <span class="hero-elapsed">
+                    "最後から "
+                    <b data-testid="elapsed">
+                        {move || {
+                            elapsed.get().map_or_else(|| "—".to_string(), core::humanize)
+                        }}
+                    </b>
+                </span>
+                <div class="chips" data-testid="group-chips">
+                    {move || {
+                        all_chips
+                            .get()
+                            .into_iter()
+                            .map(|(name, e)| {
+                                let label = e.map_or_else(|| "—".to_string(), short_elapsed);
+                                view! {
+                                    <span
+                                        class="chip"
+                                        data-recency=recency_class(e)
+                                        data-testid="group-chip"
+                                    >
+                                        <b>{name}</b>
+                                        <i>{label}</i>
+                                    </span>
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                    }}
+                </div>
+            </div>
 
             <header class="day-head" class:past=move || dates.is_past_edit()>
                 <h1 data-testid="today-date">{move || fmt_date(dates.selected.get())}</h1>
                 {move || {
-                    (!dates.is_past_edit()).then(|| view! { <span class="badge">"今日"</span> })
+                    if dates.is_past_edit() {
+                        view! {
+                            <button
+                                class="link-btn"
+                                data-testid="back-to-today"
+                                on:click=move |_| dates.back_to_today()
+                            >
+                                "今日へ戻る"
+                            </button>
+                        }
+                            .into_any()
+                    } else {
+                        view! { <span class="badge">"今日"</span> }.into_any()
+                    }
                 }}
             </header>
 
@@ -229,50 +229,11 @@ pub fn Today() -> impl IntoView {
                     .is_past_edit()
                     .then(|| {
                         view! {
-                            <div class="past-banner" data-testid="past-banner">
-                                <span>
-                                    {move || format!("{} を編集中", fmt_date(dates.selected.get()))}
-                                </span>
-                                <button
-                                    class="link-btn"
-                                    data-testid="back-to-today"
-                                    on:click=move |_| dates.back_to_today()
-                                >
-                                    "今日へ戻る"
-                                </button>
-                            </div>
+                            <p class="past-banner" data-testid="past-banner">
+                                {move || format!("{} を編集中", fmt_date(dates.selected.get()))}
+                            </p>
                         }
                     })
-            }}
-
-            // 経過時間ヒーロー。過去日編集中は「今」の情報なので出さない
-            {move || {
-                if dates.is_past_edit() {
-                    return None;
-                }
-                let value = elapsed.get().map_or_else(|| "—".to_string(), core::humanize);
-                Some(
-                    if training() {
-                        view! {
-                            <div class="hero folded" data-testid="hero">
-                                <span data-testid="elapsed">{format!("最後から {value}")}</span>
-                                {chip_row(today_chips.get(), "inline")}
-                            </div>
-                        }
-                            .into_any()
-                    } else {
-                        view! {
-                            <div class="hero" data-testid="hero">
-                                <p class="hero-label">"最後のトレーニングから"</p>
-                                <p class="hero-value" data-testid="elapsed">
-                                    {value}
-                                </p>
-                                {chip_row(all_chips.get(), "")}
-                            </div>
-                        }
-                            .into_any()
-                    },
-                )
             }}
 
             // 体重・体調メモ。日付が変わったら初期値ごと作り直す
@@ -317,8 +278,15 @@ pub fn Today() -> impl IntoView {
                             >
                                 <header class="sheet-head">
                                     <strong>"種目を追加"</strong>
-                                    <button class="link-btn" on:click=move |_| sheet.set(false)>
-                                        "閉じる"
+                                    // aria-label は残す。見た目は ✕ でも支援技術と
+                                    // E2E の role+name には「閉じる」で届く必要がある
+                                    <button
+                                        class="icon-btn"
+                                        aria-label="閉じる"
+                                        data-testid="add-sheet-close"
+                                        on:click=move |_| sheet.set(false)
+                                    >
+                                        "✕"
                                     </button>
                                 </header>
                                 <div class="sheet-body">
@@ -484,10 +452,6 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
 
     // Memo にするのは「値が変わったときだけ」下流を再描画させるため。
     // 素の closure だと db が動くたびに構造ごと作り直され、入力中の文字列が消える
-    let kind = Memo::new(move |_| {
-        db.with(|d| d.exercise(ex).map(|e| e.kind))
-            .unwrap_or(Kind::Weighted)
-    });
     let name = Memo::new(move |_| {
         db.with(|d| d.exercise(ex).map(|e| e.name.clone()))
             .unwrap_or_else(|| "(削除された種目)".to_string())
@@ -544,6 +508,29 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
         initial
     });
 
+    // 「+ セット」で足した行。この行の回数欄へフォーカスを移したら None に戻す。
+    let focus_key: RwSignal<Option<u32>> = RwSignal::new(None);
+    // 削除確認を出している行。
+    let pending_remove: RwSignal<Option<u32>> = RwSignal::new(None);
+    // この種目をこの日から外す確認を出しているか。
+    let confirm_close = RwSignal::new(false);
+
+    // ★ この種目が普段「重量を使う」種目かを**実データから**判定する。
+    //
+    // 旧実装は `Kind::Weighted` で判定していたが `Kind` は無くなった。単に
+    // 判定を消すわけにいかないのは、新しい指標が「重量が空 = 重量 1」だから。
+    // ベンチプレスで重量を入れ忘れると 600 が黙って 10 になり、グラフが崩れても
+    // 気づく手掛かりが無い。逆に全種目で警告を出すと懸垂 12 回の毎行に
+    // 「重量未入力」が出て邪魔になる。
+    //
+    // 前回ログか、この日の他の行に重量が入っていれば「重量を使う種目」とみなす。
+    let uses_weight = Memo::new(move |_| {
+        last.with(|l| {
+            l.as_ref()
+                .is_some_and(|(_, log)| log.sets.iter().any(|s| s.weight > 0.0))
+        }) || rows.with(|rs| rs.iter().any(|r| parse_weight(&r.weight) > 0.0))
+    });
+
     let commit = move || {
         let sets: Vec<SetEntry> = rows.with_untracked(|rs| {
             rs.iter()
@@ -568,9 +555,24 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
         key
     };
 
+    // ★ 直前行の重量をコピーして足し、回数欄へフォーカスする。
+    //
+    // セットは 60×10 / 60×8 / 60×6 のように重量を据え置いて回数だけ変えるのが普通なので、
+    // 「+ セット」→ 重量欄をタップ →打つ→ 回数欄をタップ →打つ、の 4 手のうち
+    // 前半 2 手が毎セット無駄になっていた。プリフィル + フォーカスで回数を打つだけになる。
     let add_row = move |_| {
         let key = fresh_key();
-        rows.update(|rs| rs.push(Row::blank(key)));
+        let weight =
+            rows.with_untracked(|rs| rs.last().map(|r| r.weight.clone()).unwrap_or_default());
+        rows.update(|rs| {
+            rs.push(Row {
+                key,
+                weight,
+                reps: String::new(),
+            })
+        });
+        focus_key.set(Some(key));
+        // 重量だけの行は parse_reps が None を返して保存されないので commit は要らない
     };
 
     let remove_row = move |key: u32| {
@@ -579,7 +581,22 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
             let key = fresh_key();
             rows.update(|rs| rs.push(Row::blank(key)));
         }
+        pending_remove.set(None);
         commit();
+    };
+
+    // 中身が空の行は消えるものが無いので確認を挟まない。
+    let request_remove = move |key: u32| {
+        let empty = rows.with_untracked(|rs| {
+            rs.iter()
+                .find(|r| r.key == key)
+                .is_some_and(|r| r.weight.trim().is_empty() && r.reps.trim().is_empty())
+        });
+        if empty {
+            remove_row(key);
+        } else {
+            pending_remove.set(Some(key));
+        }
     };
 
     let copy_last = move |_| {
@@ -616,23 +633,18 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
             d.sessions
                 .get(&key)
                 .and_then(|s| s.log_of(ex))
-                .map_or(0.0, |l| core::log_metric(kind.get(), l))
+                .map_or(0.0, |l| core::log_value(Metric::Volume, l))
         })
     };
 
     view! {
         <article class="card" id=card_dom_id(ex) data-testid="exercise-card">
+            // ★ 見出しに削除ボタンを置かない。カードの一番上・右端は
+            //   「種目を追加」を探して下スクロールする指が最初に触る位置で、
+            //   追加しようとして種目ごと消す事故が起きていた。導線はカード末尾へ
             <header class="card-head">
                 <h2 data-testid="card-name">{move || name.get()}</h2>
                 <span class="group-name">{move || group_name.get()}</span>
-                <button
-                    class="icon-btn"
-                    aria-label="この種目をこの日から外す"
-                    data-testid="close-card"
-                    on:click=close_card
-                >
-                    "✕"
-                </button>
             </header>
 
             <div class="last-row">
@@ -641,18 +653,8 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                     Some((date, log)) => {
                         let days = (dates.selected.get() - date).num_days();
                         let when = core::humanize(core::Elapsed::Days(days));
-                        let k = kind.get();
-                        let sets = log
-                            .sets
-                            .iter()
-                            .map(|s| fmt_set(k, s))
-                            .collect::<Vec<_>>()
-                            .join("  ");
-                        let metric = format!(
-                            "{} {}",
-                            fmt_metric(core::log_metric(k, &log)),
-                            core::unit_of(k),
-                        );
+                        let sets = log.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  ");
+                        let metric = fmt_metric(core::log_value(Metric::Volume, &log));
                         view! {
                             <span class="when" data-testid="last-log">{format!("前回 {when}")}</span>
                             <span class="sets">{sets}</span>
@@ -688,10 +690,10 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                         let index = move || {
                             rows.with(|rs| rs.iter().position(|r| r.key == key).map_or(0, |i| i + 1))
                         };
-                        // Weighted で reps だけ入っている行は「入力忘れ」の可能性が高い。
-                        // 黙って指標を減らさず、行にヒントを出して保持する
+                        // 重量を使う種目で reps だけ入っている行は「入力忘れ」の可能性が高い。
+                        // 黙って指標を変えず、行にヒントを出して保持する
                         let weight_missing = move || {
-                            kind.get() == Kind::Weighted
+                            uses_weight.get()
                                 && rows.with(|rs| {
                                     rs.iter()
                                         .find(|r| r.key == key)
@@ -701,38 +703,47 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                         })
                                 })
                         };
+                        // ★ 「+ セット」で足した行の回数欄へフォーカスを移す。
+                        //   iOS はユーザー操作起点のタスク内でしか focus() でキーボードを
+                        //   開かないので、set_timeout を挟まず Effect（マイクロタスク）で
+                        //   完結させる。仮に開かなくても重量はプリフィル済みなので
+                        //   タップ 1 回で回数を打てる
+                        let reps_ref = NodeRef::<leptos::html::Input>::new();
+                        Effect::new(move |_| {
+                            if focus_key.get() == Some(key)
+                                && let Some(el) = reps_ref.get()
+                            {
+                                let _ = el.focus();
+                                focus_key.set(None);
+                            }
+                        });
                         view! {
                             <div class="set-row" data-testid="set-row">
                                 <span class="set-no">{index}</span>
-                                {move || {
-                                    (kind.get() != Kind::Duration)
-                                        .then(|| {
-                                            view! {
-                                                <input
-                                                    class="num"
-                                                    type="text"
-                                                    inputmode="decimal"
-                                                    pattern="[0-9]*([.,][0-9]*)?"
-                                                    value=row.weight.clone()
-                                                    aria-label="重量"
-                                                    data-testid="set-weight"
-                                                    on:focusin=move |_| kb_focus(kb)
-                                                    on:focusout=move |_| kb_blur(kb)
-                                                    on:input=move |ev| {
-                                                        let v = event_target_value(&ev);
-                                                        rows.update(|rs| {
-                                                            if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
-                                                                r.weight = v;
-                                                            }
-                                                        });
-                                                        commit();
-                                                    }
-                                                />
-                                                <span class="unit">"kg"</span>
-                                                <span class="times">"×"</span>
+                                // 重量欄は常に出す。空のままなら重量 1 として数えられるので、
+                                // 自重種目でも時間種目でも「入れなければよい」で成立する
+                                <input
+                                    class="num"
+                                    type="text"
+                                    inputmode="decimal"
+                                    pattern="[0-9]*([.,][0-9]*)?"
+                                    value=row.weight.clone()
+                                    aria-label="重量"
+                                    data-testid="set-weight"
+                                    on:focusin=move |_| kb_focus(kb)
+                                    on:focusout=move |_| kb_blur(kb)
+                                    on:input=move |ev| {
+                                        let v = event_target_value(&ev);
+                                        rows.update(|rs| {
+                                            if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                                                r.weight = v;
                                             }
-                                        })
-                                }}
+                                        });
+                                        commit();
+                                    }
+                                />
+                                <span class="unit">"kg"</span>
+                                <span class="times">"×"</span>
                                 <input
                                     class="num"
                                     type="text"
@@ -740,6 +751,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                     value=row.reps.clone()
                                     aria-label="回数"
                                     data-testid="set-reps"
+                                    node_ref=reps_ref
                                     on:focusin=move |_| kb_focus(kb)
                                     on:focusout=move |_| kb_blur(kb)
                                     on:input=move |ev| {
@@ -752,12 +764,17 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                         commit();
                                     }
                                 />
-                                <span class="unit">{move || reps_unit(kind.get())}</span>
+                                // 回数欄に単位は添えない。プランクの 60 に「回」と付くほうが
+                                // 嘘になるし、それが秒だと分かるのは種目名からで表記からではない
+                                //
+                                // ★ 削除は入力欄と地続きにしない。margin-left:auto で右端へ寄せた上に
+                                //   区切り線と内側余白で離す（auto を外すと回数欄の直後に来て
+                                //   今より押しやすくなる）。中身のある行は確認を挟む
                                 <button
-                                    class="icon-btn"
+                                    class="icon-btn danger-btn"
                                     aria-label="このセットを削除"
                                     data-testid="remove-set"
-                                    on:click=move |_| remove_row(key)
+                                    on:click=move |_| request_remove(key)
                                 >
                                     "✕"
                                 </button>
@@ -767,6 +784,30 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                             view! {
                                                 <span class="warn" data-testid="weight-missing">
                                                     "重量未入力"
+                                                </span>
+                                            }
+                                        })
+                                }}
+                                {move || {
+                                    (pending_remove.get() == Some(key))
+                                        .then(|| {
+                                            view! {
+                                                <span class="row-confirm" data-testid="remove-set-confirm">
+                                                    <span>"このセットを削除しますか？"</span>
+                                                    <button
+                                                        class="link-btn danger"
+                                                        data-testid="remove-set-yes"
+                                                        on:click=move |_| remove_row(key)
+                                                    >
+                                                        "削除"
+                                                    </button>
+                                                    <button
+                                                        class="link-btn"
+                                                        data-testid="remove-set-no"
+                                                        on:click=move |_| pending_remove.set(None)
+                                                    >
+                                                        "やめる"
+                                                    </button>
                                                 </span>
                                             }
                                         })
@@ -786,10 +827,53 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
             // 比べても意味がないため（比較は推移タブで行う）
             <footer class="card-foot">
                 <span>"今日"</span>
-                <strong data-testid="today-metric">
-                    {move || format!("{} {}", fmt_metric(today_metric()), core::unit_of(kind.get()))}
-                </strong>
+                <strong data-testid="today-metric">{move || fmt_metric(today_metric())}</strong>
             </footer>
+
+            <div class="card-remove">
+                <button
+                    class="link-btn danger"
+                    data-testid="close-card"
+                    on:click=move |_| {
+                        confirm_close.set(true);
+                        // ★ 確認はカード末尾に出るので、sticky の「種目を追加」の背後に
+                        //   入って見えないことがある。開いたら必ず視界へ送る
+                        scroll_to_id(confirm_dom_id(ex));
+                    }
+                >
+                    "この種目を外す"
+                </button>
+            </div>
+
+            {move || {
+                confirm_close
+                    .get()
+                    .then(|| {
+                        view! {
+                            <div class="warn-box" id=confirm_dom_id(ex)>
+                                <p data-testid="close-card-warning">
+                                    "この日の記録が消えます"
+                                </p>
+                                <div class="sheet-actions">
+                                    <button
+                                        class="primary"
+                                        data-testid="close-card-yes"
+                                        on:click=close_card
+                                    >
+                                        "外す"
+                                    </button>
+                                    <button
+                                        class="link-btn"
+                                        data-testid="close-card-no"
+                                        on:click=move |_| confirm_close.set(false)
+                                    >
+                                        "やめる"
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    })
+            }}
         </article>
     }
 }

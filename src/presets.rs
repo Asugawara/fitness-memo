@@ -3,13 +3,12 @@
 //! **固定 ID は持たない。** 全ての ID は [`Db::alloc_id`] 経由で採番するので、
 //! 「プリセットを追加」で再投入しても既存 ID と衝突しない。
 
-use crate::model::{Db, Exercise, Group, Kind};
+use crate::model::{Db, Exercise, Group};
 
 pub struct PresetGroup {
     pub name: &'static str,
     pub color: &'static str,
-    /// (種目名, 指標の種類)
-    pub exercises: &'static [(&'static str, Kind)],
+    pub exercises: &'static [&'static str],
 }
 
 /// 部位 6 種。`order` は宣言順。
@@ -18,65 +17,60 @@ pub const PRESETS: &[PresetGroup] = &[
         name: "胸",
         color: "#e0524a",
         exercises: &[
-            ("ベンチプレス", Kind::Weighted),
-            ("ダンベルプレス", Kind::Weighted),
-            ("インクラインベンチプレス", Kind::Weighted),
-            ("チェストフライ", Kind::Weighted),
-            ("プッシュアップ", Kind::Bodyweight),
+            "ベンチプレス",
+            "ダンベルプレス",
+            "インクラインベンチプレス",
+            "チェストフライ",
+            "プッシュアップ",
         ],
     },
     PresetGroup {
         name: "背中",
         color: "#2f7fd1",
         exercises: &[
-            ("懸垂", Kind::Bodyweight),
-            ("ラットプルダウン", Kind::Weighted),
-            ("ベントオーバーロウ", Kind::Weighted),
-            ("シーテッドロウ", Kind::Weighted),
-            ("デッドリフト", Kind::Weighted),
+            "懸垂",
+            "ラットプルダウン",
+            "ベントオーバーロウ",
+            "シーテッドロウ",
+            "デッドリフト",
         ],
     },
     PresetGroup {
         name: "肩",
         color: "#e0912a",
         exercises: &[
-            ("ショルダープレス", Kind::Weighted),
-            ("サイドレイズ", Kind::Weighted),
-            ("フロントレイズ", Kind::Weighted),
-            ("リアレイズ", Kind::Weighted),
+            "ショルダープレス",
+            "サイドレイズ",
+            "フロントレイズ",
+            "リアレイズ",
         ],
     },
     PresetGroup {
         name: "腕",
         color: "#7a56c9",
         exercises: &[
-            ("バーベルカール", Kind::Weighted),
-            ("ダンベルカール", Kind::Weighted),
-            ("トライセプスエクステンション", Kind::Weighted),
-            ("ケーブルプレスダウン", Kind::Weighted),
-            ("ディップス", Kind::Bodyweight),
+            "バーベルカール",
+            "ダンベルカール",
+            "トライセプスエクステンション",
+            "ケーブルプレスダウン",
+            "ディップス",
         ],
     },
     PresetGroup {
         name: "脚",
         color: "#2fa06a",
         exercises: &[
-            ("スクワット", Kind::Weighted),
-            ("レッグプレス", Kind::Weighted),
-            ("レッグエクステンション", Kind::Weighted),
-            ("レッグカール", Kind::Weighted),
-            ("カーフレイズ", Kind::Weighted),
+            "スクワット",
+            "レッグプレス",
+            "レッグエクステンション",
+            "レッグカール",
+            "カーフレイズ",
         ],
     },
     PresetGroup {
         name: "体幹",
         color: "#6b7280",
-        exercises: &[
-            ("プランク", Kind::Duration),
-            ("サイドプランク", Kind::Duration),
-            ("クランチ", Kind::Bodyweight),
-            ("レッグレイズ", Kind::Bodyweight),
-        ],
+        exercises: &["プランク", "サイドプランク", "クランチ", "レッグレイズ"],
     },
 ];
 
@@ -104,7 +98,7 @@ pub fn seed(db: &mut Db) {
             }
         };
 
-        for (name, kind) in preset.exercises {
+        for name in preset.exercises {
             if db.exercises.iter().any(|e| e.name == *name) {
                 continue;
             }
@@ -118,7 +112,6 @@ pub fn seed(db: &mut Db) {
                 id,
                 name: (*name).to_string(),
                 group_id,
-                kind: *kind,
                 order,
                 archived: false,
             });
@@ -176,17 +169,15 @@ mod tests {
     }
 
     #[test]
-    fn preset_kinds_are_correct() {
+    fn preset_names_are_unique_across_groups() {
+        // seed の同名スキップは**部位をまたいで全体で**名前を見るので、
+        // プリセット定義側に同名があると片方が投入されない
         let db = seeded_db();
-        let kind_of = |name: &str| db.exercises.iter().find(|e| e.name == name).map(|e| e.kind);
-
-        assert_eq!(kind_of("ベンチプレス"), Some(Kind::Weighted));
-        assert_eq!(kind_of("デッドリフト"), Some(Kind::Weighted));
-        assert_eq!(kind_of("懸垂"), Some(Kind::Bodyweight));
-        assert_eq!(kind_of("プッシュアップ"), Some(Kind::Bodyweight));
-        assert_eq!(kind_of("ディップス"), Some(Kind::Bodyweight));
-        assert_eq!(kind_of("プランク"), Some(Kind::Duration));
-        assert_eq!(kind_of("サイドプランク"), Some(Kind::Duration));
+        let mut names: Vec<&str> = db.exercises.iter().map(|e| e.name.as_str()).collect();
+        let total = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), total, "プリセットに同名の種目がある");
     }
 
     #[test]

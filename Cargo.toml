@@ -23,6 +23,7 @@ web-sys = { version = "0.3", features = [
     "Event",
     "EventTarget",
     "Element",         # Document::get_element_by_id / Element::scroll_into_view
+    "HtmlElement",     # HtmlElement::focus（セット追加時に回数欄へフォーカスする）
     "MediaQueryList",  # Window::match_media("(display-mode: standalone)")
 ] }
 

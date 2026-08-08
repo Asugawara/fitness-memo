@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::{Datelike, NaiveDate, TimeDelta};
 
-use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, Kind, SCHEMA, Session};
+use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, SCHEMA, Session};
 
 /// `Db::sessions` のキー書式。ゼロ埋め ISO なので辞書順 = 時系列順になる。
 pub const DATE_FMT: &str = "%Y-%m-%d";
@@ -22,24 +22,58 @@ pub fn parse_date_key(k: &str) -> Option<NaiveDate> {
 
 // ── 指標 ────────────────────────────────────────────────────────────────────
 
-pub fn set_metric(kind: Kind, s: &crate::model::SetEntry) -> f64 {
-    match kind {
-        Kind::Weighted => f64::from(s.weight) * f64::from(s.reps),
-        // Bodyweight の weight は「追加重量」。表示はするが指標には folding しない
-        // （系列の一貫性を優先。加重の進行はセット表示 `+10kg × 8` で読む）
-        Kind::Bodyweight | Kind::Duration => f64::from(s.reps),
+/// グラフに出す値の種類。**種目の属性ではなく画面の表示設定。**
+///
+/// 旧 `Kind`（加重 / 自重 / 時間）を種目に持たせていたのは「自重種目に加重すると
+/// 系列の意味が変わる」問題を防ぐためだったが、ユーザーに区別を選ばせる形は
+/// 意味が伝わらなかった。**どの軸で見るかをその場で切り替えられる**ようにすることで
+/// 同じ問題を解く。単位が `Metric` だけで決まるので、対象種目を切り替えても
+/// 軸の意味は変わらない。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Metric {
+    /// Σ(重量 × 回数)。重量が空 / 0 のセットは重量 1 として数える
+    #[default]
+    Volume,
+    /// セットの本数
+    Sets,
+    /// Σ回数
+    Reps,
+}
+
+impl Metric {
+    pub const CHOICES: [(Metric, &'static str); 3] = [
+        (Metric::Volume, "ボリューム"),
+        (Metric::Sets, "セット数"),
+        (Metric::Reps, "回数"),
+    ];
+
+    /// 表示に添える単位。ボリュームは重量と回数の合成量なので単位を持たない。
+    pub fn unit(self) -> &'static str {
+        match self {
+            Metric::Volume => "",
+            Metric::Sets => "セット",
+            Metric::Reps => "回",
+        }
     }
 }
 
-pub fn log_metric(kind: Kind, l: &ExerciseLog) -> f64 {
-    l.sets.iter().map(|s| set_metric(kind, s)).sum()
+/// 1 セットのボリューム。**重量が入っていないセットは重量 1 として数える。**
+///
+/// これで自重種目は自然に「総レップ数」、時間種目は「総秒数」になり、
+/// 種目ごとに式を分ける必要が無くなる。
+///
+/// ★ `max(1.0)` にするのは単調性のため。0.5kg を 0.5 倍で扱うと
+/// 「重量を足したのに指標が下がる」が起きて、グラフの上下が負荷の増減を表さなくなる。
+pub fn set_volume(s: &crate::model::SetEntry) -> f64 {
+    f64::from(s.weight).max(1.0) * f64::from(s.reps)
 }
 
-pub fn unit_of(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Weighted => "kg·回",
-        Kind::Bodyweight => "回",
-        Kind::Duration => "秒",
+/// 1 ログ（= その日のその種目）の指標。
+pub fn log_value(m: Metric, l: &ExerciseLog) -> f64 {
+    match m {
+        Metric::Volume => l.sets.iter().map(set_volume).sum(),
+        Metric::Sets => l.sets.len() as f64,
+        Metric::Reps => l.sets.iter().map(|s| f64::from(s.reps)).sum(),
     }
 }
 
@@ -77,35 +111,34 @@ fn sessions_in(
         .filter(move |(date, _)| *date >= from && *date <= to)
 }
 
-/// 種目別の推移。値は `Kind` に応じた指標（volume / 総レップ / 総秒）。
+/// 種目別の推移。
 pub fn exercise_series(
     db: &Db,
     ex: ExerciseId,
+    m: Metric,
     from: NaiveDate,
     to: NaiveDate,
 ) -> Vec<(NaiveDate, f64)> {
-    let Some(kind) = db.exercise(ex).map(|e| e.kind) else {
-        return Vec::new();
-    };
     sessions_in(db, from, to)
         .filter_map(|(date, session)| {
             let log = session
                 .logs
                 .iter()
                 .find(|l| l.exercise_id == ex && !l.sets.is_empty())?;
-            Some((date, log_metric(kind, log)))
+            Some((date, log_value(m, log)))
         })
         .collect()
 }
 
-/// 部位別の推移は **セット数**。
+/// 部位別の推移。その部位の**全種目**の指標を日ごとに合算する。
 ///
-/// `Kind` が混在する部位（体幹は Bodyweight/Duration 中心）で volume を合算すると
-/// 意味を失い恒常的にほぼ 0 になるため。週あたりセット数は部位のトレーニング量として
-/// 標準的な指標でもある。
-pub fn group_set_series(
+/// 指標の式が 1 本になったので、自重種目と加重種目が混ざる部位（体幹など）でも
+/// 合算が意味を持つ。旧実装がセット数固定だったのは `Kind` ごとに単位が違って
+/// 足せなかったからで、その制約は無くなった。
+pub fn group_series(
     db: &Db,
     g: GroupId,
+    m: Metric,
     from: NaiveDate,
     to: NaiveDate,
 ) -> Vec<(NaiveDate, f64)> {
@@ -115,14 +148,36 @@ pub fn group_set_series(
     }
     sessions_in(db, from, to)
         .filter_map(|(date, session)| {
-            let sets: usize = session
-                .logs
-                .iter()
-                .filter(|l| ids.contains(&l.exercise_id))
-                .map(|l| l.sets.len())
-                .sum();
-            (sets > 0).then_some((date, sets as f64))
+            let mut total = 0.0;
+            let mut hit = false;
+            for log in &session.logs {
+                if log.sets.is_empty() || !ids.contains(&log.exercise_id) {
+                    continue;
+                }
+                hit = true;
+                total += log_value(m, log);
+            }
+            hit.then_some((date, total))
         })
+        .collect()
+}
+
+/// 実際に記録がある種目の ID。並びは `db.exercises` の順。
+///
+/// 推移タブの対象セレクタは**これで絞る**。プリセットの 28 種目を全部並べると、
+/// 一度も使っていない種目を選んで空グラフを見る、という無意味な操作が普通に起きる。
+pub fn used_exercise_ids(db: &Db) -> Vec<ExerciseId> {
+    let used: std::collections::HashSet<ExerciseId> = db
+        .sessions
+        .values()
+        .flat_map(|s| s.logs.iter())
+        .filter(|l| !l.sets.is_empty())
+        .map(|l| l.exercise_id)
+        .collect();
+    db.exercises
+        .iter()
+        .map(|e| e.id)
+        .filter(|id| used.contains(id))
         .collect()
 }
 
@@ -332,9 +387,12 @@ mod tests {
     const HOUR_MS: i64 = 3_600_000;
     const DAY_MS: i64 = 24 * HOUR_MS;
 
-    // 胸(1): ベンチプレス(10, Weighted) / プッシュアップ(11, Bodyweight)
-    // 体幹(2): プランク(20, Duration)
+    // 胸(1): ベンチプレス(10) / プッシュアップ(11)
+    // 体幹(2): プランク(20)
     // 脚(3): 種目なし
+    //
+    // 旧 Kind でいう Weighted / Bodyweight / Duration が 1 つずつ混ざる構成のまま
+    // （指標の式が 1 本になっても、混在部位の合算が壊れないことを見たいので）
     fn test_db() -> Db {
         let mut db = Db {
             next_id: 100,
@@ -358,19 +416,17 @@ mod tests {
             color: "#2fa06a".into(),
             order: 2,
         });
-        db.exercises.push(ex(10, "ベンチプレス", 1, Kind::Weighted));
-        db.exercises
-            .push(ex(11, "プッシュアップ", 1, Kind::Bodyweight));
-        db.exercises.push(ex(20, "プランク", 2, Kind::Duration));
+        db.exercises.push(ex(10, "ベンチプレス", 1));
+        db.exercises.push(ex(11, "プッシュアップ", 1));
+        db.exercises.push(ex(20, "プランク", 2));
         db
     }
 
-    fn ex(id: ExerciseId, name: &str, group_id: GroupId, kind: Kind) -> Exercise {
+    fn ex(id: ExerciseId, name: &str, group_id: GroupId) -> Exercise {
         Exercise {
             id,
             name: name.into(),
             group_id,
-            kind,
             order: 0,
             archived: false,
         }
@@ -406,48 +462,72 @@ mod tests {
 
     // ── 指標 ────────────────────────────────────────────────────────────────
 
-    #[test]
-    fn set_metric_per_kind() {
-        let s = SetEntry {
-            weight: 60.0,
-            reps: 10,
-        };
-        assert_eq!(set_metric(Kind::Weighted, &s), 600.0);
-        // Bodyweight の weight（= 追加重量）は指標に folding しない
-        assert_eq!(set_metric(Kind::Bodyweight, &s), 10.0);
-        // Duration は reps を秒として扱う
-        assert_eq!(
-            set_metric(
-                Kind::Duration,
-                &SetEntry {
-                    weight: 0.0,
-                    reps: 60
-                }
-            ),
-            60.0
-        );
+    fn set(weight: f32, reps: u32) -> SetEntry {
+        SetEntry { weight, reps }
     }
 
     #[test]
-    fn log_metric_per_kind() {
-        // 計画の実例: 60×10 + 60×8 = 1,080
-        let weighted = log(10, &[(60.0, 10), (60.0, 8)], None);
-        assert_eq!(log_metric(Kind::Weighted, &weighted), 1080.0);
+    fn set_volume_treats_missing_weight_as_one() {
+        // 重量あり = 素直な積
+        assert_eq!(set_volume(&set(60.0, 10)), 600.0);
+        // 重量なし = 実質レップ数（自重種目）
+        assert_eq!(set_volume(&set(0.0, 12)), 12.0);
+        // 重量なし = 実質秒数（時間種目）。式は上と同じ
+        assert_eq!(set_volume(&set(0.0, 60)), 60.0);
+        // 空のログは 0
+        assert_eq!(log_value(Metric::Volume, &log(10, &[], None)), 0.0);
+    }
 
-        let bodyweight = log(11, &[(0.0, 12), (10.0, 8)], None);
-        assert_eq!(log_metric(Kind::Bodyweight, &bodyweight), 20.0);
+    /// ★ 単調性: 重量を足して指標が下がってはいけない。
+    ///
+    /// `max(1.0)` を外して素の積にすると 0.5kg×10 = 5 になり、
+    /// 「自重 10 回（= 10）→ 0.5kg を持って 10 回（= 5）」でグラフが下がる。
+    /// 上下が負荷の増減を表さなくなるのでグラフの意味が壊れる。
+    #[test]
+    fn set_volume_is_monotonic_in_weight() {
+        let bodyweight = set_volume(&set(0.0, 10));
+        assert_eq!(bodyweight, 10.0);
+        // 1kg 未満でも自重を下回らない
+        assert_eq!(set_volume(&set(0.5, 10)), 10.0);
+        assert!(set_volume(&set(0.5, 10)) >= bodyweight);
+        assert!(set_volume(&set(2.0, 10)) > bodyweight);
+    }
 
-        let duration = log(20, &[(0.0, 60), (0.0, 45)], None);
-        assert_eq!(log_metric(Kind::Duration, &duration), 105.0);
-
-        assert_eq!(log_metric(Kind::Weighted, &log(10, &[], None)), 0.0);
+    /// schema 1 からの値の変化を固定する。ここが動いたら ADR とリリースノートも直す。
+    #[test]
+    fn set_volume_changes_these_three_cases_from_schema_1() {
+        // 1. 自重 + 追加重量（旧 Bodyweight は weight を指標に載せなかった）
+        //    ディップス +10kg × 8: 旧 8 → 新 80
+        assert_eq!(set_volume(&set(10.0, 8)), 80.0);
+        // 2. 加重種目で重量を空のまま保存した記録: 旧 0 → 新 reps
+        assert_eq!(set_volume(&set(0.0, 10)), 10.0);
+        // 3. 0 < 重量 < 1（0.5kg プレート）: 旧 5 → 新 10
+        assert_eq!(set_volume(&set(0.5, 10)), 10.0);
     }
 
     #[test]
-    fn units_per_kind() {
-        assert_eq!(unit_of(Kind::Weighted), "kg·回");
-        assert_eq!(unit_of(Kind::Bodyweight), "回");
-        assert_eq!(unit_of(Kind::Duration), "秒");
+    fn log_value_covers_every_metric() {
+        // 60×10 + 60×8
+        let l = log(10, &[(60.0, 10), (60.0, 8)], None);
+        assert_eq!(log_value(Metric::Volume, &l), 1080.0);
+        assert_eq!(log_value(Metric::Sets, &l), 2.0);
+        assert_eq!(log_value(Metric::Reps, &l), 18.0);
+
+        // 重量なしでも 3 指標とも意味を持つ
+        let bw = log(11, &[(0.0, 12), (0.0, 10)], None);
+        assert_eq!(log_value(Metric::Volume, &bw), 22.0);
+        assert_eq!(log_value(Metric::Sets, &bw), 2.0);
+        assert_eq!(log_value(Metric::Reps, &bw), 22.0);
+    }
+
+    #[test]
+    fn metric_units_come_from_the_metric_not_the_exercise() {
+        // ボリュームは重量と回数の合成量なので単位を持たない
+        assert_eq!(Metric::Volume.unit(), "");
+        assert_eq!(Metric::Sets.unit(), "セット");
+        assert_eq!(Metric::Reps.unit(), "回");
+        assert_eq!(Metric::default(), Metric::Volume);
+        assert_eq!(Metric::CHOICES.len(), 3);
     }
 
     // ── last_log_before ─────────────────────────────────────────────────────
@@ -504,43 +584,100 @@ mod tests {
         );
         put(&mut db, d(2026, 8, 9), vec![log(10, &[(70.0, 10)], None)]);
 
-        let series = exercise_series(&db, 10, d(2026, 8, 1), d(2026, 8, 8));
+        let series = exercise_series(&db, 10, Metric::Volume, d(2026, 8, 1), d(2026, 8, 8));
         assert_eq!(
             series,
             vec![(d(2026, 8, 1), 500.0), (d(2026, 8, 8), 1080.0)]
         );
 
         // 未知の種目は空
-        assert!(exercise_series(&db, 999, d(2026, 8, 1), d(2026, 8, 8)).is_empty());
+        assert!(exercise_series(&db, 999, Metric::Volume, d(2026, 8, 1), d(2026, 8, 8)).is_empty());
         // from > to でもパニックしない
-        assert!(exercise_series(&db, 10, d(2026, 8, 8), d(2026, 8, 1)).is_empty());
+        assert!(exercise_series(&db, 10, Metric::Volume, d(2026, 8, 8), d(2026, 8, 1)).is_empty());
     }
 
     #[test]
-    fn group_set_series_counts_sets_across_mixed_kinds() {
+    fn exercise_series_switches_axis_with_the_metric() {
+        let mut db = test_db();
+        put(
+            &mut db,
+            d(2026, 8, 8),
+            vec![log(10, &[(60.0, 10), (60.0, 8)], None)],
+        );
+        let at = |m| exercise_series(&db, 10, m, d(2026, 8, 1), d(2026, 8, 8));
+
+        assert_eq!(at(Metric::Volume), vec![(d(2026, 8, 8), 1080.0)]);
+        assert_eq!(at(Metric::Sets), vec![(d(2026, 8, 8), 2.0)]);
+        assert_eq!(at(Metric::Reps), vec![(d(2026, 8, 8), 18.0)]);
+    }
+
+    #[test]
+    fn group_series_sums_every_exercise_in_the_group() {
         let mut db = test_db();
         put(
             &mut db,
             d(2026, 8, 1),
             vec![
-                log(10, &[(60.0, 10), (60.0, 8)], None),
-                log(11, &[(0.0, 12)], None),
+                log(10, &[(60.0, 10), (60.0, 8)], None), // ベンチ: 1,080 / 2 セット / 18 回
+                log(11, &[(0.0, 12)], None),             // プッシュアップ: 12 / 1 セット / 12 回
             ],
         );
         put(&mut db, d(2026, 8, 2), vec![log(20, &[(0.0, 60)], None)]);
 
-        // 胸 = ベンチ 2 セット + プッシュアップ 1 セット
+        let chest = |m| group_series(&db, 1, m, d(2026, 8, 1), d(2026, 8, 2));
+
+        // ★ 旧実装は Kind ごとに単位が違って足せず「セット数」固定だった。
+        //   式が 1 本になったので、重量を使う種目と使わない種目を混ぜて合算できる
+        assert_eq!(chest(Metric::Volume), vec![(d(2026, 8, 1), 1092.0)]);
+        assert_eq!(chest(Metric::Sets), vec![(d(2026, 8, 1), 3.0)]);
+        assert_eq!(chest(Metric::Reps), vec![(d(2026, 8, 1), 30.0)]);
+
+        // 体幹（重量を使わない種目だけ）でも 0 に潰れない
         assert_eq!(
-            group_set_series(&db, 1, d(2026, 8, 1), d(2026, 8, 2)),
-            vec![(d(2026, 8, 1), 3.0)]
-        );
-        // 体幹（Duration）も同じ「セット数」で数えられる
-        assert_eq!(
-            group_set_series(&db, 2, d(2026, 8, 1), d(2026, 8, 2)),
-            vec![(d(2026, 8, 2), 1.0)]
+            group_series(&db, 2, Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)),
+            vec![(d(2026, 8, 2), 60.0)]
         );
         // 種目が 1 つも無い部位は空
-        assert!(group_set_series(&db, 3, d(2026, 8, 1), d(2026, 8, 2)).is_empty());
+        assert!(group_series(&db, 3, Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)).is_empty());
+    }
+
+    #[test]
+    fn group_series_skips_days_without_that_group() {
+        let mut db = test_db();
+        put(&mut db, d(2026, 8, 1), vec![log(20, &[(0.0, 60)], None)]); // 体幹だけの日
+        put(&mut db, d(2026, 8, 2), vec![log(10, &[], None)]); // 空セット = 未実施
+
+        // 胸の点は 1 つも立たない（0 の点を置くと「やったが 0」と区別できない）
+        assert!(group_series(&db, 1, Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)).is_empty());
+    }
+
+    // ── used_exercise_ids ───────────────────────────────────────────────────
+
+    #[test]
+    fn used_exercise_ids_lists_only_exercises_with_records() {
+        let mut db = test_db();
+        assert!(used_exercise_ids(&db).is_empty(), "記録が無ければ候補も空");
+
+        put(&mut db, d(2026, 8, 1), vec![log(20, &[(0.0, 60)], None)]);
+        put(
+            &mut db,
+            d(2026, 8, 2),
+            vec![
+                log(10, &[(60.0, 10)], None),
+                log(11, &[], None), // 空セットのログは「使った」に数えない
+            ],
+        );
+
+        // 並びは db.exercises の順（記録された順ではない）
+        assert_eq!(used_exercise_ids(&db), vec![10, 20]);
+    }
+
+    #[test]
+    fn used_exercise_ids_ignores_logs_of_deleted_exercises() {
+        let mut db = test_db();
+        // db.exercises に存在しない ID のログ（通常経路では起きないが、壊れた JSON では有りうる）
+        put(&mut db, d(2026, 8, 1), vec![log(999, &[(60.0, 10)], None)]);
+        assert!(used_exercise_ids(&db).is_empty());
     }
 
     // ── aggregate_weekly ────────────────────────────────────────────────────
@@ -786,7 +923,7 @@ mod tests {
         assert_eq!(session.logs[0].at, Some(222));
         assert_eq!(session.logs[1].at, None);
         // 正規化後は last_log_before が単一ログを返せる
-        assert_eq!(log_metric(Kind::Weighted, &session.logs[0]), 1080.0);
+        assert_eq!(log_value(Metric::Volume, &session.logs[0]), 1080.0);
     }
 
     #[test]

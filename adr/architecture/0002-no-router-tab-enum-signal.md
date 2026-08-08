@@ -5,6 +5,10 @@
 - **カテゴリ**: architecture
 - **関連**: [ADR-0001](0001-rust-leptos-csr-trunk.md), [ADR-0025](../deploy/0025-github-pages-branch-deploy.md)
 
+> **改訂。** タブは 4 つ（今日 / カレンダー / 推移 / 種目）から 3 つ（記録 / 推移 / 種目）に
+> なり、`Tab::Today` は無くなった。enum signal で切り替えるという決定自体は変わらない。
+> → [ADR-0035](../ux/0035-record-tab-calendar-with-day-editor.md)
+
 ## 背景
 
 画面はボトムタブ 4 つ（今日 / カレンダー / 推移 / 種目）。leptos には `leptos_router` があり、SPA なら素直に `/today` `/calendar` … とパスを割り当てる構成になる。

@@ -32,7 +32,7 @@ web-sys = { version = "0.3", features = [
     "Crypto",          # Window::crypto → getRandomValues（ID の種）
     "Performance",     # Window::performance（crypto が使えない環境の種の足し）
     # ── 書き出し / 読み込み（src/transfer.rs）──
-    "Navigator",           # Window::navigator
+    "Navigator",           # Window::navigator（views::storage_may_split の user_agent も）
     "ShareData",           # Navigator::share_with_data / can_share_with_data
     "File",                # 共有シートに渡す File（File = ["Blob"]）
     "FilePropertyBag",

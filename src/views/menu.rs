@@ -22,6 +22,7 @@ use leptos::prelude::*;
 use crate::model::{Db, Exercise, ExerciseId, Group, GroupId};
 use crate::storage;
 
+use super::help::InstallHelpLink;
 use super::{kb_blur, kb_focus, use_db, use_kb};
 
 /// 部位を追加するときの既定色。プリセットの 6 色を順に回す。
@@ -298,6 +299,10 @@ pub fn Menu() -> impl IntoView {
             <p class="menu-note muted">
                 "アーカイブした種目は「種目を追加」に出なくなりますが、過去の記録は残り推移タブから参照できます"
             </p>
+
+            // ★ 末尾ではなく冒頭に置く。末尾は .add-wrap（sticky）の帯に覆われ、
+            //   ArchivedSection の有無で縦位置も動く
+            <InstallHelpLink />
 
             <For
                 each=move || group_ids.get()

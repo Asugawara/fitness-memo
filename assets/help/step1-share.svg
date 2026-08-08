@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 160" role="img" aria-label="iPhone の画面。下のツールバーのまん中にある共有ボタンが丸で囲まれている">
+  <rect class="hlp-panel" x="8" y="6" width="112" height="148" rx="14" />
+
+  <rect class="hlp-ghost" x="18" y="14" width="92" height="10" rx="5" />
+
+  <rect class="hlp-ghost" x="18" y="34" width="92" height="4" rx="2" />
+  <rect class="hlp-ghost" x="18" y="43" width="78" height="4" rx="2" />
+  <rect class="hlp-ghost" x="18" y="52" width="88" height="4" rx="2" />
+
+  <line class="hlp-line" x1="8" y1="120" x2="120" y2="120" />
+
+  <path class="hlp-glyph" d="M23 131 L18 136 L23 141" />
+  <path class="hlp-glyph" d="M39 131 L44 136 L39 141" />
+
+  <path class="hlp-glyph" d="M57 136 L57 144 L71 144 L71 136" />
+  <line class="hlp-glyph" x1="64" y1="127" x2="64" y2="139" />
+  <path class="hlp-glyph" d="M60 131 L64 127 L68 131" />
+
+  <rect class="hlp-glyph" x="81" y="129" width="10" height="13" rx="1.5" />
+  <line class="hlp-glyph" x1="83.5" y1="133" x2="88.5" y2="133" />
+  <line class="hlp-glyph" x1="83.5" y1="137" x2="88.5" y2="137" />
+
+  <rect class="hlp-glyph" x="102" y="130" width="9" height="9" rx="1.5" />
+  <rect class="hlp-glyph" x="105" y="133" width="9" height="9" rx="1.5" />
+
+  <circle class="hlp-mark" cx="64" cy="136" r="14" />
+</svg>

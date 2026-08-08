@@ -523,13 +523,15 @@ test('空のセット行は確認なしで消える（消えるものが無い�
   await expect(card.getByTestId('set-row')).toHaveCount(1);
 });
 
-test('「この種目を外す」はカード末尾にあり、確認を経由する', async ({ page }) => {
+test('「この日から外す」はフッタにあり、セットがあれば確認を経由する', async ({ page }) => {
   const card = await addExercise(page, 'ベンチプレス');
   await card.getByTestId('set-reps').first().fill('10');
   await blurActive(page);
 
   // ★ 見出しの右端に削除ボタンを置かない（追加しようとして消す事故の元だった）
   await expect(card.locator('.card-head button')).toHaveCount(0);
+  // 導線はフッタの中。専用の行を持たせない（カードが縦に伸びる）
+  await expect(card.locator('.card-foot [data-testid=close-card]')).toHaveCount(1);
 
   await card.getByTestId('close-card').click();
   await expect(page.getByTestId('close-card-warning')).toContainText('記録が消えます');
@@ -541,6 +543,68 @@ test('「この種目を外す」はカード末尾にあり、確認を経由�
   await card.getByTestId('close-card').click();
   await page.getByTestId('close-card-yes').click();
   await expect(page.getByTestId('exercise-card')).toHaveCount(0);
+});
+
+test('セットが空のカードは確認なしで外れる（消えるものが無いため）', async ({ page }) => {
+  // シートで種目を押し間違えた直後の取り消し。ここに確認を挟むと邪魔なだけで、
+  // 「この日の記録が消えます」は消えるものが無いので嘘になる
+  const card = await addExercise(page, 'ベンチプレス');
+  await expect(card).toHaveCount(1);
+
+  await card.getByTestId('close-card').click();
+  await expect(page.getByTestId('close-card-warning')).toHaveCount(0);
+  await expect(page.getByTestId('exercise-card')).toHaveCount(0);
+});
+
+test('重量だけ入って回数が空のカードも「空」扱いで確認なしに外れる', async ({ page }) => {
+  // parse_reps が None を返して保存されない = 消えるものが無い。
+  // 行削除の「重量プリフィルのみの行は確認しない」と同じ判定にそろえる
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-weight').first().fill('60');
+  await blurActive(page);
+
+  await card.getByTestId('close-card').click();
+  await expect(page.getByTestId('close-card-warning')).toHaveCount(0);
+  await expect(page.getByTestId('exercise-card')).toHaveCount(0);
+});
+
+test('カード削除の入口は静止時に警告色を持たない（警告色は確認だけの持ち物）', async ({
+  page,
+}) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-reps').first().fill('10');
+  await blurActive(page);
+
+  // ★ トークン値をベタ書きせず「同じ色か」で見る。ライト / ダークどちらでも成立する
+  const atRest = await card.evaluate((el) => ({
+    remove: getComputedStyle(el.querySelector('[data-testid=close-card]')).color,
+    foot: getComputedStyle(el.querySelector('.card-foot')).color,
+    rowRemove: getComputedStyle(el.querySelector('[data-testid=remove-set]')).color,
+  }));
+  expect(atRest.remove, 'フッタと同じ --muted であること').toBe(atRest.foot);
+  expect(atRest.remove, '行削除の ✕ と同じ --muted であること').toBe(atRest.rowRemove);
+
+  // 確認を開いたときだけ --warn が出る
+  await card.getByTestId('close-card').click();
+  const warnColor = await card.evaluate((el) => getComputedStyle(el.querySelector('.warn-box')).color);
+  expect(warnColor, '確認は入口と違う色（警告色）で出ること').not.toBe(atRest.remove);
+});
+
+test('カード削除の入口は「+ セット」と同じ列に無い', async ({ page }) => {
+  // ★ 目視でしか気づけない退行の固定用。カードの右端は
+  //   「行の ✕ → + セット → sticky の種目を追加」が並ぶ動線の列なので、
+  //   破壊的操作をそこへ戻したらここで落ちる
+  const card = await addExercise(page, 'ベンチプレス');
+  await blurActive(page);
+
+  const remove = await card.getByTestId('close-card').boundingBox();
+  const addSet = await card.getByTestId('add-set').boundingBox();
+  expect(remove, '外す導線が描画されていない').not.toBeNull();
+  expect(addSet, '「+ セット」が描画されていない').not.toBeNull();
+  expect(remove.x + remove.width, '「+ セット」と横位置が重なっている').toBeLessThan(addSet.x);
+
+  // タップ標的は縮めない（静かにするのは色と文字サイズだけ）
+  expect(remove.height).toBeGreaterThanOrEqual(44);
 });
 
 // 以下2件は計画の12ケースには無い追加の退行テスト。worker-d が実機相当の検証で見つけた

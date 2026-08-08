@@ -785,10 +785,36 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
         commit();
     };
 
-    let close_card = move |_| {
+    // ★ 保存済みセットが 1 つも無いカードは、消えるものが無いので確認を挟まない。
+    //   行削除の「空行は確認しない」（ADR-0036）をカードへ広げたもの。空カードに
+    //   「この日の記録が消えます」と出すのは嘘だし、シートで種目を押し間違えた直後の
+    //   取り消しが最も多い用途なので、そこに確認を挟むと邪魔でしかない。
+    //   重量だけ打って回数が空の行は保存されない（parse_reps が None）ので「空」に入る。
+    let has_sets = move || {
+        let key = core::date_key(dates.selected.get_untracked());
+        db.with_untracked(|d| {
+            d.sessions
+                .get(&key)
+                .and_then(|s| s.log_of(ex))
+                .is_some_and(|l| !l.sets.is_empty())
+        })
+    };
+
+    let close_card = move || {
         let date = dates.selected.get_untracked();
         db.update(|d| write_log(d, date, ex, Vec::new(), false));
         cards.update(|cs| cs.retain(|c| c.ex != ex));
+    };
+
+    let request_close = move |_| {
+        if !has_sets() {
+            close_card();
+            return;
+        }
+        confirm_close.set(true);
+        // ★ 確認はカード末尾に出るので、sticky の「種目を追加」の背後に
+        //   入って見えないことがある。開いたら必ず視界へ送る
+        scroll_to_id(confirm_dom_id(ex));
     };
 
     let today_metric = move || {
@@ -805,7 +831,9 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
         <article class="card" id=card_dom_id(ex) data-testid="exercise-card">
             // ★ 見出しに削除ボタンを置かない。カードの一番上・右端は
             //   「種目を追加」を探して下スクロールする指が最初に触る位置で、
-            //   追加しようとして種目ごと消す事故が起きていた。導線はカード末尾へ
+            //   追加しようとして種目ごと消す事故が起きていた。導線はフッタの左端へ
+            //   （カードの右端は「行の ✕ → + セット → sticky の種目を追加」が並ぶ列なので、
+            //   そこには置かない。詳細は ADR-0043）
             <header class="card-head">
                 <h2 data-testid="card-name">{move || name.get()}</h2>
                 <span class="group-name">{move || group_name.get()}</span>
@@ -989,25 +1017,24 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
 
             // 前回比はセッション中に出さない。途中の不完全な合計を前回の完了セッションと
             // 比べても意味がないため（比較は推移タブで行う）
+            //
+            // ★ 外す導線はこのフッタの左端に畳む。専用の行を持たせない（カード 1 枚が
+            //   その分だけ縦に縮む）ことと、右端の列から抜けることが目的。
+            //   ラベルが「この種目」ではなく「この日」なのは、曖昧なのは主語ではなく
+            //   スコープ（種目マスタから消えるのか、この日から外れるだけか）だから
             <footer class="card-foot">
-                <span>"今日"</span>
-                <strong data-testid="today-metric">{move || fmt_metric(today_metric())}</strong>
-            </footer>
-
-            <div class="card-remove">
                 <button
-                    class="link-btn danger"
+                    class="link-btn card-remove"
                     data-testid="close-card"
-                    on:click=move |_| {
-                        confirm_close.set(true);
-                        // ★ 確認はカード末尾に出るので、sticky の「種目を追加」の背後に
-                        //   入って見えないことがある。開いたら必ず視界へ送る
-                        scroll_to_id(confirm_dom_id(ex));
-                    }
+                    on:click=request_close
                 >
-                    "この種目を外す"
+                    "この日から外す"
                 </button>
-            </div>
+                <span class="foot-total">
+                    <span>"今日"</span>
+                    <strong data-testid="today-metric">{move || fmt_metric(today_metric())}</strong>
+                </span>
+            </footer>
 
             {move || {
                 confirm_close
@@ -1022,7 +1049,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                     <button
                                         class="primary"
                                         data-testid="close-card-yes"
-                                        on:click=close_card
+                                        on:click=move |_| close_card()
                                     >
                                         "外す"
                                     </button>

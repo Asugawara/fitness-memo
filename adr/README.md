@@ -71,6 +71,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0036](ux/0036-set-entry-prefill-and-focus.md) | セット追加は直前行の重量をコピーして回数欄へフォーカスする | 採用 |
 | [0037](ux/0037-copy-whole-day-menu.md) | 1 日分のメニューは候補リストから 1 タップで丸ごとコピーする | 採用 |
 | [0040](ux/0040-install-guide-banner-and-sheet.md) | ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする | 採用 |
+| [0043](ux/0043-destructive-affordance-quiet-at-rest.md) | 破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む） | 採用 |
 
 ### deploy — 配信とブランチ運用
 

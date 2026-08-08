@@ -541,3 +541,477 @@ h3 {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* ── 推移タブ ───────────────────────────────────────────────────────────── */
+
+.screen-title {
+  font-size: 20px;
+  margin-bottom: 10px;
+}
+
+.selectors {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.target-select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 10px;
+  font-size: 16px; /* 16px 未満だと iOS がフォーカス時にズームする */
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.segmented {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.seg-btn {
+  flex: 1;
+  min-height: 44px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.seg-btn:first-child {
+  border-left: 0;
+}
+
+.seg-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+/* ── グラフ ─────────────────────────────────────────────────────────────── */
+
+.chart-wrap {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 8px 6px;
+}
+
+/* viewBox 320x160 + preserveAspectRatio 既定（meet）なので縦横比は保たれる */
+.chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.chart-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-dot {
+  fill: var(--accent);
+}
+
+.chart-dot.selected {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.chart-cursor {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+/* ★ タップのヒット領域。fill:none のままでも拾えるよう pointer-events:all を明示する
+   （既定の visiblePainted は塗りの有無に依存するので当てにしない） */
+.chart-hit {
+  fill: none;
+  pointer-events: all;
+  cursor: pointer;
+}
+
+.chart-label {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.chart-empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 40px 0;
+  margin: 0;
+}
+
+.chart-readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 4px 0;
+  font-size: 13px;
+}
+
+.chart-readout strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.progress .note {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+/* ── 統計 ───────────────────────────────────────────────────────────────── */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.stats > div {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.stats dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.stats dd {
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 記録テーブル ───────────────────────────────────────────────────────── */
+
+.records {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.records th,
+.records td {
+  padding: 7px 6px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.records th {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.records .rec-date {
+  white-space: nowrap;
+}
+
+.records .rec-detail {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.records .rec-metric {
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── カレンダータブ ─────────────────────────────────────────────────────── */
+
+/* ★ この節はレイアウトを持たない。
+   calendar.rs が S_NAV / S_WEEK / S_GRID / S_DOTS / S_ACTIONS などのインライン
+   style 定数で display・grid-template-columns・flex の各軸を持っているため、
+   ここで同じプロパティを書いてもインライン側が常に勝ち「効かない CSS」になる。
+   この節が担当するのは色・境界線・角丸・余白・文字サイズだけ。
+   calendar.rs 側のインライン定数を将来外すときは、あわせてレイアウトをここへ移すこと。 */
+
+.calendar .stats {
+  margin: 10px 0 12px;
+}
+
+.cal-nav {
+  margin-bottom: 6px;
+}
+
+/* 曜日見出しと日グリッドの境。--line の 1px は .card-foot / .records と同じ区切り方 */
+.cal-week {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+.cal-wd {
+  font-size: 11px;
+}
+
+.cal-grid {
+  padding-top: 2px;
+}
+
+/* min-height はタップターゲット規約（44px）。calendar.rs のインラインと同値なので
+   どちらが勝っても結果は変わらない。インラインを外しても 44px を割らないよう残す */
+.cal-day {
+  min-height: 44px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.cal-num {
+  font-size: 14px;
+  line-height: 1.15;
+}
+
+/* 前月・翌月にはみ出す空きマス。列を保つためだけに置かれているので中身は無い */
+.cal-blank {
+  min-height: 44px;
+}
+
+/* ドットを子に持つ帯。クリックの target を常に .cal-day 側にする */
+.cal-dots {
+  pointer-events: none;
+}
+
+/* 色は Group.color 由来なので background は calendar.rs のインラインが持つ。
+   ここでは 6px が flex で潰れないようにするだけ */
+.cal-dot {
+  flex: none;
+}
+
+/* 選択日のパネル。画面末尾なので .card の下余白は落とす */
+.cal-detail {
+  margin-bottom: 0;
+}
+
+/* 右端の指標列を行またぎで揃える */
+.cal-logs {
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-log {
+  padding: 1px 0;
+}
+
+.cal-log-name {
+  font-size: 13px;
+}
+
+/* 「この日を編集」/「この日に記録する」。区切り方は .card-foot に揃える */
+.cal-actions {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.cal-open {
+  min-height: 44px;
+}
+
+/* ── 種目タブ ───────────────────────────────────────────────────────────── */
+
+.menu > .menu-note {
+  margin: 0 0 12px;
+}
+
+.menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* h1 の UA 既定は 2em なので、今日タブ（.day-head h1）と同じ 20px に揃える */
+.menu-head h1 {
+  font-size: 20px;
+}
+
+.menu-note {
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+/* 部位ブロック。.card の 12px より下を詰めて、種目行の区切り線を主役にする */
+.grp {
+  padding: 10px 12px 4px;
+}
+
+/* 部位カラーの丸。色は inline の --dot で受け取る（.sheet-group h3::before と同じ作り） */
+.dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--dot, var(--muted));
+}
+
+/* ★ 色は .link-btn の --accent のまま（上書きしない）。
+   「種目名は自由に編集・追加できる」が明示要件なので、名前がタップで開くことが
+   見て分かる必要がある。他タブの見出しと同じ --text にすると手掛かりが消える */
+.grp-name {
+  flex: 1;
+  text-align: left;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.grp-count {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.grp-foot {
+  display: flex;
+  border-top: 1px solid var(--line);
+}
+
+.ex-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  border-top: 1px solid var(--line);
+}
+
+.ex-name {
+  flex: 1;
+  min-height: 44px;
+  text-align: left;
+}
+
+.ex-kind {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* アーカイブ済みは末尾の副次セクション。.card の面を与えず軽く置く */
+.archived {
+  margin-top: 18px;
+}
+
+.archived-head {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.archived-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ── 編集シートのフォーム ───────────────────────────────────────────────── */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 14px;
+}
+
+.field > span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* シートの地は --surface なので、入力欄は --bg で沈める（.set-row .num と同じ考え方）。
+   font-size は全体規則の 16px（iOS のフォーカス時ズーム対策）に任せる */
+.text-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.field input[type="color"] {
+  width: 64px;
+  min-height: 44px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.opt {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+/* 選択中。推移タブの .seg-btn.active と同じ塗りに揃える */
+.opt.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.sheet-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+/* Kind 変更の「グラフの単位が変わります」など。枠の出し方は .past-banner に揃える */
+.warn-box {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--warn);
+}
+
+.warn-box p {
+  margin: 0 0 6px;
+}
+
+/* 削除系。--danger トークンは無いので警告色を使う。
+   .link-btn と同じ詳細度なので、色を上書きするにはこの位置（後方）である必要がある */
+.danger {
+  color: var(--warn);
+}

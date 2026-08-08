@@ -1,5 +1,6 @@
 //! 画面の共通土台。ボトムタブ 3 つ + 全画面が依存する日付コンテキスト。
 
+pub mod backup;
 pub mod calendar;
 pub mod chart;
 pub mod day;
@@ -342,6 +343,14 @@ pub fn App() -> impl IntoView {
             storage::flush();
         } else {
             dates.resync();
+            // ★ 保存が失敗していたら伝える。黙っていると、書けていないのに動き続けて
+            //   数週間分の入力を失ってから気づくことになる
+            if storage::save_failed() {
+                notice.set(Some(
+                    "記録を保存できていません。種目タブの「データの書き出し / 読み込み」から今すぐ控えを取ってください"
+                        .to_string(),
+                ));
+            }
         }
     });
     on_cleanup(move || listener.remove());

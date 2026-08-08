@@ -1,9 +1,16 @@
 # ADR-0014: JSON エクスポート/インポートを v1 に入れない
 
-- **状態**: 採用（リスク受容）
+- **状態**: 履行済み（v1 では入れず、次リリースで実装した）
 - **日付**: 2026-08-08
 - **カテゴリ**: storage
-- **関連**: [ADR-0011](0011-localstorage-single-key-json.md), [ADR-0012](0012-quarantine-on-parse-failure.md)
+- **関連**: [ADR-0011](0011-localstorage-single-key-json.md), [ADR-0012](0012-quarantine-on-parse-failure.md), [ADR-0037](../data-model/0037-random-ids-for-safe-merge.md), [ADR-0038](0038-share-sheet-over-download.md)
+
+> **この ADR が「次リリースの必須項目」と書いた約束は果たされた。**
+> 実装は [ADR-0038](0038-share-sheet-over-download.md)（書き出しの経路）と
+> [ADR-0037](../data-model/0037-random-ids-for-safe-merge.md)（先行条件だった ID の作り直し）にある。
+> 本文の「検討した代替案」のうち **Web Share API に関する評価は [ADR-0038](0038-share-sheet-over-download.md) が覆した** —
+> Web Share とファイルダウンロードを 1 つの選択肢として束ねて却下したのが誤りで、
+> 前者は Promise で成否が返り、後者は検知できない。
 
 ## 背景
 

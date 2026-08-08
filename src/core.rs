@@ -7,7 +7,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::{Datelike, NaiveDate, TimeDelta};
 
-use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, SCHEMA, Session, SetEntry};
+use crate::model::{
+    Db, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, SCHEMA, Session, SetEntry,
+};
 
 /// `Db::sessions` のキー書式。ゼロ埋め ISO なので辞書順 = 時系列順になる。
 pub const DATE_FMT: &str = "%Y-%m-%d";
@@ -408,53 +410,256 @@ pub fn humanize(e: Elapsed) -> String {
 
 // ── 復元 ────────────────────────────────────────────────────────────────────
 
+/// 復元の失敗。**「壊れている」と「新しすぎる」を分ける。**
+///
+/// 後者はデータが無傷なので、新しい版を入れ直せば救える。同じ文言で通知すると
+/// 利用者が「全部消えた」と判断して諦めてしまう。
+#[derive(Debug)]
+pub enum RestoreError {
+    /// JSON として読めない / このアプリのデータではない。
+    Broken(serde_json::Error),
+    /// 未知の（= 将来の）schema。**触っていないことを利用者に伝える。**
+    Unsupported(u32),
+}
+
+impl std::fmt::Display for RestoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Broken(e) => write!(f, "読み込めない JSON: {e}"),
+            Self::Unsupported(v) => write!(f, "未知の schema {v}"),
+        }
+    }
+}
+
 /// schema 差の吸収 + 「1 日 1 種目 1 ログ」への正規化。
 ///
 /// `Err` なら呼び側（`storage.rs`）が raw を退避してからプリセット入りの `Db` に
 /// フォールバックする。**破損データをプリセットで黙って上書きしない**ための境界。
+///
+/// ★ **schema を見て分岐する。** 見ずに `Db` として読むと、未来の版が書いた JSON を
+/// 古い版が「知らないフィールドを落として」読み込み、そのまま書き戻してしまう。
 ///
 /// 正規化の内容:
 /// - 日付キーを `%Y-%m-%d` に再正規化し、パースできないキーのセッションは捨てる
 ///   （辞書順 = 時系列順の前提が壊れ、どの画面からも到達できないため）
 /// - 同一 `exercise_id` の重複ログをマージ（セットを連結、`at` は `Some` の最大値）
 /// - セットが空のログを捨て、ログも体重もメモも無いセッションを捨てる
-/// - `next_id` が既存 ID 以下なら繰り上げる（ID 衝突を作らない）
-pub fn migrate(raw: &str) -> Result<Db, serde_json::Error> {
-    let mut db: Db = serde_json::from_str(raw)?;
+pub fn migrate(raw: &str, ids: &mut IdGen) -> Result<Db, RestoreError> {
+    // schema だけを先に取り出す。本体の形が世代ごとに違うので 2 段パースになる
+    #[derive(serde::Deserialize)]
+    struct Probe {
+        schema: u32,
+    }
+    let probe: Probe = serde_json::from_str(raw).map_err(RestoreError::Broken)?;
 
+    let mut db = match probe.schema {
+        // 連番 u32 ID の世代。全参照を乱数 ID へ張り替える
+        0..=2 => {
+            let old: legacy::Db = serde_json::from_str(raw).map_err(RestoreError::Broken)?;
+            upgrade_from_sequential(old, ids)
+        }
+        3 => serde_json::from_str(raw).map_err(RestoreError::Broken)?,
+        other => return Err(RestoreError::Unsupported(other)),
+    };
+
+    normalize(&mut db);
+    db.schema = SCHEMA;
+    Ok(db)
+}
+
+/// 世代に依らない正規化。
+fn normalize(db: &mut Db) {
     let mut sessions: BTreeMap<String, Session> = BTreeMap::new();
     for (key, session) in std::mem::take(&mut db.sessions) {
         let Some(date) = parse_date_key(&key) else {
             continue;
         };
-        merge_into(sessions.entry(date_key(date)).or_default(), session);
+        merge_same_day(sessions.entry(date_key(date)).or_default(), session);
     }
     for session in sessions.values_mut() {
         dedupe_logs(session);
     }
     sessions.retain(|_, s| !s.is_empty());
     db.sessions = sessions;
+}
 
-    let max_id = db
-        .groups
-        .iter()
-        .map(|g| g.id)
-        .chain(db.exercises.iter().map(|e| e.id))
-        .chain(
-            db.sessions
-                .values()
-                .flat_map(|s| s.logs.iter().map(|l| l.exercise_id)),
-        )
-        .max()
-        .unwrap_or(0);
-    db.next_id = db.next_id.max(max_id.saturating_add(1));
-    db.schema = SCHEMA;
+/// schema 2 までの形。**ここでしか使わない**ので private に閉じる。
+mod legacy {
+    use std::collections::BTreeMap;
 
-    Ok(db)
+    use serde::Deserialize;
+
+    use crate::model::SetEntry;
+
+    #[derive(Deserialize)]
+    pub struct Db {
+        pub groups: Vec<Group>,
+        pub exercises: Vec<Exercise>,
+        pub sessions: BTreeMap<String, Session>,
+    }
+
+    #[derive(Deserialize)]
+    pub struct Group {
+        pub id: u32,
+        pub name: String,
+        pub color: String,
+        pub order: u32,
+    }
+
+    #[derive(Deserialize)]
+    pub struct Exercise {
+        pub id: u32,
+        pub name: String,
+        pub group_id: u32,
+        pub order: u32,
+        #[serde(default)]
+        pub archived: bool,
+    }
+
+    #[derive(Deserialize)]
+    pub struct ExerciseLog {
+        pub exercise_id: u32,
+        pub sets: Vec<SetEntry>,
+        #[serde(default)]
+        pub at: Option<i64>,
+    }
+
+    #[derive(Deserialize, Default)]
+    pub struct Session {
+        pub logs: Vec<ExerciseLog>,
+        #[serde(default)]
+        pub body_weight: Option<f32>,
+        #[serde(default)]
+        pub note: String,
+    }
+}
+
+/// 連番 u32 → 乱数 [`crate::model::Id`]。**全参照を 1 つの写像で張り替える。**
+fn upgrade_from_sequential(old: legacy::Db, ids: &mut IdGen) -> Db {
+    // ① 写像を**先に作り切る**。参照だけに現れる ID（参照先が既に消えた
+    //    group_id / exercise_id）も含める。ここで漏らすと後から別々の ID が
+    //    振られて参照が壊れる。
+    //
+    //    ★ 型ごとに 2 つに分ける。健全なデータなら同じ u32 が部位と種目の両方に
+    //      現れることはないが、`migrate` の入力に健全性の前提は置かない。
+    let mut groups: HashMap<u32, GroupId> = HashMap::new();
+    let mut exercises: HashMap<u32, ExerciseId> = HashMap::new();
+
+    for g in &old.groups {
+        groups.entry(g.id).or_insert_with(|| ids.alloc());
+    }
+    for e in &old.exercises {
+        exercises.entry(e.id).or_insert_with(|| ids.alloc());
+        groups.entry(e.group_id).or_insert_with(|| ids.alloc());
+    }
+    for s in old.sessions.values() {
+        for l in &s.logs {
+            exercises
+                .entry(l.exercise_id)
+                .or_insert_with(|| ids.alloc());
+        }
+    }
+
+    // ② プリセット名に一致するものを固定 ID へ寄せる
+    pin_presets(&old, &mut groups, &mut exercises);
+
+    // ③ 以降は引くだけ。**`or_insert` は使わない** — 引けないなら ① の列挙漏れ、
+    //    つまりバグなので、黙って新しい ID を作らず落として気づけるようにする
+    let to_group = |id: u32| -> GroupId { groups[&id] };
+    let to_exercise = |id: u32| -> ExerciseId { exercises[&id] };
+
+    Db {
+        schema: SCHEMA,
+        groups: old
+            .groups
+            .into_iter()
+            .map(|g| Group {
+                id: to_group(g.id),
+                name: g.name,
+                color: g.color,
+                order: g.order,
+            })
+            .collect(),
+        exercises: old
+            .exercises
+            .into_iter()
+            .map(|e| Exercise {
+                id: to_exercise(e.id),
+                name: e.name,
+                // 宙に浮いた参照は宙に浮いたまま残す。偶然有効にするほうが危ない
+                group_id: to_group(e.group_id),
+                order: e.order,
+                archived: e.archived,
+            })
+            .collect(),
+        sessions: old
+            .sessions
+            .into_iter()
+            .map(|(key, s)| {
+                (
+                    key,
+                    Session {
+                        logs: s
+                            .logs
+                            .into_iter()
+                            .map(|l| ExerciseLog {
+                                exercise_id: to_exercise(l.exercise_id),
+                                sets: l.sets,
+                                at: l.at,
+                            })
+                            .collect(),
+                        body_weight: s.body_weight,
+                        note: s.note,
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+/// 名前がプリセットと一致する部位 / 種目を、全端末で共通の固定 ID に寄せる。
+///
+/// ★ **一致が「ちょうど 1 件」のときだけ寄せる。** 改名（`menu.rs` の
+/// `rename_exercise` / `rename_group`）には重複チェックが無いので、「ダンベルプレス」を
+/// 「ベンチプレス」に改名した DB では同名 2 種目が存在しうる。両方を同じ固定 ID に
+/// 寄せると**別々の種目の履歴が無警告で 1 本に合流する** — この移行が潰そうとして
+/// いるバグと同じ壊れ方になる。
+fn pin_presets(
+    old: &legacy::Db,
+    groups: &mut HashMap<u32, GroupId>,
+    exercises: &mut HashMap<u32, ExerciseId>,
+) {
+    for preset in crate::presets::PRESETS {
+        let matched: Vec<u32> = old
+            .groups
+            .iter()
+            .filter(|g| g.name == preset.name)
+            .map(|g| g.id)
+            .collect();
+        if let [only] = matched[..] {
+            groups.insert(only, preset.id);
+        }
+
+        for (preset_id, preset_name) in preset.exercises {
+            let matched: Vec<u32> = old
+                .exercises
+                .iter()
+                .filter(|e| e.name == *preset_name)
+                .map(|e| e.id)
+                .collect();
+            if let [only] = matched[..] {
+                exercises.insert(only, *preset_id);
+            }
+        }
+    }
 }
 
 /// 正規化で同じ日付キーに落ちた 2 つのセッションを 1 つにまとめる。
-fn merge_into(dst: &mut Session, src: Session) {
+///
+/// ★ **これはインポートのマージに流用してはいけない。** メモを無条件に連結するので、
+/// 同じファイルを 2 回取り込むとメモが 2 回増える（冪等でない）。マージ側は
+/// `merge_db` が重複ガード付きで別に処理する。
+fn merge_same_day(dst: &mut Session, src: Session) {
     dst.logs.extend(src.logs);
     if dst.body_weight.is_none() {
         dst.body_weight = src.body_weight;
@@ -494,6 +699,343 @@ fn dedupe_logs(s: &mut Session) {
         .collect();
 }
 
+// ── 書き出し / 読み込み ─────────────────────────────────────────────────────
+
+/// 書き出す文字列。`storage::save` が `localStorage` に書くのと同じ compact JSON。
+///
+/// **エクスポート形式 = 保存形式**をこの 1 関数に固定する。別形式を作ると、
+/// 保存側の変更に追随し忘れて「書き出したファイルが読み戻せない」が静かに起きる。
+pub fn export_json(db: &Db) -> String {
+    serde_json::to_string(db).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// 書き出しのファイル名。**時刻まで入れる。**
+///
+/// 日付だけだと、同じ日に 2 回書き出したとき 2 回目が 1 回目を上書きする。
+/// 「バックアップを取ったつもりが前のバックアップを潰した」はこの機能の存在意義を消す。
+pub fn export_filename(now: chrono::NaiveDateTime) -> String {
+    format!("fitness-memo-{}.json", now.format("%Y%m%d-%H%M"))
+}
+
+/// 読み込みの失敗。**利用者の次の行動が変わる粒度でだけ分ける。**
+#[derive(Debug, PartialEq, Eq)]
+pub enum ImportError {
+    /// 空。貼り付け忘れ / 空ファイル
+    Empty,
+    /// JSON として壊れている。途中で切れた可能性が高い
+    NotJson,
+    /// JSON だがこのアプリのデータではない
+    NotDb,
+    /// 新しい版で作られている
+    Unsupported(u32),
+}
+
+impl ImportError {
+    pub fn message(&self) -> String {
+        match self {
+            Self::Empty => "中身がありません".to_string(),
+            Self::NotJson => {
+                "データが途中で切れているようです（全文がコピーできているか確認してください）"
+                    .to_string()
+            }
+            Self::NotDb => "このアプリの記録ではないようです".to_string(),
+            Self::Unsupported(v) => {
+                format!("新しい版（形式 {v}）で作られた記録です。アプリを更新してください")
+            }
+        }
+    }
+}
+
+/// 貼り付け / ファイルの中身 → `Db`。
+///
+/// 順序が大事:
+/// 1. 空なら `Empty`
+/// 2. **素の [`migrate`] が通ったらそのまま返す** — 正しい入力には絶対に手を触れない
+/// 3. 通らなければ [`repair`] してもう一度だけ試す
+/// 4. それでも駄目なら、JSON として読めるかどうかで理由を分ける
+pub fn parse_import(raw: &str, ids: &mut IdGen) -> Result<Db, ImportError> {
+    if raw.trim().is_empty() {
+        return Err(ImportError::Empty);
+    }
+    match migrate(raw, ids) {
+        Ok(db) => return Ok(db),
+        Err(RestoreError::Unsupported(v)) => return Err(ImportError::Unsupported(v)),
+        Err(RestoreError::Broken(_)) => {}
+    }
+    match migrate(&repair(raw), ids) {
+        Ok(db) => Ok(db),
+        Err(RestoreError::Unsupported(v)) => Err(ImportError::Unsupported(v)),
+        Err(RestoreError::Broken(_)) => {
+            if serde_json::from_str::<serde_json::Value>(raw).is_ok() {
+                Err(ImportError::NotDb)
+            } else {
+                Err(ImportError::NotJson)
+            }
+        }
+    }
+}
+
+/// 貼り付け経路で混入する装飾だけを剥がす。
+///
+/// ★ **素のパースが失敗したときしか呼ばれない。** だから正常なデータを壊す心配がない
+/// （種目名に全角引用符が入っていても、素のパースが通るのでここには来ない）。
+fn repair(raw: &str) -> String {
+    let mut s = raw.trim().trim_start_matches('\u{feff}').trim();
+    // チャットやメモ経由で付くコードフェンス
+    if let Some(rest) = s.strip_prefix("```") {
+        let rest = rest.strip_prefix("json").unwrap_or(rest);
+        s = rest.trim_start().trim_end_matches('`').trim();
+    }
+    // リッチテキスト経由で化ける引用符
+    s.replace(['\u{201c}', '\u{201d}'], "\"")
+        .replace(['\u{2018}', '\u{2019}'], "'")
+}
+
+/// 取り込み前後を数字で並べるための要約。**インポート事故を止める唯一の道具。**
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DbSummary {
+    pub exercises: usize,
+    pub days: usize,
+    pub sets: usize,
+    pub first: Option<NaiveDate>,
+    pub last: Option<NaiveDate>,
+}
+
+pub fn summarize(db: &Db) -> DbSummary {
+    let trained: Vec<NaiveDate> = db
+        .sessions
+        .iter()
+        .filter(|(_, s)| s.is_trained())
+        .filter_map(|(k, _)| parse_date_key(k))
+        .collect();
+    DbSummary {
+        exercises: db.exercises.iter().filter(|e| !e.archived).count(),
+        days: trained.len(),
+        sets: db
+            .sessions
+            .values()
+            .flat_map(|s| s.logs.iter())
+            .map(|l| l.sets.len())
+            .sum(),
+        first: trained.iter().min().copied(),
+        last: trained.iter().max().copied(),
+    }
+}
+
+// ── マージ ──────────────────────────────────────────────────────────────────
+
+/// マージで判断が必要だった箇所。**黙って混ぜず、数えて画面に出す。**
+#[derive(Debug, PartialEq, Eq)]
+pub enum Conflict {
+    /// 同じ ID なのに名前が違った（改名）。取り込み先の名前を残した
+    Renamed { kept: String, incoming: String },
+    /// ID は違うが同名だった。同じものとみなした
+    NameMatched { name: String },
+    /// 同じ日・同じ種目でセットが食い違い、取り込む側を採った
+    SetsDiverged { date: String, name: String },
+    /// 同じ日で体重が食い違った。取り込み先を残した
+    BodyWeight { date: String },
+}
+
+/// [`merge_db`] の結果。
+///
+/// ★ **数のカウンタは冪等**（同じファイルを 2 回入れると 2 回目は全部 0）。
+/// `conflicts` は「2 つを突き合わせた結果」の記述なので、1 回目に取り込む側が勝った
+/// 項目は 2 回目には食い違いが解消していて出てこない。**冪等性は数で見ること。**
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct MergeReport {
+    pub groups_added: usize,
+    pub exercises_added: usize,
+    pub sessions_added: usize,
+    pub logs_added: usize,
+    pub conflicts: Vec<Conflict>,
+}
+
+impl MergeReport {
+    /// 何も足さなかったか。
+    pub fn is_noop(&self) -> bool {
+        self.groups_added == 0
+            && self.exercises_added == 0
+            && self.sessions_added == 0
+            && self.logs_added == 0
+    }
+}
+
+/// ログの「強さ」。**順序に依存しない決定的なキー**。
+///
+/// セット数だけで比べると `[(60,10),(60,8)]` と `[(62,10),(60,8)]` の勝者が決まらず、
+/// `merge(a, b)` と `merge(b, a)` で結果が変わる（可換でなくなる）。総ボリュームと
+/// セット列の辞書順まで見て、必ず一方に決まるようにする。
+type LogRank = (usize, u64, Vec<(u32, u32)>);
+
+fn log_rank(l: &ExerciseLog) -> LogRank {
+    let volume: f64 = l.sets.iter().map(set_volume).sum();
+    (
+        l.sets.len(),
+        // f64 は Ord を持たないので整数へ。1000 倍は 0.5kg 刻みを潰さないため
+        (volume * 1000.0) as u64,
+        // 重量は非負なので `to_bits` の順序が値の順序と一致する
+        l.sets
+            .iter()
+            .map(|s| (s.weight.to_bits(), s.reps))
+            .collect(),
+    )
+}
+
+/// 2 つの `Db` を混ぜる。**追加のみ。`mine` の既存の値は上書きしない。**
+///
+/// 守る不変条件はただ 1 つ:
+/// **マージ前に「ベンチプレス」を指していたログは、マージ後も「ベンチプレス」を指す。**
+///
+/// これが成り立つのは ID が乱数で、プリセットが全端末共通の固定 ID を持つから。
+/// 連番 ID のままだと、同じ種目を登録順だけ変えて登録した 2 台で `id = 2` が別々の
+/// 種目を指し、突き合わせた瞬間に履歴が入れ替わる。
+///
+/// 規則:
+/// - 部位 / 種目は **ID 一致 → 同名 → 新規追加** の順に判定する
+/// - **取り込む側のログは、採用の仕方に関わらず必ず別名写像を通す。**
+///   「`mine` に無い日をまるごと採用する」枝で写像を忘れると、`mine` に存在しない
+///   種目を指す宙に浮いたログが生まれ、上の不変条件がその枝だけで破れる
+/// - 同じ日の同じ種目でセットが違うときは [`log_rank`] の大きいほうを採る。
+///   **連結してはいけない** — 同じファイルを 2 回入れるとセットが倍になる
+pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
+    let mut report = MergeReport::default();
+
+    // ── 部位 ──
+    let mut group_alias: HashMap<GroupId, GroupId> = HashMap::new();
+    for g in theirs.groups {
+        if mine.group(g.id).is_some() {
+            group_alias.insert(g.id, g.id);
+            continue;
+        }
+        if let Some(existing) = mine.groups.iter().find(|x| x.name == g.name) {
+            group_alias.insert(g.id, existing.id);
+            continue;
+        }
+        let id = g.id;
+        let order = mine.groups.len() as u32;
+        mine.groups.push(Group { order, ..g });
+        group_alias.insert(id, id);
+        report.groups_added += 1;
+    }
+
+    // ── 種目 ──
+    let mut exercise_alias: HashMap<ExerciseId, ExerciseId> = HashMap::new();
+    for e in theirs.exercises {
+        if let Some(existing) = mine.exercise(e.id) {
+            if existing.name != e.name {
+                // 改名は正当な操作。取り込み先の名前を残し、あったことだけ伝える
+                report.conflicts.push(Conflict::Renamed {
+                    kept: existing.name.clone(),
+                    incoming: e.name.clone(),
+                });
+            }
+            exercise_alias.insert(e.id, e.id);
+            continue;
+        }
+        if let Some(existing) = mine.exercises.iter().find(|x| x.name == e.name) {
+            exercise_alias.insert(e.id, existing.id);
+            report.conflicts.push(Conflict::NameMatched {
+                name: e.name.clone(),
+            });
+            continue;
+        }
+        let id = e.id;
+        let group_id = group_alias.get(&e.group_id).copied().unwrap_or(e.group_id);
+        let order = mine
+            .exercises
+            .iter()
+            .filter(|x| x.group_id == group_id)
+            .count() as u32;
+        mine.exercises.push(Exercise {
+            group_id,
+            order,
+            ..e
+        });
+        exercise_alias.insert(id, id);
+        report.exercises_added += 1;
+    }
+
+    // ── セッション ──
+    for (date, session) in theirs.sessions {
+        // ★ どの枝を通るかに関わらず、先に写像を適用しておく
+        let logs: Vec<ExerciseLog> = session
+            .logs
+            .into_iter()
+            .map(|l| ExerciseLog {
+                exercise_id: exercise_alias
+                    .get(&l.exercise_id)
+                    .copied()
+                    .unwrap_or(l.exercise_id),
+                ..l
+            })
+            .collect();
+
+        let Some(dst) = mine.sessions.get_mut(&date) else {
+            report.sessions_added += 1;
+            report.logs_added += logs.len();
+            mine.sessions.insert(
+                date,
+                Session {
+                    logs,
+                    body_weight: session.body_weight,
+                    note: session.note,
+                },
+            );
+            continue;
+        };
+
+        for log in logs {
+            let Some(existing) = dst
+                .logs
+                .iter_mut()
+                .find(|x| x.exercise_id == log.exercise_id)
+            else {
+                dst.logs.push(log);
+                report.logs_added += 1;
+                continue;
+            };
+            if existing.sets == log.sets {
+                continue;
+            }
+            // 取り込む側が強いときだけ差し替える。逆向きは黙って捨てる
+            // （記録すると、同じファイルを 2 回入れたとき同じ食い違いを毎回報告する）
+            if log_rank(&log) > log_rank(existing) {
+                report.conflicts.push(Conflict::SetsDiverged {
+                    date: date.clone(),
+                    name: mine
+                        .exercises
+                        .iter()
+                        .find(|x| x.id == log.exercise_id)
+                        .map_or_else(|| log.exercise_id.to_string(), |x| x.name.clone()),
+                });
+                *existing = log;
+            }
+        }
+
+        match (dst.body_weight, session.body_weight) {
+            (None, Some(w)) => dst.body_weight = Some(w),
+            (Some(a), Some(b)) if a != b => report
+                .conflicts
+                .push(Conflict::BodyWeight { date: date.clone() }),
+            _ => {}
+        }
+
+        // ★ 重複ガード。無条件に連結すると同じファイルを 2 回入れてメモが 2 倍になる
+        let incoming = session.note.trim();
+        if !incoming.is_empty() && !dst.note.contains(incoming) {
+            if dst.note.trim().is_empty() {
+                dst.note = session.note;
+            } else {
+                dst.note.push('\n');
+                dst.note.push_str(&session.note);
+            }
+        }
+    }
+
+    report
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,6 +1045,23 @@ mod tests {
     const HOUR_MS: i64 = 3_600_000;
     const DAY_MS: i64 = 24 * HOUR_MS;
 
+    /// テスト用の ID。小さい数字をそのまま書けるようにする糖衣。
+    ///
+    /// ★ 予約領域（`RESERVED_MAX` = 1024）の外に置く。中に置くとプリセットの固定 ID と
+    /// たまたま衝突し、移行テストの意味が変わってしまう。
+    fn g(n: u64) -> GroupId {
+        GroupId::from_bits(0x1_0000 + n)
+    }
+
+    fn e(n: u64) -> ExerciseId {
+        ExerciseId::from_bits(0x1_0000 + n)
+    }
+
+    /// 決定的な採番器。`migrate` に渡す。
+    fn ids() -> IdGen {
+        IdGen::from_seed(1)
+    }
+
     // 胸(1): ベンチプレス(10) / プッシュアップ(11)
     // 体幹(2): プランク(20)
     // 脚(3): 種目なし
@@ -510,24 +1069,21 @@ mod tests {
     // 旧 Kind でいう Weighted / Bodyweight / Duration が 1 つずつ混ざる構成のまま
     // （指標の式が 1 本になっても、混在部位の合算が壊れないことを見たいので）
     fn test_db() -> Db {
-        let mut db = Db {
-            next_id: 100,
-            ..Db::default()
-        };
+        let mut db = Db::default();
         db.groups.push(Group {
-            id: 1,
+            id: g(1),
             name: "胸".into(),
             color: "#e0524a".into(),
             order: 0,
         });
         db.groups.push(Group {
-            id: 2,
+            id: g(2),
             name: "体幹".into(),
             color: "#6b7280".into(),
             order: 1,
         });
         db.groups.push(Group {
-            id: 3,
+            id: g(3),
             name: "脚".into(),
             color: "#2fa06a".into(),
             order: 2,
@@ -538,11 +1094,11 @@ mod tests {
         db
     }
 
-    fn ex(id: ExerciseId, name: &str, group_id: GroupId) -> Exercise {
+    fn ex(id: u64, name: &str, group_id: u64) -> Exercise {
         Exercise {
-            id,
+            id: e(id),
             name: name.into(),
-            group_id,
+            group_id: g(group_id),
             order: 0,
             archived: false,
         }
@@ -552,9 +1108,9 @@ mod tests {
         NaiveDate::from_ymd_opt(y, m, day).expect("有効な日付")
     }
 
-    fn log(exercise_id: ExerciseId, sets: &[(f32, u32)], at: Option<i64>) -> ExerciseLog {
+    fn log(exercise_id: u64, sets: &[(f32, u32)], at: Option<i64>) -> ExerciseLog {
         ExerciseLog {
-            exercise_id,
+            exercise_id: e(exercise_id),
             sets: sets
                 .iter()
                 .map(|(weight, reps)| SetEntry {
@@ -656,7 +1212,7 @@ mod tests {
         put(&mut db, d(2026, 8, 8), vec![log(10, &[(60.0, 10)], None)]);
 
         // 8/8 自身は含まない（厳密に前）
-        let (date, l) = last_log_before(&db, 10, d(2026, 8, 8)).expect("8/4 がある");
+        let (date, l) = last_log_before(&db, e(10), d(2026, 8, 8)).expect("8/4 がある");
         assert_eq!(date, d(2026, 8, 4));
         assert_eq!(
             l.sets,
@@ -666,13 +1222,13 @@ mod tests {
             }]
         );
 
-        let (date, _) = last_log_before(&db, 10, d(2026, 8, 4)).expect("8/1 がある");
+        let (date, _) = last_log_before(&db, e(10), d(2026, 8, 4)).expect("8/1 がある");
         assert_eq!(date, d(2026, 8, 1));
 
         // 最古の記録日より前には何もない
-        assert_eq!(last_log_before(&db, 10, d(2026, 8, 1)), None);
+        assert_eq!(last_log_before(&db, e(10), d(2026, 8, 1)), None);
         // 別種目の記録は拾わない
-        assert_eq!(last_log_before(&db, 11, d(2026, 8, 8)), None);
+        assert_eq!(last_log_before(&db, e(11), d(2026, 8, 8)), None);
     }
 
     #[test]
@@ -682,7 +1238,7 @@ mod tests {
         put(&mut db, d(2026, 8, 5), vec![log(20, &[(0.0, 60)], None)]);
         put(&mut db, d(2026, 8, 7), vec![log(10, &[], None)]); // 空セットは記録ではない
 
-        let (date, _) = last_log_before(&db, 10, d(2026, 8, 8)).expect("8/1 まで遡る");
+        let (date, _) = last_log_before(&db, e(10), d(2026, 8, 8)).expect("8/1 まで遡る");
         assert_eq!(date, d(2026, 8, 1));
     }
 
@@ -713,7 +1269,7 @@ mod tests {
             got.iter().map(|c| c.date).collect::<Vec<_>>(),
             vec![d(2026, 8, 4), d(2026, 8, 1)]
         );
-        assert_eq!(got[0].exercises, vec![20]);
+        assert_eq!(got[0].exercises, vec![e(20)]);
 
         // limit を超えない
         assert_eq!(recent_menus(&db, d(2026, 8, 9), 2).len(), 2);
@@ -731,8 +1287,8 @@ mod tests {
 
         let got = recent_menus(&db, d(2026, 8, 8), 4);
         assert_eq!(got.len(), 2, "部位が同じでも種目が違えば別の候補");
-        assert_eq!(got[0].exercises, vec![30]);
-        assert_eq!(got[1].exercises, vec![31]);
+        assert_eq!(got[0].exercises, vec![e(30)]);
+        assert_eq!(got[1].exercises, vec![e(31)]);
     }
 
     #[test]
@@ -758,7 +1314,7 @@ mod tests {
             "同じ種目集合は新しい方だけ残る"
         );
         // 残るのは新しい方の並び順
-        assert_eq!(got[1].exercises, vec![11, 10]);
+        assert_eq!(got[1].exercises, vec![e(11), e(10)]);
     }
 
     #[test]
@@ -790,7 +1346,11 @@ mod tests {
             vec![d(2026, 8, 5)],
             "押しても何も起きない候補を作らない"
         );
-        assert_eq!(got[0].exercises, vec![10], "アーカイブ済みは数にも入れない");
+        assert_eq!(
+            got[0].exercises,
+            vec![e(10)],
+            "アーカイブ済みは数にも入れない"
+        );
     }
 
     /// ★ 名前どおり「除外する」ことだけを見るテスト。**走査の打ち切り
@@ -839,7 +1399,7 @@ mod tests {
         );
 
         let copied = copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None);
-        assert_eq!(copied, vec![10, 11]);
+        assert_eq!(copied, vec![e(10), e(11)]);
 
         let session = db
             .sessions
@@ -851,7 +1411,7 @@ mod tests {
                 .iter()
                 .map(|l| l.exercise_id)
                 .collect::<Vec<_>>(),
-            vec![10, 11],
+            vec![e(10), e(11)],
             "元の日のログ順を保つ"
         );
         assert_eq!(session.logs[0].sets, vec![set(60.0, 10), set(60.0, 8)]);
@@ -944,7 +1504,7 @@ mod tests {
 
         assert_eq!(
             copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None),
-            vec![10]
+            vec![e(10)]
         );
         let session = db.sessions.get(&date_key(d(2026, 8, 8))).unwrap();
         assert_eq!(session.body_weight, Some(70.5), "体重はコピーで消えない");
@@ -1003,16 +1563,20 @@ mod tests {
         );
         put(&mut db, d(2026, 8, 9), vec![log(10, &[(70.0, 10)], None)]);
 
-        let series = exercise_series(&db, 10, Metric::Volume, d(2026, 8, 1), d(2026, 8, 8));
+        let series = exercise_series(&db, e(10), Metric::Volume, d(2026, 8, 1), d(2026, 8, 8));
         assert_eq!(
             series,
             vec![(d(2026, 8, 1), 500.0), (d(2026, 8, 8), 1080.0)]
         );
 
         // 未知の種目は空
-        assert!(exercise_series(&db, 999, Metric::Volume, d(2026, 8, 1), d(2026, 8, 8)).is_empty());
+        assert!(
+            exercise_series(&db, e(999), Metric::Volume, d(2026, 8, 1), d(2026, 8, 8)).is_empty()
+        );
         // from > to でもパニックしない
-        assert!(exercise_series(&db, 10, Metric::Volume, d(2026, 8, 8), d(2026, 8, 1)).is_empty());
+        assert!(
+            exercise_series(&db, e(10), Metric::Volume, d(2026, 8, 8), d(2026, 8, 1)).is_empty()
+        );
     }
 
     #[test]
@@ -1023,7 +1587,7 @@ mod tests {
             d(2026, 8, 8),
             vec![log(10, &[(60.0, 10), (60.0, 8)], None)],
         );
-        let at = |m| exercise_series(&db, 10, m, d(2026, 8, 1), d(2026, 8, 8));
+        let at = |m| exercise_series(&db, e(10), m, d(2026, 8, 1), d(2026, 8, 8));
 
         assert_eq!(at(Metric::Volume), vec![(d(2026, 8, 8), 1080.0)]);
         assert_eq!(at(Metric::Sets), vec![(d(2026, 8, 8), 2.0)]);
@@ -1043,7 +1607,7 @@ mod tests {
         );
         put(&mut db, d(2026, 8, 2), vec![log(20, &[(0.0, 60)], None)]);
 
-        let chest = |m| group_series(&db, 1, m, d(2026, 8, 1), d(2026, 8, 2));
+        let chest = |m| group_series(&db, g(1), m, d(2026, 8, 1), d(2026, 8, 2));
 
         // ★ 旧実装は Kind ごとに単位が違って足せず「セット数」固定だった。
         //   式が 1 本になったので、重量を使う種目と使わない種目を混ぜて合算できる
@@ -1053,11 +1617,11 @@ mod tests {
 
         // 体幹（重量を使わない種目だけ）でも 0 に潰れない
         assert_eq!(
-            group_series(&db, 2, Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)),
+            group_series(&db, g(2), Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)),
             vec![(d(2026, 8, 2), 60.0)]
         );
         // 種目が 1 つも無い部位は空
-        assert!(group_series(&db, 3, Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)).is_empty());
+        assert!(group_series(&db, g(3), Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)).is_empty());
     }
 
     #[test]
@@ -1067,7 +1631,7 @@ mod tests {
         put(&mut db, d(2026, 8, 2), vec![log(10, &[], None)]); // 空セット = 未実施
 
         // 胸の点は 1 つも立たない（0 の点を置くと「やったが 0」と区別できない）
-        assert!(group_series(&db, 1, Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)).is_empty());
+        assert!(group_series(&db, g(1), Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)).is_empty());
     }
 
     // ── used_exercise_ids ───────────────────────────────────────────────────
@@ -1088,7 +1652,7 @@ mod tests {
         );
 
         // 並びは db.exercises の順（記録された順ではない）
-        assert_eq!(used_exercise_ids(&db), vec![10, 20]);
+        assert_eq!(used_exercise_ids(&db), vec![e(10), e(20)]);
     }
 
     #[test]
@@ -1243,12 +1807,12 @@ mod tests {
         let by_group = elapsed_by_group(&db, at + 2 * DAY_MS + 5 * HOUR_MS, d(2026, 8, 8));
 
         assert_eq!(
-            by_group.get(&1),
+            by_group.get(&g(1)),
             Some(&Elapsed::Exact(2 * DAY_MS + 5 * HOUR_MS))
         );
-        assert_eq!(by_group.get(&2), Some(&Elapsed::Days(7)));
+        assert_eq!(by_group.get(&g(2)), Some(&Elapsed::Days(7)));
         // 種目が無い部位・未実施の部位はキーごと出ない（画面が「—」を出す）
-        assert_eq!(by_group.get(&3), None);
+        assert_eq!(by_group.get(&g(3)), None);
         assert_eq!(by_group.len(), 2);
     }
 
@@ -1291,13 +1855,19 @@ mod tests {
     #[test]
     fn migrate_returns_err_for_broken_json() {
         // 呼び側はこの Err を見て raw を .bak-<epoch> に退避する
-        assert!(migrate("").is_err());
-        assert!(migrate("{壊れている").is_err());
-        assert!(migrate("null").is_err());
-        assert!(migrate("[1,2,3]").is_err());
+        assert!(migrate("", &mut ids()).is_err());
+        assert!(migrate("{壊れている", &mut ids()).is_err());
+        assert!(migrate("null", &mut ids()).is_err());
+        assert!(migrate("[1,2,3]", &mut ids()).is_err());
         // 形は JSON でも必須フィールドが欠けていれば Err（プリセットで黙って上書きしない）
-        assert!(migrate(r#"{"schema":1}"#).is_err());
-        assert!(migrate(r#"{"schema":1,"next_id":1,"groups":[],"exercises":[]}"#).is_err());
+        assert!(migrate(r#"{"schema":1}"#, &mut ids()).is_err());
+        assert!(
+            migrate(
+                r#"{"schema":1,"next_id":1,"groups":[],"exercises":[]}"#,
+                &mut ids()
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1313,7 +1883,7 @@ mod tests {
           }
         }"#;
 
-        let db = migrate(raw).expect("正当な JSON");
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
         let session = &db.sessions["2026-08-08"];
 
         assert_eq!(
@@ -1321,9 +1891,9 @@ mod tests {
             2,
             "同一 exercise_id は 1 ログに畳まれる"
         );
-        // 初出の順序が保たれる
-        assert_eq!(session.logs[0].exercise_id, 10);
-        assert_eq!(session.logs[1].exercise_id, 20);
+        // 初出の順序が保たれる（ID は乱数に張り替わるので、別物であることだけ見る。
+        // どちらがどちらかはこの下のセット内容で確定する）
+        assert_ne!(session.logs[0].exercise_id, session.logs[1].exercise_id);
         // セットは出現順に連結
         assert_eq!(
             session.logs[0].sets,
@@ -1357,7 +1927,7 @@ mod tests {
           }
         }"#;
 
-        let db = migrate(raw).expect("正当な JSON");
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
         assert_eq!(db.sessions["2026-08-08"].logs[0].at, Some(999));
     }
 
@@ -1373,7 +1943,7 @@ mod tests {
           }
         }"#;
 
-        let db = migrate(raw).expect("正当な JSON");
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
 
         assert_eq!(db.sessions.keys().collect::<Vec<_>>(), vec!["2026-08-03"]);
         assert_eq!(db.sessions["2026-08-03"].logs.len(), 1);
@@ -1392,7 +1962,7 @@ mod tests {
           }
         }"#;
 
-        let db = migrate(raw).expect("正当な JSON");
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
 
         // 閲覧しただけの空セッションは消える
         assert_eq!(
@@ -1405,23 +1975,115 @@ mod tests {
         assert_eq!(db.sessions["2026-08-04"].note, "睡眠不足");
     }
 
+    /// ★ 旧 `migrate_repairs_next_id_so_new_ids_cannot_collide` の後継。
+    ///
+    /// 連番 ID を乱数へ張り替えるとき、**全参照が一貫して動く**ことを見る。
+    /// ID ではなく**名前**で検証するので、ログが別の種目を指すようになったら落ちる。
     #[test]
-    fn migrate_repairs_next_id_so_new_ids_cannot_collide() {
+    fn migrate_rewrites_every_reference_consistently() {
         // 色に # が入るので r##"…"## にする（r#"…"# だと `"#e0524a` が終端になる）
+        // 名前はプリセットに無いものにする（固定 ID へ寄せる経路と分けて見たい）
         let raw = r##"{
-          "schema": 0, "next_id": 1,
-          "groups": [{"id": 3, "name": "胸", "color": "#e0524a", "order": 0}],
-          "exercises": [{"id": 42, "name": "ベンチプレス", "group_id": 3, "kind": "Weighted", "order": 0}],
+          "schema": 2, "next_id": 1,
+          "groups": [{"id": 3, "name": "わたしの部位", "color": "#e0524a", "order": 0}],
+          "exercises": [
+            {"id": 42, "name": "わたしの種目", "group_id": 3, "order": 0},
+            {"id": 43, "name": "べつの種目", "group_id": 3, "order": 1}
+          ],
+          "sessions": {
+            "2026-08-08": { "logs": [
+              {"exercise_id": 42, "sets": [{"weight": 60.0, "reps": 10}]},
+              {"exercise_id": 43, "sets": [{"weight": 30.0, "reps": 12}]}
+            ]}
+          }
+        }"##;
+
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
+
+        assert_eq!(db.schema, SCHEMA);
+
+        let logs = &db.sessions["2026-08-08"].logs;
+        let name_of = |ex: ExerciseId| db.exercise(ex).map(|e| e.name.as_str());
+        assert_eq!(name_of(logs[0].exercise_id), Some("わたしの種目"));
+        assert_eq!(name_of(logs[1].exercise_id), Some("べつの種目"));
+
+        // 種目 → 部位の参照も一貫して張り替わる
+        for ex in &db.exercises {
+            assert_eq!(
+                db.group(ex.group_id).map(|g| g.name.as_str()),
+                Some("わたしの部位"),
+                "{} の所属が宙に浮いた",
+                ex.name
+            );
+        }
+
+        // プリセット名ではないので予約領域には入らない
+        assert!(db.groups.iter().all(|g| !g.id.is_reserved()));
+        assert!(db.exercises.iter().all(|e| !e.id.is_reserved()));
+
+        // archived は serde default で補われる
+        assert!(!db.exercises[0].archived);
+    }
+
+    /// プリセットと同じ名前なら、全端末で共通の固定 ID に寄せる。
+    /// これが無いと、別々に初期化された 2 台のマージが名前突合に落ちる。
+    #[test]
+    fn migrate_pins_preset_names_to_their_shared_fixed_ids() {
+        let raw = r##"{
+          "schema": 2, "next_id": 1,
+          "groups": [{"id": 1, "name": "胸", "color": "#e0524a", "order": 0}],
+          "exercises": [{"id": 2, "name": "ベンチプレス", "group_id": 1, "order": 0}],
           "sessions": {}
         }"##;
 
-        let mut db = migrate(raw).expect("正当な JSON");
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
 
-        assert_eq!(db.schema, SCHEMA);
-        assert_eq!(db.next_id, 43);
-        assert_eq!(db.alloc_id(), 43);
-        // archived は serde default で補われる
-        assert!(!db.exercises[0].archived);
+        assert_eq!(
+            db.groups[0].id,
+            crate::presets::preset_group_id("胸").expect("プリセットにある")
+        );
+        assert_eq!(
+            db.exercises[0].id,
+            crate::presets::preset_exercise_id("ベンチプレス").expect("プリセットにある")
+        );
+        // 参照も固定 ID に追随している
+        assert_eq!(db.exercises[0].group_id, db.groups[0].id);
+    }
+
+    /// ★ 改名には重複チェックが無いので、同じ名前の種目が 2 つある DB が実在しうる。
+    /// 両方を同じ固定 ID に寄せると**別々の種目の履歴が無警告で 1 本に合流する** —
+    /// この移行が潰そうとしているバグと同じ壊れ方になる。寄せてはいけない。
+    #[test]
+    fn migrate_does_not_pin_when_two_exercises_share_a_preset_name() {
+        let raw = r##"{
+          "schema": 2, "next_id": 1,
+          "groups": [{"id": 1, "name": "胸", "color": "#e0524a", "order": 0}],
+          "exercises": [
+            {"id": 2, "name": "ベンチプレス", "group_id": 1, "order": 0},
+            {"id": 3, "name": "ベンチプレス", "group_id": 1, "order": 1}
+          ],
+          "sessions": {
+            "2026-08-08": { "logs": [
+              {"exercise_id": 2, "sets": [{"weight": 60.0, "reps": 10}]},
+              {"exercise_id": 3, "sets": [{"weight": 30.0, "reps": 12}]}
+            ]}
+          }
+        }"##;
+
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
+
+        assert_ne!(
+            db.exercises[0].id, db.exercises[1].id,
+            "2 つが 1 つに潰れた"
+        );
+        assert!(
+            db.exercises.iter().all(|e| !e.id.is_reserved()),
+            "曖昧なときは固定 ID に寄せない"
+        );
+        // 2 本のログが別々の種目を指したまま残る
+        let logs = &db.sessions["2026-08-08"].logs;
+        assert_eq!(logs.len(), 2);
+        assert_ne!(logs[0].exercise_id, logs[1].exercise_id);
     }
 
     #[test]
@@ -1431,10 +2093,499 @@ mod tests {
         put(
             &mut db,
             d(2026, 8, 8),
-            vec![log(bench, &[(60.0, 10)], Some(1_800_000_000_000))],
+            vec![ExerciseLog {
+                exercise_id: bench,
+                sets: vec![SetEntry {
+                    weight: 60.0,
+                    reps: 10,
+                }],
+                at: Some(1_800_000_000_000),
+            }],
         );
 
+        // schema 3 なので ID はそのまま。往復して同じものが返る
         let raw = serde_json::to_string(&db).expect("直列化できる");
-        assert_eq!(migrate(&raw).expect("復元できる"), db);
+        assert_eq!(migrate(&raw, &mut ids()).expect("復元できる"), db);
+    }
+
+    /// 未知の（= 将来の）schema は**触らない**。黙って読むと、知らないフィールドを
+    /// 落としたまま書き戻して未来のデータを壊す。
+    #[test]
+    fn migrate_refuses_a_newer_schema_instead_of_dropping_fields() {
+        let raw = r#"{"schema": 99, "groups": [], "exercises": [], "sessions": {}}"#;
+
+        match migrate(raw, &mut ids()) {
+            Err(RestoreError::Unsupported(99)) => {}
+            other => panic!("Unsupported(99) を期待したが {other:?}"),
+        }
+    }
+
+    // ── 書き出し / 読み込み ──────────────────────────────────────────────────
+
+    /// ★ この機能の生命線。書き出したものが、そのまま読み戻せる。
+    #[test]
+    fn export_round_trips_through_parse_import() {
+        let mut db = crate::presets::seeded_db();
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        db.sessions.insert(
+            date_key(d(2026, 8, 8)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: bench,
+                    sets: vec![SetEntry {
+                        weight: 60.0,
+                        reps: 10,
+                    }],
+                    at: Some(1_800_000_000_000),
+                }],
+                body_weight: Some(70.5),
+                note: "調子よい".into(),
+            },
+        );
+
+        let raw = export_json(&db);
+        assert_eq!(parse_import(&raw, &mut ids()).expect("読み戻せる"), db);
+    }
+
+    #[test]
+    fn import_errors_tell_the_user_what_to_do_next() {
+        assert_eq!(parse_import("", &mut ids()), Err(ImportError::Empty));
+        assert_eq!(parse_import("   \n ", &mut ids()), Err(ImportError::Empty));
+        // 途中で切れた
+        assert_eq!(
+            parse_import(r#"{"schema":3,"groups":"#, &mut ids()),
+            Err(ImportError::NotJson)
+        );
+        // JSON ではあるが別物
+        assert_eq!(parse_import("[1,2,3]", &mut ids()), Err(ImportError::NotDb));
+        assert_eq!(parse_import("null", &mut ids()), Err(ImportError::NotDb));
+        assert_eq!(parse_import("{}", &mut ids()), Err(ImportError::NotDb));
+        // 新しい版
+        assert_eq!(
+            parse_import(
+                r#"{"schema":99,"groups":[],"exercises":[],"sessions":{}}"#,
+                &mut ids()
+            ),
+            Err(ImportError::Unsupported(99))
+        );
+    }
+
+    #[test]
+    fn import_repairs_decorations_added_by_copy_paste() {
+        let db = crate::presets::seeded_db();
+        let raw = export_json(&db);
+
+        for decorated in [
+            format!("\u{feff}{raw}"),       // BOM
+            format!("\n\n  {raw}  \n"),     // 前後の空白
+            format!("```json\n{raw}\n```"), // コードフェンス
+            format!("```\n{raw}\n```"),     // 言語指定なし
+            raw.replace('"', "\u{201d}"),   // 全角引用符に化けた
+        ] {
+            assert_eq!(
+                parse_import(&decorated, &mut ids()).expect("修復して読める"),
+                db
+            );
+        }
+    }
+
+    /// ★ `repair` は素のパースが失敗したときしか動かない。だから種目名に全角引用符が
+    /// 入っていても壊さない。ここが崩れると、正常なデータを黙って書き換える。
+    #[test]
+    fn import_does_not_touch_valid_data_containing_curly_quotes() {
+        let mut db = crate::presets::seeded_db();
+        db.exercises.push(Exercise {
+            id: ExerciseId::from_bits(0xD00D),
+            name: "\u{201c}特別\u{201d}なベンチ".into(),
+            group_id: crate::presets::preset_group_id("胸").expect("プリセット"),
+            order: 9,
+            archived: false,
+        });
+
+        let raw = export_json(&db);
+        let back = parse_import(&raw, &mut ids()).expect("読み戻せる");
+
+        assert_eq!(back, db);
+        assert!(back.exercises.iter().any(|e| e.name.contains('\u{201c}')));
+    }
+
+    #[test]
+    fn export_filename_includes_the_time_so_a_second_export_does_not_clobber_the_first() {
+        let at = |h, m| d(2026, 8, 8).and_hms_opt(h, m, 0).expect("有効な時刻");
+        assert_eq!(export_filename(at(9, 5)), "fitness-memo-20260808-0905.json");
+        assert_ne!(export_filename(at(9, 5)), export_filename(at(18, 30)));
+    }
+
+    #[test]
+    fn summarize_counts_what_the_confirmation_screen_shows() {
+        let mut db = crate::presets::seeded_db();
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        db.sessions.insert(
+            date_key(d(2026, 8, 1)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: bench,
+                    sets: vec![
+                        SetEntry {
+                            weight: 60.0,
+                            reps: 10,
+                        },
+                        SetEntry {
+                            weight: 60.0,
+                            reps: 8,
+                        },
+                    ],
+                    at: None,
+                }],
+                ..Session::default()
+            },
+        );
+        // 体重だけの日は「実施日」に数えない
+        db.sessions.insert(
+            date_key(d(2026, 8, 5)),
+            Session {
+                body_weight: Some(70.0),
+                ..Session::default()
+            },
+        );
+
+        let s = summarize(&db);
+        assert_eq!(s.exercises, 28);
+        assert_eq!(s.days, 1);
+        assert_eq!(s.sets, 2);
+        assert_eq!(s.first, Some(d(2026, 8, 1)));
+        assert_eq!(s.last, Some(d(2026, 8, 1)));
+
+        assert_eq!(summarize(&Db::default()), DbSummary::default());
+    }
+
+    // ── merge_db ────────────────────────────────────────────────────────────
+
+    /// 「ログが指す種目名」の一覧。ID ではなく名前で見るので、参照が別物に
+    /// 張り替わったら落ちる。
+    fn log_names(db: &Db, date: NaiveDate) -> Vec<&str> {
+        db.sessions
+            .get(&date_key(date))
+            .map(|s| {
+                s.logs
+                    .iter()
+                    .map(|l| {
+                        db.exercise(l.exercise_id)
+                            .map_or("<宙に浮いたログ>", |e| e.name.as_str())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 端末 A: プリセットに「わたしの種目」を足し、8/1 に記録。
+    fn device_a() -> Db {
+        let mut db = crate::presets::seeded_db();
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let chest = crate::presets::preset_group_id("胸").expect("プリセット");
+        db.exercises.push(Exercise {
+            id: ExerciseId::from_bits(0xAAA1),
+            name: "わたしの種目".into(),
+            group_id: chest,
+            order: 9,
+            archived: false,
+        });
+        db.sessions.insert(
+            date_key(d(2026, 8, 1)),
+            Session {
+                logs: vec![
+                    ExerciseLog {
+                        exercise_id: bench,
+                        sets: vec![SetEntry {
+                            weight: 60.0,
+                            reps: 10,
+                        }],
+                        at: None,
+                    },
+                    ExerciseLog {
+                        exercise_id: ExerciseId::from_bits(0xAAA1),
+                        sets: vec![SetEntry {
+                            weight: 20.0,
+                            reps: 15,
+                        }],
+                        at: None,
+                    },
+                ],
+                body_weight: Some(70.0),
+                note: "Aのメモ".into(),
+            },
+        );
+        db
+    }
+
+    /// 端末 B: 同じプリセットから始め、**ベンチプレスを改名**し、A とは別の
+    /// ユーザー種目を足して 8/2 に記録。
+    ///
+    /// ★ ここが回帰の要。A の「わたしの種目」と B の「べつの種目」は、連番採番なら
+    /// **どちらも同じ番号**（プリセット 34 件の次）になる。ID で突き合わせると
+    /// 8/1 の「わたしの種目」のログが「べつの種目」を指すようになる — この移行が
+    /// 潰そうとしている壊れ方そのもの。
+    fn device_b() -> Db {
+        let mut db = crate::presets::seeded_db();
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        db.exercises
+            .iter_mut()
+            .find(|e| e.id == bench)
+            .expect("プリセットにある")
+            .name = "ベンチプレス（スミス）".into();
+        db.exercises.push(Exercise {
+            id: ExerciseId::from_bits(0xBBB1),
+            name: "べつの種目".into(),
+            group_id: crate::presets::preset_group_id("背中").expect("プリセット"),
+            order: 9,
+            archived: false,
+        });
+        db.sessions.insert(
+            date_key(d(2026, 8, 2)),
+            Session {
+                logs: vec![
+                    ExerciseLog {
+                        exercise_id: bench,
+                        sets: vec![SetEntry {
+                            weight: 65.0,
+                            reps: 8,
+                        }],
+                        at: None,
+                    },
+                    ExerciseLog {
+                        exercise_id: ExerciseId::from_bits(0xBBB1),
+                        sets: vec![SetEntry {
+                            weight: 45.0,
+                            reps: 6,
+                        }],
+                        at: None,
+                    },
+                ],
+                body_weight: None,
+                note: String::new(),
+            },
+        );
+        db
+    }
+
+    /// ★ この機能の本体。**旧 u32 連番方式ならこのテストは落ちる。**
+    #[test]
+    fn merge_preserves_the_exercise_behind_every_log() {
+        let mut a = device_a();
+        let before = log_names(&a, d(2026, 8, 1)).join(",");
+
+        merge_db(&mut a, device_b());
+
+        assert_eq!(
+            log_names(&a, d(2026, 8, 1)).join(","),
+            before,
+            "元からあったログの指す種目が変わった"
+        );
+        // B 側のログも正しい種目を指す（ベンチは A 側の名前が残る）
+        assert_eq!(
+            log_names(&a, d(2026, 8, 2)),
+            vec!["ベンチプレス", "べつの種目"]
+        );
+        // A と B のユーザー種目は別物として両方残る（連番なら 1 つに潰れる）
+        assert_eq!(
+            a.exercises
+                .iter()
+                .filter(|e| e.name == "わたしの種目" || e.name == "べつの種目")
+                .count(),
+            2
+        );
+        // 宙に浮いたログが 1 本も無い
+        for session in a.sessions.values() {
+            for l in &session.logs {
+                assert!(a.exercise(l.exercise_id).is_some(), "宙に浮いたログ");
+            }
+        }
+    }
+
+    #[test]
+    fn merge_does_not_duplicate_presets_across_independently_seeded_devices() {
+        let mut a = device_a();
+        let exercises_before = a.exercises.len();
+        let groups_before = a.groups.len();
+
+        let report = merge_db(&mut a, device_b());
+
+        assert_eq!(report.groups_added, 0, "プリセットの部位が二重に入った");
+        // 増えてよいのは B 側のユーザー種目 1 件だけ。プリセット 28 件は増えない
+        assert_eq!(report.exercises_added, 1, "プリセットの種目が二重に入った");
+        assert_eq!(a.groups.len(), groups_before);
+        assert_eq!(a.exercises.len(), exercises_before + 1);
+        assert_eq!(
+            a.exercises.iter().filter(|e| e.id.is_reserved()).count(),
+            28,
+            "プリセット由来の種目が増減した"
+        );
+        // 改名は報告されるが、取り込み先の名前を残す
+        assert!(report.conflicts.contains(&Conflict::Renamed {
+            kept: "ベンチプレス".into(),
+            incoming: "ベンチプレス（スミス）".into(),
+        }));
+    }
+
+    #[test]
+    fn merge_is_idempotent() {
+        let mut a = device_a();
+        merge_db(&mut a, device_b());
+        let once = a.clone();
+
+        let report = merge_db(&mut a, device_b());
+
+        assert_eq!(a, once, "2 回目のマージが DB を変えた");
+        assert!(report.is_noop(), "2 回目に何かを足した: {report:?}");
+    }
+
+    /// 集合としては可換。スカラーの衝突（体重・メモ・改名）は `mine` 優先なので
+    /// 非対称だが、それは仕様（画面が `conflicts` を出す）。
+    #[test]
+    fn merge_is_commutative_as_a_set_of_records() {
+        let mut ab = device_a();
+        merge_db(&mut ab, device_b());
+        let mut ba = device_b();
+        merge_db(&mut ba, device_a());
+
+        let shape = |db: &Db| {
+            let mut days: Vec<String> = db.sessions.keys().cloned().collect();
+            days.sort();
+            let mut ids: Vec<u64> = db.exercises.iter().map(|e| e.id.bits()).collect();
+            ids.sort_unstable();
+            (days, ids, db.groups.len())
+        };
+        assert_eq!(shape(&ab), shape(&ba));
+    }
+
+    /// ★ セット数が同じで内容が違う場合。「多いほうを採る」だけでは勝者が決まらず、
+    /// マージの向きで結果が変わってしまう。
+    #[test]
+    fn merge_breaks_set_ties_deterministically() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let day = date_key(d(2026, 8, 1));
+        let with = |sets: Vec<SetEntry>| {
+            let mut db = crate::presets::seeded_db();
+            db.sessions.insert(
+                day.clone(),
+                Session {
+                    logs: vec![ExerciseLog {
+                        exercise_id: bench,
+                        sets,
+                        at: None,
+                    }],
+                    ..Session::default()
+                },
+            );
+            db
+        };
+        let light = || {
+            vec![
+                SetEntry {
+                    weight: 60.0,
+                    reps: 10,
+                },
+                SetEntry {
+                    weight: 60.0,
+                    reps: 8,
+                },
+            ]
+        };
+        let heavy = || {
+            vec![
+                SetEntry {
+                    weight: 62.0,
+                    reps: 10,
+                },
+                SetEntry {
+                    weight: 60.0,
+                    reps: 8,
+                },
+            ]
+        };
+
+        // どちらの向きから混ぜても、勝者は同じ（総ボリュームの大きいほう）
+        let mut forward = with(light());
+        merge_db(&mut forward, with(heavy()));
+        let mut backward = with(heavy());
+        merge_db(&mut backward, with(light()));
+
+        assert_eq!(forward.sessions[&day].logs[0].sets, heavy());
+        assert_eq!(backward.sessions[&day].logs[0].sets, heavy());
+    }
+
+    /// メモを無条件に連結すると、同じファイルを 2 回入れて 2 倍になる。
+    #[test]
+    fn merge_does_not_append_the_same_note_twice() {
+        let mut a = device_a();
+        let mut b = crate::presets::seeded_db();
+        b.sessions.insert(
+            date_key(d(2026, 8, 1)),
+            Session {
+                logs: Vec::new(),
+                body_weight: None,
+                note: "Bのメモ".into(),
+            },
+        );
+
+        merge_db(&mut a, b.clone());
+        let after_first = a.sessions[&date_key(d(2026, 8, 1))].note.clone();
+        merge_db(&mut a, b);
+
+        assert_eq!(a.sessions[&date_key(d(2026, 8, 1))].note, after_first);
+        assert_eq!(after_first, "Aのメモ\nBのメモ");
+    }
+
+    /// 取り込む側にしか無い日は、ログごと採用する。**そのログも写像を通っている。**
+    #[test]
+    fn merge_maps_ids_even_for_days_taken_wholesale() {
+        let mut a = crate::presets::seeded_db();
+        // A には「じぶんの種目」を ID X で持たせる
+        a.exercises.push(Exercise {
+            id: ExerciseId::from_bits(0xB001),
+            name: "じぶんの種目".into(),
+            group_id: crate::presets::preset_group_id("胸").expect("プリセット"),
+            order: 9,
+            archived: false,
+        });
+
+        // B は同名の種目を**別の ID** で持ち、A に無い日に記録している
+        let mut b = crate::presets::seeded_db();
+        b.exercises.push(Exercise {
+            id: ExerciseId::from_bits(0xC002),
+            name: "じぶんの種目".into(),
+            group_id: crate::presets::preset_group_id("胸").expect("プリセット"),
+            order: 9,
+            archived: false,
+        });
+        b.sessions.insert(
+            date_key(d(2026, 9, 9)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: ExerciseId::from_bits(0xC002),
+                    sets: vec![SetEntry {
+                        weight: 40.0,
+                        reps: 12,
+                    }],
+                    at: None,
+                }],
+                ..Session::default()
+            },
+        );
+
+        merge_db(&mut a, b);
+
+        // 名前で同一視され、A 側の ID に張り替わっている
+        let logs = &a.sessions[&date_key(d(2026, 9, 9))].logs;
+        assert_eq!(logs[0].exercise_id, ExerciseId::from_bits(0xB001));
+        assert_eq!(log_names(&a, d(2026, 9, 9)), vec!["じぶんの種目"]);
+        assert_eq!(
+            a.exercises
+                .iter()
+                .filter(|e| e.name == "じぶんの種目")
+                .count(),
+            1,
+            "同名の種目が 2 つに増えた"
+        );
     }
 }

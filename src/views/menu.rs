@@ -20,6 +20,7 @@
 use leptos::prelude::*;
 
 use crate::model::{Db, Exercise, ExerciseId, Group, GroupId};
+use crate::storage;
 
 use super::{kb_blur, kb_focus, use_db, use_kb};
 
@@ -70,7 +71,10 @@ fn archived_ids(db: &Db) -> Vec<ExerciseId> {
 }
 
 /// `id` を隣と入れ替える。端で動かせなければ `false`。
-fn swap_neighbor(list: &mut [u32], id: u32, up: bool) -> bool {
+///
+/// 部位にも種目にも使うので ID の型で generic にする。`Id<T>` は型が違えば混ざらない
+/// ので、部位のリストに種目 ID を渡す事故はコンパイルエラーになる。
+fn swap_neighbor<T: PartialEq>(list: &mut [T], id: T, up: bool) -> bool {
     let Some(i) = list.iter().position(|x| *x == id) else {
         return false;
     };
@@ -148,8 +152,11 @@ fn set_group_color(db: &mut Db, id: GroupId, color: &str) {
     }
 }
 
-fn add_group(db: &mut Db, name: String, color: String) {
-    let id = db.alloc_id();
+/// ID は呼び側（イベントハンドラ）が採番して渡す。
+///
+/// `storage::alloc_id` は `web-sys` に触るので、ここで呼ぶと「Db の更新は純粋な操作
+/// だけを集める」というこのセクションの前提が崩れる。
+fn add_group(db: &mut Db, id: GroupId, name: String, color: String) {
     let order = db.groups.len() as u32;
     db.groups.push(Group {
         id,
@@ -175,8 +182,8 @@ fn rename_exercise(db: &mut Db, id: ExerciseId, name: &str) {
     }
 }
 
-fn add_exercise(db: &mut Db, group: GroupId, name: String) {
-    let id = db.alloc_id();
+/// ID は呼び側が採番して渡す（[`add_group`] と同じ理由）。
+fn add_exercise(db: &mut Db, id: ExerciseId, group: GroupId, name: String) {
     // 末尾に付ける（renumber が非アーカイブを先頭へ詰め直す）
     let order = db.exercises.iter().filter(|e| e.group_id == group).count() as u32;
     db.exercises.push(Exercise {
@@ -259,6 +266,7 @@ fn opt_button(
 pub fn Menu() -> impl IntoView {
     let db = use_db();
     let editor: RwSignal<Option<Editor>> = RwSignal::new(None);
+    let backup_open = RwSignal::new(false);
 
     let group_ids = Memo::new(move |_| db.with(ordered_group_ids));
     let archived = Memo::new(move |_| db.with(archived_ids));
@@ -270,6 +278,22 @@ pub fn Menu() -> impl IntoView {
             <header class="menu-head">
                 <h1>"種目"</h1>
             </header>
+
+            // ★ 種目一覧の**上**に置く。下だと 6 部位 28 種目のスクロールの底になり、
+            //   データを失う前に見つけてもらえない
+            <div class="add-wrap">
+                <button
+                    class="secondary"
+                    data-testid="open-backup"
+                    on:click=move |_| {
+                        // 編集シートと二重に開かないよう、ここで閉じておく
+                        editor.set(None);
+                        backup_open.set(true);
+                    }
+                >
+                    "データの書き出し / 読み込み"
+                </button>
+            </div>
 
             <p class="menu-note muted">
                 "アーカイブした種目は「種目を追加」に出なくなりますが、過去の記録は残り推移タブから参照できます"
@@ -295,6 +319,8 @@ pub fn Menu() -> impl IntoView {
                 let ids = archived.get();
                 (!ids.is_empty()).then(|| view! { <ArchivedSection ids=ids /> })
             }}
+
+            <super::backup::BackupSheet open=backup_open />
 
             {move || {
                 editor
@@ -662,7 +688,8 @@ fn NewGroupEditor(editor: RwSignal<Option<Editor>>) -> impl IntoView {
             return;
         }
         let picked = color.get_untracked();
-        db.update(move |d| add_group(d, value, picked));
+        let id = storage::alloc_id();
+        db.update(move |d| add_group(d, id, value, picked));
         editor.set(None);
     };
 
@@ -809,12 +836,14 @@ fn NewExerciseEditor(group: GroupId, editor: RwSignal<Option<Editor>>) -> impl I
         if value.is_empty() {
             return;
         }
-        // アーカイブ済みも含めて全体で見る（presets::seed の同名スキップと同じ規則）
+        // アーカイブ済みも含めて全体で見る（同名があると移行時にプリセットの
+        // 固定 ID へ寄せられなくなる — core::pin_presets が「ちょうど 1 件」を要求する）
         if db.with_untracked(|d| d.exercises.iter().any(|e| e.name == value)) {
             duplicate.set(true);
             return;
         }
-        db.update(move |d| add_exercise(d, group, value));
+        let id = storage::alloc_id();
+        db.update(move |d| add_exercise(d, id, group, value));
         editor.set(None);
     };
 

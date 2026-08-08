@@ -56,11 +56,12 @@ fn target_value(t: Target) -> String {
 }
 
 fn parse_target(raw: &str) -> Option<Target> {
+    // ★ `parse` は各腕の**中**でやる。部位 ID と種目 ID は別の型なので、
+    //   1 つの変数に読んでから両方の腕で使うことはできない
     let (kind, id) = raw.split_once(':')?;
-    let id = id.parse().ok()?;
     match kind {
-        "g" => Some(Target::Group(id)),
-        "e" => Some(Target::Exercise(id)),
+        "g" => Some(Target::Group(id.parse().ok()?)),
+        "e" => Some(Target::Exercise(id.parse().ok()?)),
         _ => None,
     }
 }

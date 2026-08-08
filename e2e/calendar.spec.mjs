@@ -19,7 +19,7 @@ import { test, expect } from '@playwright/test';
 // 既知の制約: 日付は実行時刻の「今日」を基準にする。テストが日を跨いだ瞬間に走ると
 // Node 側の new Date() とブラウザ側の Local::now() が 1 日ズレうる（smoke も同じ）。
 
-const STORAGE_KEY = 'fitness-memo/v2';
+const STORAGE_KEY = 'fitness-memo/v3';
 const WEEKDAY_JA = ['日', '月', '火', '水', '木', '金', '土'];
 
 test.beforeEach(async ({ page }) => {

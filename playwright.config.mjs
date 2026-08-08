@@ -2,6 +2,11 @@ import { defineConfig, devices } from '@playwright/test';
 
 const PORT = Number(process.env.PORT || 4173);
 const BASE = normalizeBase(process.env.E2E_BASE || '/');
+// dist ディレクトリの切り替え。release.sh は `trunk build --dist dist-release` の
+// 成果物を `DIST_DIR=dist-release` で配信させることで、他ワーカーが並行して既定の
+// dist/ に trunk build し続けていても、そこに引きずられずに検証できる
+// (未設定時は "dist"。scripts/static-server.mjs 側の同名の仕組みを参照)
+const DIST_DIR = process.env.DIST_DIR || 'dist';
 
 function normalizeBase(base) {
   let b = base.startsWith('/') ? base : `/${base}`;
@@ -21,7 +26,7 @@ export default defineConfig({
   webServer: {
     command: 'node scripts/static-server.mjs',
     port: PORT,
-    env: { PORT: String(PORT), E2E_BASE: BASE },
+    env: { PORT: String(PORT), E2E_BASE: BASE, DIST_DIR },
     reuseExistingServer: false,
   },
   projects: [

@@ -5,9 +5,11 @@ import { dirname, join } from 'node:path';
 
 // Playwright の WebKit は Service Worker を公式サポートしていない
 // ("Service workers are only supported on Chromium-based browsers")。
-// SW の activated 判定・オフライン起動・破損 JSON の退避キーは Chromium 系
-// （chromium / Pixel 7）限定で検証し、webkit（iPhone 15 Pro）では test.skip する。
-// iPhone 15 Pro は manifest・meta・レイアウトの検証にのみ使う。
+// SW の activated 判定とオフライン起動は Service Worker API に直接依存するため
+// Chromium 系（chromium / Pixel 7）限定で検証し、webkit（iPhone 15 Pro）では
+// test.skip する。破損 JSON の退避キー検証は localStorage と DOM だけで SW を
+// 使わないため、重い側に WebKit を入れている本来の目的（iOS Safari 特有の
+// localStorage 挙動差分を踏むこと）に合わせて iPhone 15 Pro でも実行する。
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = process.env.E2E_BASE || '/';
@@ -94,6 +96,8 @@ test('manifest が取得でき display=standalone かつ id がある', async ({
 });
 
 test('ボトムタブが viewport 内にあり、横スクロールが発生しない', async ({ page }) => {
+  // この検証はレイアウト崩れの検知であって、env(safe-area-inset-*) の実効果は
+  // Chromium でも Playwright の WebKit でも常に 0px を返すため確認できない（実機でのみ確認可能）
   await page.goto('./');
 
   const overflowsHorizontally = await page.evaluate(
@@ -117,9 +121,7 @@ test('SW が activated になる', async ({ page, browserName }) => {
   expect(state).toBe('activated');
 });
 
-test('破損した JSON を注入すると退避キーが作られ、復元失敗の通知が出る', async ({ page, browserName }) => {
-  skipOnWebkit(browserName);
-
+test('破損した JSON を注入すると退避キーが作られ、復元失敗の通知が出る', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('fitness-memo/v1', '{not valid json');
   });

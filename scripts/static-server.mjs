@@ -3,9 +3,15 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// STATIC_ROOT はテストハーネス(e2e/harness.spec.mjs)が fixture ディレクトリに
-// 差し替えるためのフック。未設定時は本来の dist/ を配信する
-const ROOT = normalize(process.env.STATIC_ROOT || join(fileURLToPath(new URL('.', import.meta.url)), '..', 'dist'));
+// STATIC_ROOT はテストハーネス(e2e/harness.spec.mjs)が絶対パスの fixture
+// ディレクトリに差し替えるためのフック。最優先。
+// DIST_DIR はリポジトリルート直下の「dist という名前」を切り替えるフック。
+// 例えば release.sh が `trunk build --dist dist-release` で本番相当のビルドを
+// 既定の dist/ とは別の場所に出力し、`DIST_DIR=dist-release` で配信させれば、
+// 他ワーカーが並行して既定の dist/ に trunk build し続けていても影響を受けない
+// (未設定時は "dist")
+const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..');
+const ROOT = normalize(process.env.STATIC_ROOT || join(REPO_ROOT, process.env.DIST_DIR || 'dist'));
 const PORT = Number(process.env.PORT || 4173);
 const BASE = normalizeBase(process.env.E2E_BASE || '/');
 

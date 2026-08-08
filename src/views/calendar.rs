@@ -17,7 +17,7 @@ use leptos::prelude::*;
 use crate::core;
 use crate::model::{Db, Group, GroupId, Kind, Session};
 
-use super::{fmt_date, fmt_metric, fmt_set, fmt_weight, use_dates, use_db};
+use super::{Tab, fmt_date, fmt_metric, fmt_set, fmt_weight, use_dates, use_db, use_tab};
 
 /// 日曜始まり。`Weekday::num_days_from_sunday()` の 0..=6 とインデックスが一致する。
 const WEEKDAYS: [&str; 7] = ["日", "月", "火", "水", "木", "金", "土"];
@@ -25,42 +25,9 @@ const WEEKDAYS: [&str; 7] = ["日", "月", "火", "水", "木", "金", "土"];
 /// ドットの最大色数。これ以上は部位の並び順で切り捨てる。
 const MAX_DOTS: usize = 3;
 
-// ── 暫定インラインスタイル ──────────────────────────────────────────────────
-//
-// ★ `public/styles.css` は 3 ワーカーが同時に追記すると壊れるので Wave 3a では書かない。
-//   ただしカレンダーは 7 列グリッドとドットが CSS 無しでは画面として成立しないため、
-//   **完了報告で要求する CSS と同じ宣言**をインラインで暫定的に置いている。
-//   `styles.css` に `.cal-*` が入ったら、この節の定数・関数と対応する `style=` 属性を
-//   消すだけで移行できる（クラス名は既に最終形を付けてある）。
-
-const S_NAV: &str = "display:flex;align-items:center;justify-content:space-between;gap:8px";
-const S_WEEK: &str = "display:grid;grid-template-columns:repeat(7,1fr);text-align:center";
-const S_GRID: &str = "display:grid;grid-template-columns:repeat(7,1fr);gap:2px";
-const S_DOTS: &str = "display:flex;align-items:center;justify-content:center;gap:2px;height:6px";
-const S_LOGS: &str = "list-style:none;margin:8px 0 0;padding:0";
-const S_ACTIONS: &str =
-    "display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px";
-const S_LOG_NAME: &str = "color:var(--text);font-weight:600";
-
-/// 日セル。`min-height:44px` はタップターゲット規約（計画のデザイン節）。
-fn s_day(is_picked: bool, is_today: bool) -> String {
-    let mut s = String::from(
-        "min-height:44px;display:flex;flex-direction:column;align-items:center;\
-         justify-content:center;gap:3px;padding:2px 0;border:1px solid transparent;\
-         border-radius:8px;background:none;font-variant-numeric:tabular-nums",
-    );
-    if is_today {
-        s.push_str(";font-weight:600;color:var(--accent)");
-    }
-    if is_picked {
-        s.push_str(";border-color:var(--accent);background:var(--chip-0)");
-    }
-    s
-}
-
-fn s_dot(color: &str) -> String {
-    format!("width:6px;height:6px;border-radius:50%;background:{color}")
-}
+// 装飾は `public/styles.css` の `.cal-*` に一本化してある。
+// 唯一の例外がドットの色で、これは `Group.color` 由来のデータなので CSS では表現できず
+// インラインの `style` で渡す（状態は `class:is-today` / `class:is-picked` で伝える）。
 
 // ── 月の算術 ────────────────────────────────────────────────────────────────
 
@@ -224,48 +191,13 @@ fn day_detail(db: &Db, date: NaiveDate) -> DayDetail {
     }
 }
 
-// ── タブ切替 ────────────────────────────────────────────────────────────────
-
-/// ボトムタブの「今日」へ合成クリックを投げてタブを切り替える。
-///
-/// ★ `views/mod.rs` の `tab` は `App` のローカル signal で `provide_context` されて
-///   いないため、カレンダーからは直接触れない。**本筋は `mod.rs` が
-///   `TabCtx(pub RwSignal<Tab>)` を provide すること**で、そうなればこの関数は消して
-///   `use_context::<TabCtx>().0.set(Tab::Today)` に置き換えられる（完了報告に記載）。
-///   ここを諦めると「カレンダーから記録を追加する」という要件そのものが成立しないので、
-///   `mod.rs` を触れない Wave 3a では DOM 経由で同じ導線（`switch()`）を通す。
-///
-/// 実装上の注意 2 点:
-/// - `createEvent("Event")` ではなく **`"MouseEvent"`**。leptos の `on:click` は
-///   `MouseEvent` を受け取る型付きハンドラなので、素の `Event` を投げると境界で型が
-///   食い違う。`initEvent` は `Event.prototype` のメソッドなので MouseEvent 実体にも効く
-/// - `bubbles = true` にするのは leptos がイベント委譲でハンドラを document 側に張るため。
-///   既定の `createEvent` は bubbles が false で、委譲ハンドラに届かない
-///
-/// 使う web-sys API は `Document` / `Element` / `Event` / `EventTarget` のみで、いずれも
-/// `Cargo.toml` が明示宣言している（tachys 経由で偶然有効な feature には寄りかからない）。
-fn focus_today_tab() {
-    let doc = document();
-    let Some(button) = doc
-        .query_selector("[data-testid='tab-today']")
-        .ok()
-        .flatten()
-    else {
-        return;
-    };
-    let Ok(event) = doc.create_event("MouseEvent") else {
-        return;
-    };
-    event.init_event_with_bubbles_and_cancelable("click", true, true);
-    let _ = button.dispatch_event(&event);
-}
-
 // ── 画面 ────────────────────────────────────────────────────────────────────
 
 #[component]
 pub fn Calendar() -> impl IntoView {
     let db = use_db();
     let dates = use_dates();
+    let tabs = use_tab();
 
     // タブ切替のたびにこのコンポーネントは作り直されるので、開くたび「見ている日付」の月
     // から始まる（過去日を編集中なら、その月がそのまま出る）
@@ -277,17 +209,17 @@ pub fn Calendar() -> impl IntoView {
     let trained = Memo::new(move |_| detail.with(|d| !d.logs.is_empty()));
 
     // ★ 日付を先に確定させてからタブを切り替える。
-    //   `mod.rs` の `switch()` は `dates.resync(false)` を通るが、`selected` が `today` と
+    //   `TabCtx::switch` は `dates.resync(false)` を通るが、`selected` が `today` と
     //   食い違っていれば当日へ戻さない実装なので、この順序なら選んだ過去日が残り、
     //   今日タブ側が「編集中」バナーを出す。
     let open_day = move |date: NaiveDate| {
         dates.open(date);
-        focus_today_tab();
+        tabs.switch(dates, Tab::Today);
     };
 
     view! {
         <section class="calendar" data-testid="screen-calendar">
-            <header class="cal-nav" style=S_NAV>
+            <header class="cal-nav">
                 <button
                     class="icon-btn"
                     aria-label="前の月"
@@ -296,7 +228,7 @@ pub fn Calendar() -> impl IntoView {
                 >
                     "‹"
                 </button>
-                <h1 class="screen-title" style="margin:0" data-testid="cal-title">
+                <h1 class="screen-title" data-testid="cal-title">
                     {move || fmt_month(month.get())}
                 </h1>
                 <button
@@ -309,14 +241,14 @@ pub fn Calendar() -> impl IntoView {
                 </button>
             </header>
 
-            <div class="cal-week" style=S_WEEK>
+            <div class="cal-week">
                 {WEEKDAYS
                     .iter()
                     .map(|w| view! { <span class="muted cal-wd">{*w}</span> })
                     .collect::<Vec<_>>()}
             </div>
 
-            <div class="cal-grid" style=S_GRID data-testid="cal-grid">
+            <div class="cal-grid" data-testid="cal-grid">
                 {move || {
                     data.with(|m| {
                         m.cells
@@ -334,16 +266,13 @@ pub fn Calendar() -> impl IntoView {
                                             class:is-trained=c.trained
                                             class:is-today=move || date == dates.today.get()
                                             class:is-picked=move || date == picked.get()
-                                            style=move || {
-                                                s_day(date == picked.get(), date == dates.today.get())
-                                            }
                                             data-testid="cal-day"
                                             data-date=core::date_key(date)
                                             data-trained=if c.trained { "true" } else { "false" }
                                             on:click=move |_| picked.set(date)
                                         >
                                             <span class="cal-num">{c.day}</span>
-                                            <span class="cal-dots" style=S_DOTS>
+                                            <span class="cal-dots">
                                                 {colors
                                                     .into_iter()
                                                     .map(|color| {
@@ -351,7 +280,7 @@ pub fn Calendar() -> impl IntoView {
                                                             <i
                                                                 class="cal-dot"
                                                                 data-testid="cal-dot"
-                                                                style=s_dot(&color)
+                                                                style=format!("background:{color}")
                                                             ></i>
                                                         }
                                                     })
@@ -430,13 +359,13 @@ pub fn Calendar() -> impl IntoView {
                     (!logs.is_empty())
                         .then(|| {
                             view! {
-                                <ul class="cal-logs" style=S_LOGS data-testid="cal-logs">
+                                <ul class="cal-logs" data-testid="cal-logs">
                                     {logs
                                         .into_iter()
                                         .map(|l| {
                                             view! {
                                                 <li class="last-row cal-log" data-testid="cal-log">
-                                                    <span class="cal-log-name" style=S_LOG_NAME>
+                                                    <span class="cal-log-name">
                                                         {l.name}
                                                     </span>
                                                     <span class="group-name">{l.group}</span>
@@ -454,7 +383,7 @@ pub fn Calendar() -> impl IntoView {
                 // ★ 記録が無い日でも必ず「記録なし」と「この日に記録する」を出す。
                 //   要件の動詞は「カレンダーに対して追加できる」で、最も典型的な
                 //   「昨日記録し忘れた分をカレンダーから入れる」がここで成立する
-                <div class="cal-actions" style=S_ACTIONS>
+                <div class="cal-actions">
                     {move || {
                         (!trained.get())
                             .then(|| {
@@ -467,7 +396,6 @@ pub fn Calendar() -> impl IntoView {
                     }}
                     <button
                         class="primary cal-open"
-                        style="margin-left:auto"
                         data-testid="cal-open-day"
                         data-mode=move || if trained.get() { "edit" } else { "new" }
                         on:click=move |_| open_day(picked.get_untracked())

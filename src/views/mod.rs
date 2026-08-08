@@ -280,6 +280,30 @@ pub enum Tab {
     Menu,
 }
 
+/// 現在のタブ。
+///
+/// ボトムタブ以外からもタブを移す導線がある（カレンダーの「この日に記録する」）。
+/// ここを `provide_context` しないと他画面から遷移する手段が無くなり、DOM を引いて
+/// 合成クリックを投げるような**アプリの動作が `data-testid` に依存する**実装に落ちる。
+#[derive(Clone, Copy)]
+pub struct TabCtx(pub RwSignal<Tab>);
+
+impl TabCtx {
+    /// タブを切り替える。
+    ///
+    /// **切替のたびに「今日」を再評価する**のが要点。iOS のホーム画面 PWA は再起動されず
+    /// 何日もレジュームされるので、mount 時に決めた日付を持ち回ると日付を跨いだ操作が
+    /// 前日に記録される。`resync(false)` なので、ユーザーが明示的に選んだ過去日は残る。
+    pub fn switch(&self, dates: DateCtx, to: Tab) {
+        dates.resync(false);
+        self.0.set(to);
+    }
+}
+
+pub fn use_tab() -> TabCtx {
+    use_context::<TabCtx>().expect("TabCtx が provide されていない")
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     let (initial, restore_note) = storage::load();
@@ -297,6 +321,9 @@ pub fn App() -> impl IntoView {
     provide_context(kb);
 
     let tab = RwSignal::new(Tab::Today);
+    let tabs = TabCtx(tab);
+    provide_context(tabs);
+
     let notice = RwSignal::new(restore_note);
 
     // Db の変更を購読して 400ms debounce で保存する
@@ -317,10 +344,8 @@ pub fn App() -> impl IntoView {
     });
     on_cleanup(move || listener.remove());
 
-    let switch = move |t: Tab| {
-        dates.resync(false);
-        tab.set(t);
-    };
+    // ボトムタブも他画面からの遷移も同じ TabCtx::switch を通す（日付の再評価を一箇所にする）
+    let switch = move |t: Tab| tabs.switch(dates, t);
 
     let tab_button = move |t: Tab, label: &'static str, testid: &'static str| {
         view! {

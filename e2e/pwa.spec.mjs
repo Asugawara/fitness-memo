@@ -93,6 +93,16 @@ test('manifest が取得でき display=standalone かつ id がある', async ({
   const manifest = await res.json();
   expect(manifest.display).toBe('standalone');
   expect(manifest.id).toBeTruthy();
+
+  // ★ ホーム画面のアイコン下に出るのは short_name / apple-mobile-web-app-title であって
+  //   <title> ではない。4 箇所揃っていないと DOM だけ英語で iPhone は日本語のまま残る
+  expect(manifest.name).toBe('fitness-memo');
+  expect(manifest.short_name).toBe('fitness-memo');
+  await expect(page).toHaveTitle('fitness-memo');
+  await expect(page.locator('meta[name="apple-mobile-web-app-title"]')).toHaveAttribute(
+    'content',
+    'fitness-memo',
+  );
 });
 
 test('ボトムタブが viewport 内にあり、横スクロールが発生しない', async ({ page }) => {

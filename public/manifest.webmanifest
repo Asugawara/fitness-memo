@@ -1,7 +1,7 @@
 {
   "id": "./",
-  "name": "筋トレメモ",
-  "short_name": "筋トレ",
+  "name": "fitness-memo",
+  "short_name": "fitness-memo",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

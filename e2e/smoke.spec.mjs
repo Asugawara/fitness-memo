@@ -446,6 +446,106 @@ test('12. 重量入力の中間状態("6.")でクラッシュせず、"6.5"ま�
   await expect(card.getByTestId('today-metric')).toHaveText('13');
 });
 
+// ── 実使用フィードバック（記録中の操作コストと誤操作）の退行テスト ──────────
+
+test('「+ セット」で直前行の重量がコピーされ、回数欄にフォーカスが移る', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  const rows = card.getByTestId('set-row');
+
+  await rows.nth(0).getByTestId('set-weight').fill('60');
+  await rows.nth(0).getByTestId('set-reps').fill('10');
+
+  await card.getByTestId('add-set').click();
+
+  // ★ 重量は打ち直さない（60×10 / 60×8 / 60×6 のように据え置くのが普通）
+  await expect(rows.nth(1).getByTestId('set-weight')).toHaveValue('60');
+  await expect(rows.nth(1).getByTestId('set-reps')).toHaveValue('');
+
+  // ★ 回数欄にフォーカスが来ているので、そのまま打てる（入力欄をタップしない）
+  await expect(rows.nth(1).getByTestId('set-reps')).toBeFocused();
+  await page.keyboard.type('8');
+  await expect(card.getByTestId('today-metric')).toHaveText('1,080');
+
+  // 重量だけ入った空行はゴーストセットにならない（parse_reps が None を返す）
+  await card.getByTestId('add-set').click();
+  await expect(card.getByTestId('today-metric')).toHaveText('1,080');
+});
+
+test('カードが増えても「種目を追加」が常に画面内にあり、force なしで押せる', async ({ page }) => {
+  for (const name of ['ベンチプレス', '懸垂', 'ショルダープレス', 'バーベルカール', 'スクワット']) {
+    const card = await addExercise(page, name);
+    await card.getByTestId('set-reps').first().fill('10');
+  }
+  await blurActive(page);
+  await expect(page.getByTestId('exercise-card')).toHaveCount(5);
+
+  // ★ sticky が効いていないとカード列の末尾まで押しやられ、ビューポート外になる。
+  //   force を付けないので、隠れていればここでタイムアウトする
+  const add = page.getByTestId('add-exercise');
+  // kb_blur の 150ms debounce が解けるまで .kb-open が残るので、可視化を待ってから測る
+  await expect(add).toBeVisible();
+  const viewport = page.viewportSize();
+  const box = await add.boundingBox();
+  expect(box, '「種目を追加」が描画されていない').not.toBeNull();
+  expect(box.y + box.height, 'ビューポートの下にはみ出している').toBeLessThanOrEqual(
+    viewport.height + 1,
+  );
+  await add.click();
+  await expect(page.getByTestId('add-sheet')).toBeVisible();
+});
+
+test('中身のあるセットの削除は確認を挟み、「やめる」で残る', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  const row0 = card.getByTestId('set-row').nth(0);
+  await row0.getByTestId('set-weight').fill('60');
+  await row0.getByTestId('set-reps').fill('10');
+
+  await row0.getByTestId('remove-set').click();
+  await expect(page.getByTestId('remove-set-confirm')).toBeVisible();
+  // 確認中は行がまだ生きている
+  await expect(card.getByTestId('today-metric')).toHaveText('600');
+
+  await page.getByTestId('remove-set-no').click();
+  await expect(page.getByTestId('remove-set-confirm')).toHaveCount(0);
+  await expect(row0.getByTestId('set-weight')).toHaveValue('60');
+
+  await row0.getByTestId('remove-set').click();
+  await page.getByTestId('remove-set-yes').click();
+  await expect(card.getByTestId('today-metric')).toHaveText('0');
+});
+
+test('空のセット行は確認なしで消える（消えるものが無いため）', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-reps').first().fill('10');
+  await card.getByTestId('add-set').click();
+  await expect(card.getByTestId('set-row')).toHaveCount(2);
+
+  // 2 行目は重量プリフィルのみで回数が空 = 中身なし扱い
+  await card.getByTestId('set-row').nth(1).getByTestId('remove-set').click();
+  await expect(page.getByTestId('remove-set-confirm')).toHaveCount(0);
+  await expect(card.getByTestId('set-row')).toHaveCount(1);
+});
+
+test('「この種目を外す」はカード末尾にあり、確認を経由する', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-reps').first().fill('10');
+  await blurActive(page);
+
+  // ★ 見出しの右端に削除ボタンを置かない（追加しようとして消す事故の元だった）
+  await expect(card.locator('.card-head button')).toHaveCount(0);
+
+  await card.getByTestId('close-card').click();
+  await expect(page.getByTestId('close-card-warning')).toContainText('記録が消えます');
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
+
+  await page.getByTestId('close-card-no').click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
+
+  await card.getByTestId('close-card').click();
+  await page.getByTestId('close-card-yes').click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(0);
+});
+
 // 以下2件は計画の12ケースには無い追加の退行テスト。worker-d が実機相当の検証で見つけた
 // バグ（.bottom-tabs / .sheet-backdrop / .sheet が全て position:fixed なのに z-index を
 // 省いていたため、DOM順で <nav class="bottom-tabs"> が前面に出ていた）の固定用。

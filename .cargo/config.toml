@@ -1,0 +1,19 @@
+# ビルド成果物に開発マシンのローカルパスを埋め込まないための設定。
+#
+# Rust は panic 位置の情報として `file!()` のパスをバイナリへ埋める。依存クレートの分は
+# `~/.cargo/registry/src/index.crates.io-<hash>/<crate>/src/...` という絶対パスになるため、
+# そのまま公開すると **開発マシンのユーザー名とディレクトリ構成が全世界に見える**。
+# 実際に一度 https://asugawara.github.io/fitness-memo/ の wasm へ 52 箇所埋まっていた。
+#
+# 本来は `[profile.release] trim-paths = "all"` が正しい手段だが、cargo 1.97.1 では
+# まだ安定化されていない（`feature \`trim-paths\` is required` で manifest のパースに失敗する）。
+# そのため安定版で使える `--remap-path-prefix` で置き換える。
+#
+# 自分のクレートのパスは `src/core.rs` のような相対パスで埋まるので問題ない。
+# 置換するのは registry と toolchain の絶対パスだけでよい。
+[build]
+rustflags = [
+  "--remap-path-prefix=/Users/a14628/.cargo/registry=/cargo/registry",
+  "--remap-path-prefix=/Users/a14628/.rustup=/rustup",
+  "--remap-path-prefix=/Users/a14628=/home",
+]

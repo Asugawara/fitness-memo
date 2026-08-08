@@ -313,6 +313,103 @@ pub fn aggregate_weekly(series: &[(NaiveDate, f64)]) -> Vec<(NaiveDate, f64)> {
     weeks.into_iter().collect()
 }
 
+// ── 体重（グラフの第2軸）──────────────────────────────────────────────────
+
+/// グラフに載せられる体重の範囲。**これを外れた値は系列から落とす**（データは消さない）。
+///
+/// 上限が要るのは、入力側（`ConditionRow` の commit）も [`migrate`] も
+/// `is_finite() && > 0.0` しか見ておらず、`f32` の上限まで素通りするため。
+/// `3e38` のような値が 1 点でも混じると [`weight_band`] の帯が f64 の丸めで
+/// 潰れ、`(v - lo) / (hi - lo)` が 0/0 = NaN になる。NaN 座標の `points` 属性は
+/// SVG のパースエラーで**折れ線が丸ごと描かれなくなる**（例外も出ない）。
+///
+/// 999.5 に置いているのは軸ラベルの桁数を 5 文字（"999.5" / "1000"）で頭打ちにするため。
+/// これで右軸ラベルが viewBox から溢れないことが桁数で保証できる。
+pub const WEIGHT_MAX: f64 = 999.5;
+
+/// 第2軸の目盛り刻み。ラベルを 0.5kg の倍数に乗せる。
+pub const WEIGHT_TICK: f64 = 0.5;
+
+/// 体重の推移。**トレーニングしていない日も点になる。**
+///
+/// `Session::is_empty()` が体重だけの日を「空ではない」と扱うので、休養日の計量も
+/// セッションとして残っている。指標の系列（`exercise_series` / `group_series`）が
+/// トレした日にしか点を持たないのと対照的で、体重の方が密になる。
+pub fn body_weight_series(db: &Db, from: NaiveDate, to: NaiveDate) -> Vec<(NaiveDate, f64)> {
+    sessions_in(db, from, to)
+        .filter_map(|(date, session)| {
+            let w = f64::from(session.body_weight?);
+            (w.is_finite() && w > 0.0 && w <= WEIGHT_MAX).then_some((date, w))
+        })
+        .collect()
+}
+
+/// 週単位の**平均**。キーは [`aggregate_weekly`] と同じ週の開始日（日曜）。
+///
+/// ★ 体重を [`aggregate_weekly`]（合計）に通すと「全期間」で 400kg になる。
+/// 指標と体重が同じグラフに乗る以上、**週キーが一致すること**が要件で、
+/// 集約の仕方だけが違う（指標は合計、体重は平均）。
+///
+/// 既に週次の系列に対しては冪等（各週 1 点の平均はその点自身）。
+pub fn aggregate_weekly_avg(series: &[(NaiveDate, f64)]) -> Vec<(NaiveDate, f64)> {
+    let mut weeks: BTreeMap<NaiveDate, (f64, u32)> = BTreeMap::new();
+    for (date, value) in series {
+        let slot = weeks.entry(week_start(*date)).or_insert((0.0, 0));
+        slot.0 += *value;
+        slot.1 += 1;
+    }
+    weeks
+        .into_iter()
+        .map(|(k, (sum, n))| (k, sum / f64::from(n)))
+        .collect()
+}
+
+/// 体重の第2軸の帯 `(lo, hi)`。
+///
+/// **契約: 返り値は必ず `[lo_v, hi_v]` を含み、`hi > lo` かつ両端が有限。**
+/// 呼び出し側は `(v - lo) / (hi - lo)` をゼロ除算の心配なく使える。
+///
+/// ★ 0 起点にしない。指標の軸（0〜max×1.1）と同じ作りにすると 60〜65kg が
+/// 画面上端に貼り付いた平線になり、体重の遷移が読めない。
+///
+/// 0.5kg 刻みに外側へ丸めたあと、**目盛り区間数が 2 以上かつ偶数**になるまで広げる。
+/// 偶数にするのはグリッド 3 本の中央ラベルも 0.5 の倍数に乗せるため
+/// （そうしないと `62.45` のような目盛りが出る）。広げる側は余白の少ない方を選び、
+/// データを帯の中央へ寄せる（単一点が下端に貼り付いて 0 グリッド線と重なるのを防ぐ）。
+pub fn weight_band(lo_v: f64, hi_v: f64) -> (f64, f64) {
+    // ★ ここで弾かないと下のループが止まらない。NaN は `(hi-lo)/TICK` を NaN にし、
+    //   `as i64` が 0 になって偶数条件を永久に満たさない
+    if !lo_v.is_finite() || !hi_v.is_finite() {
+        return (0.0, 2.0 * WEIGHT_TICK);
+    }
+    // `body_weight_series` が既に範囲外を落としているが、帯の計算単体でも契約を守る。
+    // 上限を切ることで `(hi - lo) / TICK` が i64 に収まり、飽和して奇数のまま
+    // 回り続ける経路も塞がる
+    let lo_v = lo_v.clamp(0.0, WEIGHT_MAX);
+    let hi_v = hi_v.clamp(lo_v, WEIGHT_MAX);
+
+    let mut lo = (lo_v / WEIGHT_TICK).floor() * WEIGHT_TICK;
+    let mut hi = (hi_v / WEIGHT_TICK).ceil() * WEIGHT_TICK;
+    // 1 周ごとに区間数がちょうど 1 増えるので 3 周以内に必ず抜ける
+    loop {
+        let ticks = ((hi - lo) / WEIGHT_TICK).round() as i64;
+        if ticks >= 2 && ticks % 2 == 0 {
+            // ★ 体重の軸に負の目盛りを出さない。0.1kg のような打ち間違いが 1 点でも
+            //   残っていると中央寄せで下端が -0.5 になる。幅（= 区間の偶数条件）を
+            //   保ったまま帯ごと持ち上げる。上へずらすだけなので含有は壊れない
+            if lo < 0.0 {
+                return (0.0, hi - lo);
+            }
+            return (lo, hi);
+        }
+        if lo_v - lo <= hi - hi_v {
+            lo -= WEIGHT_TICK;
+        } else {
+            hi += WEIGHT_TICK;
+        }
+    }
+}
+
 // ── 経過時間 ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1769,6 +1866,209 @@ mod tests {
         assert_eq!(week_start(d(2026, 8, 15)), d(2026, 8, 9));
         // 月をまたぐ週
         assert_eq!(week_start(d(2026, 8, 1)), d(2026, 7, 26));
+    }
+
+    // ── 体重（第2軸）────────────────────────────────────────────────────────
+
+    /// その日に体重（と任意でログ）を置く。
+    fn put_weight(db: &mut Db, date: NaiveDate, kg: Option<f32>, logs: Vec<ExerciseLog>) {
+        db.sessions.insert(
+            date_key(date),
+            Session {
+                logs,
+                body_weight: kg,
+                ..Session::default()
+            },
+        );
+    }
+
+    #[test]
+    fn body_weight_series_skips_days_without_a_weight() {
+        let mut db = test_db();
+        put_weight(&mut db, d(2026, 8, 1), Some(70.0), vec![]);
+        // ログだけの日は体重の系列に乗らない
+        put_weight(
+            &mut db,
+            d(2026, 8, 2),
+            None,
+            vec![log(10, &[(60.0, 10)], None)],
+        );
+        put_weight(&mut db, d(2026, 8, 3), Some(70.5), vec![]);
+
+        assert_eq!(
+            body_weight_series(&db, d(2026, 8, 1), d(2026, 8, 3)),
+            vec![(d(2026, 8, 1), 70.0), (d(2026, 8, 3), 70.5)]
+        );
+    }
+
+    /// ★ 指標の系列と違い、**トレーニングしていない日にも点が立つ**。
+    ///
+    /// これがグラフの X ドメインを両系列の合併にする理由でもある（最後にトレした
+    /// 日より後の計量が、そのままでは軸の外に落ちる）。
+    #[test]
+    fn body_weight_series_includes_rest_days() {
+        let mut db = test_db();
+        put_weight(
+            &mut db,
+            d(2026, 8, 1),
+            Some(70.0),
+            vec![log(10, &[(60.0, 10)], None)],
+        );
+        put_weight(&mut db, d(2026, 8, 2), Some(70.2), vec![]); // 休養日
+        put_weight(&mut db, d(2026, 8, 3), Some(70.4), vec![]); // 休養日
+
+        let weight = body_weight_series(&db, d(2026, 8, 1), d(2026, 8, 3));
+        let metric = exercise_series(&db, e(10), Metric::Volume, d(2026, 8, 1), d(2026, 8, 3));
+        assert_eq!(weight.len(), 3);
+        assert_eq!(metric.len(), 1);
+        // 体重の方が後ろまで伸びる
+        assert!(weight.last().expect("空でない").0 > metric.last().expect("空でない").0);
+    }
+
+    #[test]
+    fn body_weight_series_includes_both_ends_and_is_sorted_by_date() {
+        let mut db = test_db();
+        for (day, kg) in [(1, 70.0), (5, 71.0), (9, 72.0)] {
+            put_weight(&mut db, d(2026, 8, day), Some(kg), vec![]);
+        }
+        let got = body_weight_series(&db, d(2026, 8, 1), d(2026, 8, 9));
+        assert_eq!(
+            got,
+            vec![
+                (d(2026, 8, 1), 70.0),
+                (d(2026, 8, 5), 71.0),
+                (d(2026, 8, 9), 72.0)
+            ]
+        );
+        // 範囲外は落ちる
+        assert_eq!(
+            body_weight_series(&db, d(2026, 8, 2), d(2026, 8, 8)),
+            vec![(d(2026, 8, 5), 71.0)]
+        );
+    }
+
+    /// ★ 表示できない値を系列から外す。
+    ///
+    /// 入力側（`ConditionRow`）も `migrate` も `is_finite() && > 0.0` しか見ていないので、
+    /// `3e38` は `f32` として有限であり素通りする。1 点でも混じると `weight_band` の帯が
+    /// f64 の丸めで潰れ、NaN 座標で折れ線が丸ごと消える。
+    #[test]
+    fn body_weight_series_drops_values_the_chart_cannot_represent() {
+        let mut db = test_db();
+        put_weight(&mut db, d(2026, 8, 1), Some(70.0), vec![]);
+        put_weight(&mut db, d(2026, 8, 2), Some(3e38), vec![]); // f32 として有限
+        put_weight(&mut db, d(2026, 8, 3), Some(1500.0), vec![]); // WEIGHT_MAX 超
+        put_weight(&mut db, d(2026, 8, 4), Some(71.0), vec![]);
+
+        assert_eq!(
+            body_weight_series(&db, d(2026, 8, 1), d(2026, 8, 4)),
+            vec![(d(2026, 8, 1), 70.0), (d(2026, 8, 4), 71.0)]
+        );
+    }
+
+    #[test]
+    fn aggregate_weekly_avg_averages_instead_of_summing() {
+        let series = vec![(d(2026, 8, 2), 70.0), (d(2026, 8, 8), 72.0)];
+        // 合計版だと 142（体重として無意味）
+        assert_eq!(aggregate_weekly(&series), vec![(d(2026, 8, 2), 142.0)]);
+        assert_eq!(aggregate_weekly_avg(&series), vec![(d(2026, 8, 2), 71.0)]);
+    }
+
+    /// ★ 指標（合計）と体重（平均）が同じグラフに乗るので、**週キーが一致すること**が要件。
+    /// ここがズレると「全期間」で 2 本の線が別の日付軸に並ぶ。
+    #[test]
+    fn aggregate_weekly_avg_uses_the_same_week_keys_as_aggregate_weekly() {
+        let series = vec![
+            (d(2026, 8, 2), 70.0),
+            (d(2026, 8, 8), 72.0),
+            (d(2026, 8, 9), 71.0),
+            (d(2026, 8, 15), 73.0),
+        ];
+        let sum_keys: Vec<_> = aggregate_weekly(&series)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        let avg_keys: Vec<_> = aggregate_weekly_avg(&series)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(sum_keys, avg_keys);
+        assert_eq!(sum_keys, vec![d(2026, 8, 2), d(2026, 8, 9)]);
+    }
+
+    /// 「全期間」は `progress.rs` が既に週平均を渡すので、描画側の再集約が二重適用にならないこと。
+    #[test]
+    fn aggregate_weekly_avg_is_idempotent_and_handles_empty_input() {
+        assert!(aggregate_weekly_avg(&[]).is_empty());
+
+        let weekly = aggregate_weekly_avg(&[(d(2026, 8, 2), 70.0), (d(2026, 8, 8), 72.0)]);
+        assert_eq!(aggregate_weekly_avg(&weekly), weekly);
+    }
+
+    // ── weight_band ─────────────────────────────────────────────────────────
+
+    /// 帯が守るべき契約をまとめて確認する。ここを破ると `(v - lo) / (hi - lo)` が
+    /// NaN や範囲外になり、SVG の折れ線が黙って消える。
+    fn assert_band_contract(lo_v: f64, hi_v: f64) -> (f64, f64) {
+        let (lo, hi) = weight_band(lo_v, hi_v);
+        assert!(lo.is_finite() && hi.is_finite(), "有限: {lo_v}..{hi_v}");
+        assert!(hi > lo, "幅がある: {lo_v}..{hi_v} -> {lo}..{hi}");
+        // 目盛り区間が偶数 = 中央ラベルも 0.5 の倍数に乗る
+        let ticks = ((hi - lo) / WEIGHT_TICK).round() as i64;
+        assert!(ticks >= 2 && ticks % 2 == 0, "区間 {ticks}: {lo}..{hi}");
+        (lo, hi)
+    }
+
+    #[test]
+    fn weight_band_always_contains_the_data() {
+        for (lo_v, hi_v) in [
+            (70.0, 70.0),
+            (60.0, 65.0),
+            (62.4, 63.1),
+            (0.5, 0.5),
+            (61.8, 63.1),
+            (65.0, 80.3),
+            (999.0, WEIGHT_MAX),
+        ] {
+            let (lo, hi) = assert_band_contract(lo_v, hi_v);
+            assert!(lo <= lo_v, "下端 {lo} <= {lo_v}");
+            assert!(hi >= hi_v, "上端 {hi} >= {hi_v}");
+        }
+    }
+
+    /// 平坦な系列（毎日同じ体重）を下端に貼り付かせない。
+    /// 下端は主軸の 0 グリッド線と重なるので、線が軸に化けて見える。
+    #[test]
+    fn weight_band_centers_a_flat_series() {
+        assert_eq!(weight_band(62.0, 62.0), (61.5, 62.5));
+        assert_eq!(weight_band(70.0, 70.0), (69.5, 70.5));
+    }
+
+    #[test]
+    fn weight_band_rounds_to_half_kilograms() {
+        // 61.8〜63.1 → 61.5 / 62.5 / 63.5 の 3 ラベル
+        assert_eq!(weight_band(61.8, 63.1), (61.5, 63.5));
+        // 既に 0.5 の倍数で区間が偶数ならそのまま
+        assert_eq!(weight_band(60.0, 65.0), (60.0, 65.0));
+    }
+
+    /// ★ 無限ループの退行テスト。
+    ///
+    /// NaN は `(hi - lo) / TICK` を NaN にし `as i64` が 0 になるので、
+    /// ガードが無いと「区間 2 以上かつ偶数」を永久に満たさない。
+    /// 巨大値は `as i64` が飽和して `i64::MAX`（奇数）で回り続ける。
+    #[test]
+    fn weight_band_terminates_on_non_finite_and_absurd_input() {
+        for (lo_v, hi_v) in [
+            (f64::NAN, f64::NAN),
+            (f64::NEG_INFINITY, f64::INFINITY),
+            (70.0, f64::NAN),
+            (3e38, 3e38),
+            (0.0, 3e38),
+            (-100.0, -100.0),
+        ] {
+            assert_band_contract(lo_v, hi_v);
+        }
     }
 
     // ── 経過時間 ────────────────────────────────────────────────────────────

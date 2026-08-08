@@ -68,6 +68,9 @@ async function flushToStorage(page) {
  * calendar.rs が無い現状で「前日の記録が既にある」状態を作る唯一の手段。
  * 同じ daysAgo を複数渡すと同一セッションに複数種目のログとして積む
  * （1日に複数種目を記録するのは通常の使い方なので、テストデータでも再現する）。
+ *
+ * `exerciseName` / `sets` は省略できる。`bodyWeight` だけ渡すと「計量しただけの日」
+ * になる（体重は毎日、トレーニングは週数回、という実際の使い方を再現するため）。
  */
 async function seedPastLogs(page, entries) {
   await flushToStorage(page);
@@ -86,12 +89,15 @@ async function seedPastLogs(page, entries) {
       return `${y}-${m}-${day}`;
     };
 
-    for (const { daysAgo, exerciseName, sets, at = null } of entries) {
-      const ex = db.exercises.find((e) => e.name === exerciseName);
-      if (!ex) throw new Error(`preset exercise not found: ${exerciseName}`);
+    for (const { daysAgo, exerciseName, sets, at = null, bodyWeight } of entries) {
       const key = dateKey(daysAgo);
       const session = db.sessions[key] ?? { logs: [], body_weight: null, note: '' };
-      session.logs.push({ exercise_id: ex.id, sets, at });
+      if (exerciseName !== undefined) {
+        const ex = db.exercises.find((e) => e.name === exerciseName);
+        if (!ex) throw new Error(`preset exercise not found: ${exerciseName}`);
+        session.logs.push({ exercise_id: ex.id, sets, at });
+      }
+      if (bodyWeight !== undefined) session.body_weight = bodyWeight;
       db.sessions[key] = session;
     }
     localStorage.setItem(KEY, JSON.stringify(db));
@@ -213,8 +219,10 @@ test('9. 推移タブの種目別グラフに2点描かれ、重量なしの記�
   await expect(chart).toHaveAttribute('data-points', '2');
   // SVG 属性は無検査で setAttribute されるため、viewBox や stroke-width を snake_case で
   // 書くとコンパイルは通るのに実行時に黙って無視される罠がある。polyline が実際に
-  // 描画されていることまで確認する（属性名だけでなく描画結果を見る）
-  await expect(chart.locator('polyline')).toHaveCount(1);
+  // 描画されていることまで確認する（属性名だけでなく描画結果を見る）。
+  // ★ クラスで限定する。素の polyline だと「体重を seed していない」ことへの
+  //   暗黙依存になり、第2軸を足した瞬間に意味が変わる
+  await expect(chart.locator('polyline.chart-line')).toHaveCount(1);
   await expect(page.getByTestId('stat-best')).toHaveText('600');
 
   // ★ 重量を入れない記録（懸垂 12 回）も 0 に潰れず 12 になる。
@@ -316,6 +324,220 @@ test('推移タブのグラフ Y 軸ラベルは volume が7桁でも viewBox �
 
   await page.getByTestId('tab-progress').click();
   await expectNoChartLabelOverflowsViewBox(page);
+});
+
+// ── 体重の第2軸 ─────────────────────────────────────────────────────────────
+// 体重は毎日、トレーニングは週数回。指標の折れ線に体重を控えめな点線で常時重ねる。
+
+test('体重を記録すると推移グラフに点線と右軸が出る', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 4, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }], bodyWeight: 70 },
+    { daysAgo: 3, bodyWeight: 70.4 },
+    { daysAgo: 2, exerciseName: 'ベンチプレス', sets: [{ weight: 62.5, reps: 10 }], bodyWeight: 70.2 },
+    { daysAgo: 1, bodyWeight: 70.6 },
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+  const chart = page.getByTestId('chart');
+  await expect(chart).toHaveAttribute('data-points', '2');
+  await expect(chart).toHaveAttribute('data-weight-points', '4');
+
+  // 体重の線は独立した polyline。メインの線とは別に描かれる
+  await expect(chart.getByTestId('chart-weight')).toBeVisible();
+  await expect(chart.locator('polyline.chart-line-weight')).toHaveCount(1);
+  await expect(chart.locator('polyline.chart-line')).toHaveCount(1);
+  // 右軸ラベルはグリッド 3 本に対応して 3 個
+  await expect(chart.locator('text.chart-label-weight')).toHaveCount(3);
+});
+
+test('体重が無ければ第2軸は描かず、グラフの見た目は従来のまま', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 2, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 62.5, reps: 10 }] },
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+  const chart = page.getByTestId('chart');
+  await expect(chart).toHaveAttribute('data-weight-points', '0');
+  await expect(chart.getByTestId('chart-weight')).toHaveCount(0);
+  await expect(chart.locator('text.chart-label-weight')).toHaveCount(0);
+  await expect(page.getByTestId('readout-weight')).toHaveCount(0);
+
+  // 右端は従来の X1（=310）のまま。右軸のぶん縮めるのは体重があるときだけ
+  const gridRight = await chart.evaluate(
+    (svg) => svg.querySelector('line.chart-grid').getAttribute('x2'),
+  );
+  expect(gridRight).toBe('310.0');
+});
+
+test('3桁の体重でも右軸ラベルが viewBox に収まる', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 2, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }], bodyWeight: 137.5 },
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }], bodyWeight: 135.5 },
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+  // 右軸ラベルにも chart-label を付けてあるので、既存ヘルパが無改修で拾う
+  await expect(page.getByTestId('chart').locator('text.chart-label-weight')).toHaveCount(3);
+  await expectNoChartLabelOverflowsViewBox(page);
+});
+
+// ★ X ドメインを両系列の合併にしていないと、最後にトレした日より後の計量が
+//   軸の外に落ちて見えなくなる。毎日計量して週数回トレする使い方では常に起きる
+test('最後にトレした日より後の計量まで X 軸が伸びる', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 5, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }], bodyWeight: 70 },
+    { daysAgo: 4, exerciseName: 'ベンチプレス', sets: [{ weight: 62.5, reps: 10 }], bodyWeight: 70.2 },
+    { daysAgo: 1, bodyWeight: 70.6 }, // 計量しただけの日
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+  const chart = page.getByTestId('chart');
+
+  const expected = (daysAgo) => {
+    const d = new Date();
+    d.setDate(d.getDate() - daysAgo);
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  };
+  const labels = await chart.evaluate((svg) =>
+    Array.from(svg.querySelectorAll('text.chart-label'))
+      .filter((t) => !t.classList.contains('chart-label-weight'))
+      .map((t) => t.textContent),
+  );
+  expect(labels).toContain(expected(5)); // 左端は最初の記録
+  expect(labels).toContain(expected(1)); // 右端は「計量しただけの日」
+});
+
+test('グラフをタップすると読み取り欄に日付・指標・体重が並ぶ', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }], bodyWeight: 70.5 },
+    // 2 点目は体重を記録していない日
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 62.5, reps: 10 }] },
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+  const readout = page.getByTestId('chart-readout');
+  const hits = page.getByTestId('chart-hit');
+
+  // 既定は最新点。その日は体重が無いので kg は出ない
+  await expect(readout).toContainText('625');
+  await expect(page.getByTestId('readout-weight')).toHaveCount(0);
+
+  // 体重を記録した日へ移すと併記される
+  await hits.nth(0).click();
+  await expect(readout).toContainText('600');
+  await expect(page.getByTestId('readout-weight')).toHaveText('70.5 kg');
+});
+
+// ★ aggregate_weekly（合計）に通すと週内の体重が足し上がる。体重は平均でなければ意味を持たない。
+//   ★ 特定の 2 日が同じ週に入ることに賭けない（週境界は今日の曜日で動く）。
+//     8 日連続で入れれば、どこで切れても必ずどれかの週に 2 日以上入る
+test('全期間の体重は合計ではなく週平均で集計される', async ({ page }) => {
+  const entries = [
+    { daysAgo: 30, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ];
+  // 全部同じ 70.0 にしておくと、平均は必ず 70.0、合計なら 140 以上の週ができる
+  for (let daysAgo = 0; daysAgo <= 7; daysAgo++) entries.push({ daysAgo, bodyWeight: 70 });
+  await seedPastLogs(page, entries);
+
+  await page.getByTestId('tab-progress').click();
+  await page.getByTestId('period-select').getByTestId('period-btn')
+    .filter({ hasText: '全期間' }).click();
+  await expect(page.getByTestId('weekly-note')).toContainText('体重は週平均');
+
+  // 平均なら全週 70.0 なので、帯は 70 を中央にした 69.5〜70.5 に落ち着く。
+  // 合計だと 140 以上の週ができるので、この 3 つのラベルにはならない
+  const labels = await page.getByTestId('chart').evaluate((svg) =>
+    Array.from(svg.querySelectorAll('text.chart-label-weight')).map((t) => t.textContent),
+  );
+  expect(labels).toEqual(['70.5', '70', '69.5']);
+});
+
+// ★ 週平均に落とす経路（体重 45 点超）はブラウザでも一度は通しておく。
+//   単体テストで座標は固めてあるが、SVG 属性の綴りは実行時に黙って無視されるため
+test('毎日の記録が続いても体重の破線がプロット領域からはみ出さない', async ({ page }) => {
+  const entries = [
+    { daysAgo: 50, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 62.5, reps: 10 }] },
+  ];
+  for (let daysAgo = 0; daysAgo <= 55; daysAgo++) {
+    entries.push({ daysAgo, bodyWeight: 70 + (daysAgo % 5) * 0.2 });
+  }
+  await seedPastLogs(page, entries);
+
+  await page.getByTestId('tab-progress').click();
+  const chart = page.getByTestId('chart');
+  // 56 点 > WEIGHT_DENSE_POINTS(45) なので描画は週平均に落ちている
+  await expect(chart).toHaveAttribute('data-weight-smoothed', 'true');
+
+  const outside = await chart.evaluate((svg) => {
+    const line = svg.querySelector('polyline.chart-line-weight');
+    // グリッド線の x1/x2 がプロット領域そのもの
+    const grid = svg.querySelector('line.chart-grid');
+    const [x0, x1] = [Number(grid.getAttribute('x1')), Number(grid.getAttribute('x2'))];
+    return line
+      .getAttribute('points')
+      .split(' ')
+      .map((p) => Number(p.split(',')[0]))
+      .filter((x) => !(x >= x0 - 0.05 && x <= x1 + 0.05));
+  });
+  expect(outside).toEqual([]);
+});
+
+// ★ 体重が f32 の上限まで素通りするため、1 点でも極端な値が混じると帯が潰れて
+//   NaN 座標になり、SVG のパースエラーで折れ線が丸ごと消える（例外も出ない）
+test('異常な体重が混じってもグラフの線が消えない', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }], bodyWeight: 70 },
+    { daysAgo: 2, bodyWeight: 3e38 },
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 62.5, reps: 10 }], bodyWeight: 70.5 },
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+  const chart = page.getByTestId('chart');
+  await expect(chart.locator('polyline.chart-line')).toHaveCount(1);
+
+  const points = await chart.evaluate((svg) =>
+    Array.from(svg.querySelectorAll('polyline')).map((p) => p.getAttribute('points')),
+  );
+  for (const p of points) {
+    expect(p).not.toContain('NaN');
+    expect(p).not.toContain('inf');
+  }
+  // 異常値の日は系列から外れるので、描かれる体重は 2 点
+  await expect(chart).toHaveAttribute('data-weight-points', '2');
+});
+
+// ★「常に一緒に見られる」が要件なので、その種目を休んでいた期間でも体重は出す。
+//   ただし左軸を出すと y_max が 1.0 に化けて "1 / 0.5 / 0" が並び、体重の目盛りだと誤読される
+test('その種目の記録が無い期間でも体重の点線だけは出る', async ({ page }) => {
+  await seedPastLogs(page, [
+    // ベンチは 4 ヶ月前だけ。既定期間（3M）には入らない
+    { daysAgo: 120, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 3, bodyWeight: 70 },
+    { daysAgo: 2, bodyWeight: 70.4 },
+    { daysAgo: 1, bodyWeight: 70.2 },
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+  const chart = page.getByTestId('chart');
+  await expect(chart).toHaveAttribute('data-points', '0');
+  await expect(chart).toHaveAttribute('data-weight-points', '3');
+  await expect(chart.locator('polyline.chart-line')).toHaveCount(0);
+  await expect(chart.locator('polyline.chart-line-weight')).toHaveCount(1);
+
+  // 左軸ラベルは出さず、右軸だけ出す
+  const leftLabels = await chart.evaluate((svg) =>
+    Array.from(svg.querySelectorAll('text.chart-label'))
+      .filter((t) => !t.classList.contains('chart-label-weight'))
+      .filter((t) => Number(t.getAttribute('x')) < 40)
+      .map((t) => t.textContent),
+  );
+  expect(leftLabels).toEqual([]);
+  await expect(chart.locator('text.chart-label-weight')).toHaveCount(3);
+
+  await expect(page.getByTestId('chart-metric-empty')).toContainText('記録はありません');
 });
 
 test('10. 同じ日に同じ種目を再度追加してもカードは増えず既存カードのまま', async ({ page }) => {

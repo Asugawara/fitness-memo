@@ -1,14 +1,13 @@
 import { test, expect } from '@playwright/test';
 
-// 計画の smoke ケースのうち 1・2・3・4・5・6・7・10・12 を実装（8・9・11 は
-// カレンダー/推移/種目タブが揃う Wave 3・4 で追記される）。src/views/today.rs,
-// src/views/mod.rs の data-testid を使う。
+// 計画の smoke ケースのうち 8 以外を実装（カレンダーは e2e/calendar.spec.mjs で
+// worker-c が担当）。src/views/{today,mod,progress,chart,menu}.rs の data-testid を使う。
 //
-// ケース4・5・7 は「前日の記録」を前提にするが、calendar.rs（過去日を選ぶ導線）
+// ケース4・5・7・9 は「前日の記録」を前提にするが、calendar.rs（過去日を選ぶ導線）
 // がまだ無く、today タブ単体には dates.selected を today 以外にする UI 操作が
 // 存在しない（mod.rs の DateCtx::open は calendar.rs からの呼び出しを想定した
 // pub fn だが、現時点でどこからも呼ばれていない）。そのため「UI からバックフィル
-// する」という書き込み経路そのものは検証できず、seedPastLog() で localStorage に
+// する」という書き込み経路そのものは検証できず、seedPastLogs() で localStorage に
 // バックフィル済み（at: null）のデータを直接注入し、読み込み〜表示側だけを検証する。
 
 test.beforeEach(async ({ page }) => {
@@ -52,35 +51,38 @@ async function flushToStorage(page) {
 }
 
 /**
- * 投入済みプリセットの Db に daysAgo 日前のセッションを1件追加してから reload する。
+ * 投入済みプリセットの Db に daysAgo 日前のセッションを追加してから reload する。
  * calendar.rs が無い現状で「前日の記録が既にある」状態を作る唯一の手段。
+ * 同じ daysAgo を複数渡すと同一セッションに複数種目のログとして積む
+ * （1日に複数種目を記録するのは通常の使い方なので、テストデータでも再現する）。
  */
-async function seedPastLog(page, { daysAgo, exerciseName, sets, at = null }) {
+async function seedPastLogs(page, entries) {
   await flushToStorage(page);
-  await page.evaluate(
-    ({ daysAgo, exerciseName, sets, at }) => {
-      const KEY = 'fitness-memo/v1';
-      const db = JSON.parse(localStorage.getItem(KEY));
-      const ex = db.exercises.find((e) => e.name === exerciseName);
-      if (!ex) throw new Error(`preset exercise not found: ${exerciseName}`);
+  await page.evaluate((entries) => {
+    const KEY = 'fitness-memo/v1';
+    const db = JSON.parse(localStorage.getItem(KEY));
 
-      // Local::now().date_naive() と揃えるため UTC (toISOString) ではなく
-      // ローカルタイムゾーンの年月日から日付キーを組み立てる
+    // Local::now().date_naive() と揃えるため UTC (toISOString) ではなく
+    // ローカルタイムゾーンの年月日から日付キーを組み立てる
+    const dateKey = (daysAgo) => {
       const d = new Date();
       d.setDate(d.getDate() - daysAgo);
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, '0');
       const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
 
-      db.sessions[`${y}-${m}-${day}`] = {
-        logs: [{ exercise_id: ex.id, sets, at }],
-        body_weight: null,
-        note: '',
-      };
-      localStorage.setItem(KEY, JSON.stringify(db));
-    },
-    { daysAgo, exerciseName, sets, at },
-  );
+    for (const { daysAgo, exerciseName, sets, at = null } of entries) {
+      const ex = db.exercises.find((e) => e.name === exerciseName);
+      if (!ex) throw new Error(`preset exercise not found: ${exerciseName}`);
+      const key = dateKey(daysAgo);
+      const session = db.sessions[key] ?? { logs: [], body_weight: null, note: '' };
+      session.logs.push({ exercise_id: ex.id, sets, at });
+      db.sessions[key] = session;
+    }
+    localStorage.setItem(KEY, JSON.stringify(db));
+  }, entries);
   await page.reload();
 }
 
@@ -133,21 +135,17 @@ test('3. hidden への visibilitychange を発火してからリロードして�
 test('4. 前日にバックフィルした記録があると、今日タブの経過表示が「昨日」になる', async ({ page }) => {
   // at: null（バックフィル済み）で注入する。これが at: Some(now) だと
   // 「たった今」になってしまい、要件「最後のトレーニングから」の出力が嘘になる
-  await seedPastLog(page, {
-    daysAgo: 1,
-    exerciseName: 'ベンチプレス',
-    sets: [{ weight: 60, reps: 10 }],
-  });
+  await seedPastLogs(page, [
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
 
   await expect(page.getByTestId('elapsed')).toHaveText('昨日');
 });
 
 test('5. セットが空のときだけ「前回をコピー」が出て、押すと前日のセットがプリフィルされる', async ({ page }) => {
-  await seedPastLog(page, {
-    daysAgo: 1,
-    exerciseName: 'ベンチプレス',
-    sets: [{ weight: 50, reps: 8 }],
-  });
+  await seedPastLogs(page, [
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 50, reps: 8 }] },
+  ]);
 
   const card = await addExercise(page, 'ベンチプレス');
 
@@ -178,15 +176,39 @@ test('6. 体重・体調メモを入力するとリロード後も残る', async
 });
 
 test('7. 部位チップは実施部位に日数、未実施の部位には「—」を表示する', async ({ page }) => {
-  await seedPastLog(page, {
-    daysAgo: 3,
-    exerciseName: 'ベンチプレス', // 胸
-    sets: [{ weight: 60, reps: 10 }],
-  });
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] }, // 胸
+  ]);
 
   await expect(page.getByTestId('group-chip').filter({ hasText: '胸' })).toContainText('3d');
   await expect(page.getByTestId('group-chip').filter({ hasText: '背中' })).toContainText('—');
   await expect(page.getByTestId('group-chip').filter({ hasText: '体幹' })).toContainText('—');
+});
+
+test('9. 推移タブの種目別グラフに2点描かれ、単位は種目の Kind で決まる（推論ではない）', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 2, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 8 }] },
+    { daysAgo: 1, exerciseName: '懸垂', sets: [{ weight: 0, reps: 12 }] },
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+  await expect(page.getByTestId('screen-progress')).toBeVisible();
+
+  // 既定選択は最初の種目=ベンチプレス（Kind::Weighted）。2点入っていること
+  const chart = page.getByTestId('chart');
+  await expect(chart).toHaveAttribute('data-points', '2');
+  // SVG 属性は無検査で setAttribute されるため、viewBox や stroke-width を snake_case で
+  // 書くとコンパイルは通るのに実行時に黙って無視される罠がある。polyline が実際に
+  // 描画されていることまで確認する（属性名だけでなく描画結果を見る）
+  await expect(chart.locator('polyline')).toHaveCount(1);
+  await expect(page.getByTestId('stat-best')).toHaveText('600 kg·回');
+
+  // Kind::Bodyweight（懸垂）に切り替えると単位が「回」になる。データからの推論では
+  // なく種目の明示属性で決まることの検証: 推論方式だと自重種目に加重した瞬間に
+  // 系列全体の単位が volume へ切り替わり、過去データが遡及的に潰れてしまう
+  await page.getByTestId('target-select').selectOption({ label: '懸垂' });
+  await expect(page.getByTestId('stat-best')).toHaveText('12 回');
 });
 
 test('10. 同じ日に同じ種目を再度追加してもカードは増えず既存カードのまま', async ({ page }) => {
@@ -208,6 +230,90 @@ test('10. 同じ日に同じ種目を再度追加してもカードは増えず�
   await expect(page.getByTestId('exercise-card')).toHaveCount(1);
   // 新規カードへの置き換えではなく既存カードのままであることの確認（入力内容が保持される）
   await expect(row0.getByTestId('set-weight')).toHaveValue('70');
+});
+
+test('11. 種目タブでの改名・部位変更・Kind変更・新規追加が今日タブに反映され、アーカイブは推移タブから参照できる', async ({ page }) => {
+  await page.getByTestId('tab-menu').click();
+  await expect(page.getByTestId('screen-menu')).toBeVisible();
+
+  // 改名 + 部位変更（肩→腕）+ Kind変更（加重→自重）を1つの種目に対して行う
+  await page.getByTestId('exercise-name').filter({ hasText: exactText('サイドレイズ') }).click();
+  const menuSheet = page.getByTestId('menu-sheet');
+  await expect(menuSheet).toBeVisible();
+
+  await page.getByTestId('exercise-rename').fill('サイドレイズ改');
+  await page
+    .getByTestId('exercise-groups')
+    .getByTestId('group-option')
+    .filter({ hasText: exactText('腕') })
+    .click();
+
+  // ★ Kind はデータから推論せず種目の明示属性。変更時は「グラフの単位が変わります」を
+  // 必ず挟む（自重種目に加重した瞬間に系列全体の単位が切り替わり過去データが遡及的に
+  // 壊れるのを防ぐ設計）。警告を経てから確定する
+  await page
+    .getByTestId('exercise-kinds')
+    .getByTestId('kind-option')
+    .filter({ hasText: /^自重/ })
+    .click();
+  await expect(page.getByTestId('kind-warning')).toContainText('単位が変わります');
+  await page.getByTestId('kind-confirm').click();
+  await expect(page.getByTestId('kind-warning')).toHaveCount(0);
+
+  await page.getByTestId('menu-sheet-close').click();
+
+  // 新規部位 + 新規種目を追加する
+  await page.getByTestId('menu-add-group').click();
+  await page.getByTestId('new-group-name').fill('テスト部位');
+  await page.getByTestId('new-group-submit').click();
+
+  // group-item はカード全体（部位名 + 種目数 + 並び替えボタン）のテキストを含むので、
+  // ここは exactText ではなく部分一致でよい（"テスト部位" は他と衝突しない固有名）
+  const testGroupItem = page.getByTestId('group-item').filter({ hasText: 'テスト部位' });
+  await testGroupItem.getByTestId('menu-add-exercise').click();
+  await page.getByTestId('new-exercise-name').fill('テスト種目');
+  await page.getByTestId('new-exercise-submit').click();
+
+  // 今日タブの「種目を追加」シートに、改名後の名前・新規種目の両方が反映されている
+  await page.getByTestId('tab-today').click();
+  await page.getByTestId('add-exercise').click();
+  const addSheet = page.getByTestId('add-sheet');
+  await expect(addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('サイドレイズ改') })).toBeVisible();
+  await expect(addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('サイドレイズ') })).toHaveCount(0);
+  await expect(addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('テスト種目') })).toBeVisible();
+  // sheet-backdrop はビューポート全体を覆うが、クリック位置の中心はシート本体の
+  // 裏に隠れて弾かれる。「閉じる」ボタンには testid が無いので role+text で取る
+  await page.getByRole('button', { name: '閉じる' }).click();
+
+  // アーカイブ: 今日タブの追加シートには出なくなるが、推移タブのセレクタでは
+  // 末尾の「アーカイブ済み」セクションから参照できる（過去ログの exercise_id 参照を
+  // 保つための論理削除なので、参照できなくなると過去データが見えなくなる）
+  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('exercise-name').filter({ hasText: exactText('テスト種目') }).click();
+  await page.getByTestId('archive-exercise').click();
+  await expect(page.getByTestId('menu-sheet')).toHaveCount(0);
+
+  await page.getByTestId('tab-today').click();
+  await page.getByTestId('add-exercise').click();
+  await expect(
+    page.getByTestId('add-sheet').getByTestId('pick-exercise').filter({ hasText: exactText('テスト種目') }),
+  ).toHaveCount(0);
+  // sheet-backdrop はビューポート全体を覆うが、クリック位置の中心はシート本体の
+  // 裏に隠れて弾かれる。「閉じる」ボタンには testid が無いので role+text で取る
+  await page.getByRole('button', { name: '閉じる' }).click();
+
+  await page.getByTestId('tab-progress').click();
+  const archivedOptions = page.getByTestId('target-select').locator('optgroup[label="アーカイブ済み"] option');
+  await expect(archivedOptions.filter({ hasText: exactText('テスト種目') })).toHaveCount(1);
+
+  // 部位グループの削除ガード: アーカイブ済み種目も所属種目として数えるので削除できない。
+  // ここが漏れるとアーカイブ済み種目の group_id が宙に浮き、過去ログの部位帰属
+  // （カレンダーのドット色・部位別グラフ・今日タブの部位チップ）が壊れる
+  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('group-name').filter({ hasText: exactText('テスト部位') }).click();
+  await page.getByTestId('delete-group').click();
+  await expect(page.getByTestId('delete-blocked')).toContainText('種目が 1 件あるため削除できません');
+  await expect(page.getByTestId('delete-blocked-archived')).toContainText('アーカイブ済み種目が 1 件あります');
 });
 
 test('12. 重量入力の中間状態("6.")でクラッシュせず、"6.5"まで打つと指標に反映される', async ({ page }) => {

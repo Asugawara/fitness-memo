@@ -549,11 +549,13 @@ h3 {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* 右端の閉じるは .icon-btn（44px 角）なので、縦の余白はボタン自身が持つ。
+   ここで 10px を足すと見出しだけ 64px になって間延びする */
 .sheet-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
+  padding: 2px 6px 2px 14px;
   border-bottom: 1px solid var(--line);
 }
 

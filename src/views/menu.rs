@@ -339,12 +339,15 @@ pub fn Menu() -> impl IntoView {
                             >
                                 <header class="sheet-head">
                                     <strong>{title}</strong>
+                                    // 種目追加シート（day.rs）と同じ形にする。
+                                    // 同じアプリの中でシートの閉じ方が 2 種類あるのは避ける
                                     <button
-                                        class="link-btn"
+                                        class="icon-btn"
+                                        aria-label="閉じる"
                                         data-testid="menu-sheet-close"
                                         on:click=move |_| editor.set(None)
                                     >
-                                        "閉じる"
+                                        "✕"
                                     </button>
                                 </header>
                                 <div class="sheet-body">{body}</div>

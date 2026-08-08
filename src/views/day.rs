@@ -278,8 +278,15 @@ pub fn DayEditor() -> impl IntoView {
                             >
                                 <header class="sheet-head">
                                     <strong>"種目を追加"</strong>
-                                    <button class="link-btn" on:click=move |_| sheet.set(false)>
-                                        "閉じる"
+                                    // aria-label は残す。見た目は ✕ でも支援技術と
+                                    // E2E の role+name には「閉じる」で届く必要がある
+                                    <button
+                                        class="icon-btn"
+                                        aria-label="閉じる"
+                                        data-testid="add-sheet-close"
+                                        on:click=move |_| sheet.set(false)
+                                    >
+                                        "✕"
                                     </button>
                                 </header>
                                 <div class="sheet-body">

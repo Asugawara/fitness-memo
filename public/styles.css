@@ -477,6 +477,67 @@ h3 {
   font-weight: 600;
 }
 
+/* 「前回のメニューから始める」。その日が完全に空のときだけ出る。
+   通常フローに置く（.add-wrap と違い sticky にしない）ので .kb-open で隠す必要はない。
+   隠すとレイアウトが跳ねるだけで、キーボードに覆われて困る fixed 要素ではない。 */
+.menu-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.menu-copy-label {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* カードと同じ面に見せる。行の中身は 2 段（日付・部位 / 種目名）。
+   min-height は 2 行ぶんかつタップ領域 44px を確実に超える値 */
+.menu-cand {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 12px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: inherit;
+  font: inherit;
+}
+
+.menu-cand .cand-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.menu-cand .cand-head b {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.menu-cand .cand-head i {
+  font-style: normal;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* 種目名は溢れても行を増やさない。行の高さが揃っていないと候補を読み比べられない */
+.menu-cand .cand-names {
+  font-size: 13px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ★「種目を追加」。カード列の末尾に置くと、カードが増えるほど下へ逃げる。
    探して下スクロールする途中にカードの削除導線があるので、追加しようとして
    削除する事故が起きていた。sticky で常に画面内へ留める。
@@ -502,6 +563,16 @@ h3 {
 
 .add-wrap > button {
   pointer-events: auto;
+}
+
+/* ★ 候補リストを出している間は sticky を解く。
+   sticky の不透明な帯は常に画面下 ~90px を覆うので、そのままだと候補の 2 行目以降が
+   隠れて「前回のメニューは 1 件しかない」ように見える（スクロールすれば出てくるが、
+   トレ中に気付ける作りではない）。カードが 0 枚のこの状態では、sticky の目的である
+   「カードが増えるほど下へ逃げる」現象自体が起きない。 */
+.add-wrap.unpinned {
+  position: static;
+  background: none;
 }
 
 /* ★ キーボード表示中は隠す（bottom を詰めるのは誤り）。

@@ -200,6 +200,54 @@ test('★ UI から過去日に記録すると ExerciseLog.at が null になり
   await expect(page.getByTestId('elapsed')).toHaveText('昨日');
 });
 
+test('★ 過去日にメニューを丸ごとコピーしても at は null のままで、経過表示が日数粒度に落ちる', async ({
+  page,
+}) => {
+  const source = daysAgo(5);
+  const target = daysAgo(1);
+
+  // ★ コピー元の at をわざと埋める。copy_day が ExerciseLog を clone すると
+  //   この epoch がコピー先に付いてきて、「最後のトレーニングから」が
+  //   「たった今」寄りの時刻粒度に化ける（ADR-0006）
+  await flushToStorage(page);
+  await page.evaluate(
+    ({ key, dateKey, at }) => {
+      const db = JSON.parse(localStorage.getItem(key));
+      const ex = db.exercises.find((e) => e.name === 'ベンチプレス');
+      db.sessions[dateKey] = {
+        logs: [{ exercise_id: ex.id, sets: [{ weight: 60, reps: 10 }], at }],
+        body_weight: null,
+        note: '',
+      };
+      localStorage.setItem(key, JSON.stringify(db));
+    },
+    { key: STORAGE_KEY, dateKey: dateKey(source), at: Date.now() - 5 * 24 * 3600 * 1000 },
+  );
+  await page.reload();
+
+  // 空の過去日を開くと候補が出る（バックフィルこそ「どのメニューだったか」が要る）
+  await openDay(page, target);
+  const candidate = page.getByTestId('menu-candidate');
+  await expect(candidate).toHaveCount(1);
+  await candidate.first().click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
+
+  await flushToStorage(page);
+  const db = await readDb(page);
+  const session = db.sessions[dateKey(target)];
+  expect(session, `${dateKey(target)} のセッションが保存されていること`).toBeTruthy();
+  expect(session.logs).toHaveLength(1);
+  expect(session.logs[0].sets).toEqual([{ weight: 60, reps: 10 }]);
+  expect(
+    session.logs[0].at,
+    'コピー先が過去日なら at は null（コピー元の at を引き継がない）',
+  ).toBeNull();
+
+  // 表示側も日粒度に落ちること
+  await page.getByTestId('back-to-today').click();
+  await expect(page.getByTestId('elapsed')).toHaveText('昨日');
+});
+
 test('当日に記録したときは at に epoch ms が入る（過去日との対照）', async ({ page }) => {
   const before = Date.now();
 

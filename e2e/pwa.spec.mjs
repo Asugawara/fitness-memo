@@ -66,7 +66,7 @@ async function waitForSwActivated(page) {
 
 /** hidden への visibilitychange を発火させ、pending の debounce 保存を即時 flush する。 */
 async function flushToStorage(page) {
-  await page.getByTestId('screen-today').waitFor({ state: 'visible' });
+  await page.getByTestId('screen-record').waitFor({ state: 'visible' });
   await page.evaluate(() => {
     Object.defineProperty(document, 'hidden', { value: true, configurable: true });
     document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
@@ -93,6 +93,16 @@ test('manifest が取得でき display=standalone かつ id がある', async ({
   const manifest = await res.json();
   expect(manifest.display).toBe('standalone');
   expect(manifest.id).toBeTruthy();
+
+  // ★ ホーム画面のアイコン下に出るのは short_name / apple-mobile-web-app-title であって
+  //   <title> ではない。4 箇所揃っていないと DOM だけ英語で iPhone は日本語のまま残る
+  expect(manifest.name).toBe('fitness-memo');
+  expect(manifest.short_name).toBe('fitness-memo');
+  await expect(page).toHaveTitle('fitness-memo');
+  await expect(page.locator('meta[name="apple-mobile-web-app-title"]')).toHaveAttribute(
+    'content',
+    'fitness-memo',
+  );
 });
 
 test('ボトムタブが viewport 内にあり、横スクロールが発生しない', async ({ page }) => {
@@ -123,17 +133,126 @@ test('SW が activated になる', async ({ page, browserName }) => {
 
 test('破損した JSON を注入すると退避キーが作られ、復元失敗の通知が出る', async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem('fitness-memo/v1', '{not valid json');
+    localStorage.setItem('fitness-memo/v2', '{not valid json');
   });
   await page.goto('./');
 
   await expect(page.getByTestId('restore-notice')).toContainText('復元できませんでした');
-  await expect(page.getByTestId('screen-today')).toBeVisible();
+  await expect(page.getByTestId('screen-record')).toBeVisible();
 
   const backupKeys = await page.evaluate(() =>
-    Object.keys(localStorage).filter((k) => k.startsWith('fitness-memo/v1.bak-')),
+    Object.keys(localStorage).filter((k) => k.startsWith('fitness-memo/v2.bak-')),
   );
   expect(backupKeys.length).toBeGreaterThan(0);
+});
+
+// ★ 保存キーは schema 非互換の変更のたびに切る（storage.rs のモジュールコメント参照）。
+//   旧版は新 JSON を読めない（消したフィールドが必須のまま）ので、キーを共有したまま
+//   出すとロールバック時に「記録が全消し」に見える。ここで検証するのは 2 点:
+//   1. v1 しか無い端末で起動すると、その記録がそのまま見えること（引き継ぎ）
+//   2. 引き継いだ後も **v1 が消えていないこと**（旧版へ戻ったときの退路）
+test('旧キー v1 の記録を引き継いで v2 に書き、v1 は消さない', async ({ page }) => {
+  // kind 付き（schema 1）の旧形式。新モデルには kind フィールドが無いが、
+  // serde は未知フィールドを無視するので読める
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'fitness-memo/v1',
+      JSON.stringify({
+        schema: 1,
+        next_id: 100,
+        groups: [{ id: 1, name: '胸', color: '#e0524a', order: 0 }],
+        exercises: [
+          { id: 10, name: 'レガシーベンチ', group_id: 1, kind: 'Weighted', order: 0 },
+        ],
+        sessions: {
+          '2020-01-02': { logs: [{ exercise_id: 10, sets: [{ weight: 60, reps: 10 }], at: null }] },
+        },
+      }),
+    );
+  });
+  await page.goto('./');
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+  // 破損扱いになっていない（プリセットへのフォールバックが起きていない）
+  await expect(page.getByTestId('restore-notice')).toHaveCount(0);
+
+  const keys = await page.evaluate(() => ({
+    v1: localStorage.getItem('fitness-memo/v1'),
+    v2: localStorage.getItem('fitness-memo/v2'),
+  }));
+
+  expect(keys.v1, 'v1 は読み取り専用で残す（旧版へ戻ったときの退路）').not.toBeNull();
+  expect(keys.v2, 'v2 へ書き写されている').not.toBeNull();
+
+  const migrated = JSON.parse(keys.v2);
+  expect(migrated.exercises.map((e) => e.name)).toContain('レガシーベンチ');
+  expect(migrated.sessions['2020-01-02'].logs[0].sets).toEqual([{ weight: 60, reps: 10 }]);
+  // 旧形式のプリセットで上書きされていない（引き継ぎであって初期化ではない）
+  expect(migrated.groups.map((g) => g.name)).toEqual(['胸']);
+});
+
+// ★ 旧キーは「全損に対する唯一の退路」（ADR-0034）。現行キーが壊れたときに
+//   そこへ降りられなければ、退路を用意した意味が無い。
+//   「最初に中身があったキーで打ち切る」実装だと、健全な v1 が残っているのに
+//   プリセットが表示され、直後の保存でそれが確定してしまう。
+test('v2 が壊れていても健全な v1 があればそこから復元する', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('fitness-memo/v2', '{壊れている');
+    localStorage.setItem(
+      'fitness-memo/v1',
+      JSON.stringify({
+        schema: 1,
+        next_id: 100,
+        groups: [{ id: 1, name: '胸', color: '#e0524a', order: 0 }],
+        exercises: [{ id: 10, name: '生き残りベンチ', group_id: 1, kind: 'Weighted', order: 0 }],
+        sessions: {
+          '2020-01-02': { logs: [{ exercise_id: 10, sets: [{ weight: 60, reps: 10 }], at: null }] },
+        },
+      }),
+    );
+  });
+  await page.goto('./');
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+
+  // プリセットに落ちていない = v1 から復元できている
+  const db = await page.evaluate(() => JSON.parse(localStorage.getItem('fitness-memo/v2')));
+  expect(db.exercises.map((e) => e.name)).toContain('生き残りベンチ');
+  expect(db.groups.map((g) => g.name)).toEqual(['胸']);
+
+  // 壊れていた v2 は退避されている（黙って捨てない）
+  const backups = await page.evaluate(() =>
+    Object.keys(localStorage).filter((k) => k.startsWith('fitness-memo/v2.bak-')),
+  );
+  expect(backups.length).toBeGreaterThan(0);
+
+  // 何が起きたかを黙らない
+  await expect(page.getByTestId('restore-notice')).toContainText('バックアップから復元');
+});
+
+// ★ ロールバック中に旧版が v1 へ書いた記録は、新版へ戻ると現行キーが採用されるので
+//   画面から消える。自動マージはしない（同じ日を両方で編集していると正が決まらない）が、
+//   **消えていないことは伝える**。無言の欠落が一番たちが悪い。
+test('v1 のほうが新しい記録を持っていると通知が出る', async ({ page }) => {
+  const mkDb = (date) => ({
+    schema: 2,
+    next_id: 100,
+    groups: [{ id: 1, name: '胸', color: '#e0524a', order: 0 }],
+    exercises: [{ id: 10, name: 'ベンチ', group_id: 1, order: 0 }],
+    sessions: {
+      [date]: { logs: [{ exercise_id: 10, sets: [{ weight: 60, reps: 10 }], at: null }] },
+    },
+  });
+  await page.addInitScript((dbs) => {
+    localStorage.setItem('fitness-memo/v2', JSON.stringify(dbs.v2));
+    localStorage.setItem('fitness-memo/v1', JSON.stringify(dbs.v1));
+  }, { v2: mkDb('2020-01-02'), v1: mkDb('2020-03-09') });
+
+  await page.goto('./');
+  await expect(page.getByTestId('restore-notice')).toContainText('2020-03-09');
+
+  // 採用しているのは v2 のまま（v1 で上書きしない）
+  await expect(page.getByTestId('elapsed')).toBeVisible();
+  const kept = await page.evaluate(() => JSON.parse(localStorage.getItem('fitness-memo/v2')));
+  expect(Object.keys(kept.sessions)).toEqual(['2020-01-02']);
 });
 
 test('オフラインでも起動し記録が読める（SW の navigate 分岐の検証）', async (
@@ -174,7 +293,7 @@ test('オフラインでも起動し記録が読める（SW の navigate 分岐�
     expect(response?.fromServiceWorker()).toBe(true);
 
     await expect(page.getByTestId('exercise-card')).toHaveCount(1);
-    await expect(page.getByTestId('today-metric')).toHaveText('600 kg·回');
+    await expect(page.getByTestId('today-metric')).toHaveText('600');
 
     await context.setOffline(false);
   } finally {

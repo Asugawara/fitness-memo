@@ -19,14 +19,14 @@ import { test, expect } from '@playwright/test';
 // 既知の制約: 日付は実行時刻の「今日」を基準にする。テストが日を跨いだ瞬間に走ると
 // Node 側の new Date() とブラウザ側の Local::now() が 1 日ズレうる（smoke も同じ）。
 
-const STORAGE_KEY = 'fitness-memo/v1';
+const STORAGE_KEY = 'fitness-memo/v2';
 const WEEKDAY_JA = ['日', '月', '火', '水', '木', '金', '土'];
 
 test.beforeEach(async ({ page }) => {
   // ★ baseURL がサブパス（/fitness-memo/）を持つとき先頭 "/" はベースを丸ごと捨てる。
   //   相対参照の "./" でなければ E2E_BASE 指定の重い側実行が壊れる
   await page.goto('./');
-  await expect(page.getByTestId('screen-today')).toBeVisible();
+  await expect(page.getByTestId('screen-record')).toBeVisible();
 });
 
 // ── 日付ヘルパ ──────────────────────────────────────────────────────────────
@@ -70,15 +70,22 @@ function exactText(s) {
  *   キーボード対策なので設計どおり）。blur せずに押すとクリックがタイムアウトする。
  *   150ms の解除 debounce は click の自動待機が吸収する。
  */
-async function switchTab(page, testid) {
+async function blurActive(page) {
   await page.evaluate(() => {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   });
+}
+
+async function switchTab(page, testid) {
+  await blurActive(page);
   await page.getByTestId(testid).click();
 }
 
 /** 「種目を追加」シートからプリセットを選び、その種目のカードを返す。 */
 async function addExercise(page, name) {
+  // ★ 入力欄にフォーカスが残ると .kb-open で追加ボタンごと隠れる（iOS でキーボードの
+  //   裏に回るのを避ける仕様）。連続で種目を足すテストのために毎回 blur してから押す
+  await blurActive(page);
   await page.getByTestId('add-exercise').click();
   await page
     .getByTestId('add-sheet')
@@ -129,8 +136,8 @@ function shownMonthIndex(title) {
  * （クリック直後は DOM が更新前のことがあるので、逐次読み取りはしない）。
  */
 async function openCalendarOn(page, date) {
-  await switchTab(page, 'tab-calendar');
-  await expect(page.getByTestId('screen-calendar')).toBeVisible();
+  await switchTab(page, 'tab-record');
+  await expect(page.getByTestId('screen-record')).toBeVisible();
 
   const want = date.getFullYear() * 12 + date.getMonth();
   const shown = shownMonthIndex(await page.getByTestId('cal-title').textContent());
@@ -145,12 +152,15 @@ async function openCalendarOn(page, date) {
 const dayCell = (page, date) =>
   page.locator(`[data-testid="cal-day"][data-date="${dateKey(date)}"]`);
 
-/** カレンダーの空日から今日タブをその日付で開く。 */
-async function openDayInToday(page, date) {
+/**
+ * その日付の入力欄を開く。
+ *
+ * ★ 日セルをタップした時点で下の入力欄がその日のものになる。以前は
+ *   読み取り専用サマリの「この日を編集」を経由して別タブへ飛んでいた。
+ */
+async function openDay(page, date) {
   await openCalendarOn(page, date);
   await dayCell(page, date).click();
-  await page.getByTestId('cal-open-day').click();
-  await expect(page.getByTestId('screen-today')).toBeVisible();
   await expect(page.getByTestId('today-date')).toHaveText(fmtDate(date));
 }
 
@@ -161,12 +171,12 @@ test('★ UI から過去日に記録すると ExerciseLog.at が null になり
 }) => {
   const yesterday = daysAgo(1);
 
-  await openDayInToday(page, yesterday);
+  await openDay(page, yesterday);
   await expect(page.getByTestId('past-banner')).toBeVisible();
 
   const card = await addExercise(page, 'ベンチプレス');
   await fillSet(card, 0, { weight: 60, reps: 10 });
-  await expect(card.getByTestId('today-metric')).toHaveText('600 kg·回');
+  await expect(card.getByTestId('today-metric')).toHaveText('600');
 
   await flushToStorage(page);
 
@@ -209,7 +219,7 @@ test('当日に記録したときは at に epoch ms が入る（過去日との
 
 // ── ★ 要件の核心: カレンダーから記録を追加する ──────────────────────────────
 
-test('★ 記録が無い日をタップして「この日に記録する」から追加すると、その日が実施日になる', async ({
+test('★ 記録が無い日をタップするとその場で入力でき、その日が実施日になる', async ({
   page,
 }) => {
   const target = daysAgo(3);
@@ -219,65 +229,96 @@ test('★ 記録が無い日をタップして「この日に記録する」か�
   await expect(cell).toHaveAttribute('data-trained', 'false');
   await cell.click();
 
-  // 記録が無い日でも必ず「記録なし」と導線が出る（ここが要件の入口）
-  await expect(page.getByTestId('cal-empty')).toHaveText('記録なし');
-  await expect(page.getByTestId('cal-logs')).toHaveCount(0);
-  const open = page.getByTestId('cal-open-day');
-  await expect(open).toHaveAttribute('data-mode', 'new');
-  await expect(open).toHaveText('この日に記録する');
-  await open.click();
-
-  // 今日タブがその日付で開き、過去日を編集中であることが分かる
-  await expect(page.getByTestId('screen-today')).toBeVisible();
-  await expect(page.getByTestId('tab-today')).toHaveClass(/active/);
+  // ★ タップした時点で下の入力欄がその日のものになる。ボタンを挟まない
+  //   （以前は読み取り専用サマリの「この日に記録する」で別タブへ飛んでいた）
   await expect(page.getByTestId('today-date')).toHaveText(fmtDate(target));
   await expect(page.getByTestId('past-banner')).toContainText(`${fmtDate(target)} を編集中`);
+  await expect(page.getByTestId('exercise-card')).toHaveCount(0);
 
   const card = await addExercise(page, 'スクワット');
   await fillSet(card, 0, { weight: 80, reps: 5 });
-  await expect(card.getByTestId('today-metric')).toHaveText('400 kg·回');
+  await expect(card.getByTestId('today-metric')).toHaveText('400');
 
-  // カレンダーに戻るとその日が実施日になり、サマリと「この日を編集」に変わる
-  await openCalendarOn(page, target);
+  // 同じ画面のカレンダー側が即座に実施日として反映される（タブ往復が要らない）
   await expect(dayCell(page, target)).toHaveAttribute('data-trained', 'true');
   await expect(dayCell(page, target).getByTestId('cal-dot')).toHaveCount(1);
-
-  await dayCell(page, target).click();
-  const log = page.getByTestId('cal-log');
-  await expect(log).toHaveCount(1);
-  await expect(log).toContainText('スクワット');
-  await expect(log).toContainText('80×5');
-  await expect(log).toContainText('400 kg·回');
-  await expect(page.getByTestId('cal-empty')).toHaveCount(0);
-  await expect(page.getByTestId('cal-open-day')).toHaveAttribute('data-mode', 'edit');
 });
 
-test('記録がある日は「この日を編集」で開き直せ、既存のセットが復元される', async ({ page }) => {
+test('記録がある日をタップすると既存のセットが入力欄に復元される', async ({ page }) => {
   const target = daysAgo(2);
 
-  await openDayInToday(page, target);
+  await openDay(page, target);
   const card = await addExercise(page, 'ベンチプレス');
   await fillSet(card, 0, { weight: 55, reps: 12 });
   await flushToStorage(page);
 
-  await openCalendarOn(page, target);
-  await dayCell(page, target).click();
-  const open = page.getByTestId('cal-open-day');
-  await expect(open).toHaveText('この日を編集');
-  await open.click();
+  // いったん今日へ戻してから選び直す（日付切替でカードが引き直されることの検証）
+  await blurActive(page);
+  await page.getByTestId('back-to-today').click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(0);
 
-  await expect(page.getByTestId('today-date')).toHaveText(fmtDate(target));
+  await openDay(page, target);
   const restored = page.getByTestId('exercise-card');
   await expect(restored).toHaveCount(1);
   await expect(restored.getByTestId('set-weight').first()).toHaveValue('55');
   await expect(restored.getByTestId('set-reps').first()).toHaveValue('12');
-  await expect(restored.getByTestId('today-metric')).toHaveText('660 kg·回');
+  await expect(restored.getByTestId('today-metric')).toHaveText('660');
+});
+
+// ★ resync の弱体化の退行テスト。
+//   以前は visible 復帰で選択日を無条件に今日へ戻していた。選択日を DateCtx へ
+//   一本化した今それを残すと、7 月の記録を見ている最中に通知からアプリへ戻るだけで
+//   月表示ごと今日へ飛ぶ（カレンダーと入力欄が同じ画面に載っているため）
+// ★ resync の「守る側」。日付を跨いでアプリを開き直したとき、当日を見ていたなら
+//   新しい今日へ追従しなければならない。ここが外れると、深夜〜翌日にアプリを再開した
+//   ユーザーが**前日に誤記帳する**（force を落とした変更で一番壊してはいけない性質）。
+test('当日を見ていた場合は、日付を跨いだ復帰で新しい今日へ追従する', async ({ page }) => {
+  await page.clock.install();
+  await page.goto('./');
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+
+  const before = new Date();
+  await expect(page.getByTestId('today-date')).toHaveText(fmtDate(before));
+  await expect(page.getByTestId('past-banner')).toHaveCount(0);
+
+  // 端末の時計を翌日へ進めてから可視復帰させる（iOS のレジューム相当）
+  const tomorrow = new Date(before);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  await page.clock.setSystemTime(tomorrow);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
+  });
+
+  // 選択日が新しい今日へ動き、「編集中」にはならない
+  await expect(page.getByTestId('today-date')).toHaveText(fmtDate(tomorrow));
+  await expect(page.getByTestId('past-banner')).toHaveCount(0);
+  await expect(page.getByTestId('cal-title')).toHaveText(fmtMonth(tomorrow));
+});
+
+test('明示的に選んだ過去日は、アプリを背面に送って戻しても維持される', async ({ page }) => {
+  const target = daysAgo(5);
+
+  await openDay(page, target);
+  await expect(page.getByTestId('past-banner')).toBeVisible();
+
+  // hidden → visible の往復（iOS のレジュームに相当）
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
+  });
+
+  await expect(page.getByTestId('today-date')).toHaveText(fmtDate(target));
+  await expect(page.getByTestId('cal-title')).toHaveText(fmtMonth(target));
+  await expect(page.getByTestId('past-banner')).toBeVisible();
 });
 
 // ── 月ナビ・グリッド ────────────────────────────────────────────────────────
 
 test('前月・翌月ナビで月が移動し、年をまたいでも壊れない', async ({ page }) => {
-  await switchTab(page, 'tab-calendar');
+  await switchTab(page, 'tab-record');
   const title = page.getByTestId('cal-title');
 
   const now = new Date();
@@ -351,18 +392,20 @@ test('月フッタが実施日数・合計・セット数を正しく出す', as
   await bench.getByTestId('add-set').click();
   await fillSet(bench, 1, { weight: 60, reps: 8 });
 
-  // 懸垂は Kind::Bodyweight。セット数には入るが kg·回 の合計には folding しない
-  // （単位の違う指標を足すと意味を失うため）
+  // ★ 懸垂は重量を入れない。旧実装は Kind ごとに単位が違って足せなかったので
+  //   合計から落としていたが、指標が「重量が空なら重量 1」の単一式になったので
+  //   12 回 = 12 として合計に入る
   const pullup = await addExercise(page, '懸垂');
   await fillSet(pullup, 0, { reps: 12 });
 
   await openCalendarOn(page, today);
   await expect(page.getByTestId('cal-trained-days')).toHaveText('1 日');
-  await expect(page.getByTestId('cal-volume')).toHaveText('1,080 kg·回');
+  // ベンチ 60×10 + 60×8 = 1,080、懸垂 12 → 1,092
+  await expect(page.getByTestId('cal-volume')).toHaveText('1,092');
   await expect(page.getByTestId('cal-sets')).toHaveText('3');
 });
 
-test('記録がある日のサマリに種目・セット・指標・体重・メモが出る', async ({ page }) => {
+test('選択日の入力欄に種目・セット・指標・体重・メモがそのまま出る', async ({ page }) => {
   const today = new Date();
 
   const card = await addExercise(page, 'ベンチプレス');
@@ -372,18 +415,18 @@ test('記録がある日のサマリに種目・セット・指標・体重・�
   await page.getByTestId('body-weight').fill('62.5');
   await page.getByTestId('condition-note').fill('絶好調');
 
-  await openCalendarOn(page, today);
+  await blurActive(page);
   await dayCell(page, today).click();
 
-  await expect(page.getByTestId('cal-detail-date')).toHaveText(fmtDate(today));
-  const log = page.getByTestId('cal-log');
-  await expect(log).toHaveCount(1);
-  await expect(log).toContainText('ベンチプレス');
-  await expect(log).toContainText('胸');
-  await expect(log).toContainText('60×10');
-  await expect(log).toContainText('600 kg·回');
-  await expect(page.getByTestId('cal-body-weight')).toHaveText('体重 62.5 kg');
-  await expect(page.getByTestId('cal-note')).toHaveText('絶好調');
+  // 読み取り専用サマリは無い。入力欄そのものが選択日の内容を表す
+  await expect(page.getByTestId('today-date')).toHaveText(fmtDate(today));
+  await expect(card.getByTestId('card-name')).toHaveText('ベンチプレス');
+  await expect(card).toContainText('胸');
+  await expect(card.getByTestId('set-weight').first()).toHaveValue('60');
+  await expect(card.getByTestId('set-reps').first()).toHaveValue('10');
+  await expect(card.getByTestId('today-metric')).toHaveText('600');
+  await expect(page.getByTestId('body-weight')).toHaveValue('62.5');
+  await expect(page.getByTestId('condition-note')).toHaveValue('絶好調');
 });
 
 // ── レイアウト ──────────────────────────────────────────────────────────────
@@ -391,14 +434,14 @@ test('記録がある日のサマリに種目・セット・指標・体重・�
 test('iPhone 15 Pro 幅でカレンダーが横スクロールしない', async ({ page }) => {
   await page.setViewportSize({ width: 393, height: 852 });
 
-  // 長い種目名はサマリ行で溢れやすいので、あえてこれを選ぶ
+  // 長い種目名は行で溢れやすいので、あえてこれを選ぶ
   const card = await addExercise(page, 'トライセプスエクステンション');
   await fillSet(card, 0, { weight: 27.5, reps: 12 });
+  await blurActive(page);
 
   const today = new Date();
-  await openCalendarOn(page, today);
   await dayCell(page, today).click();
-  await expect(page.getByTestId('cal-log')).toHaveCount(1);
+  await expect(card.getByTestId('today-metric')).toHaveText('330');
 
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,

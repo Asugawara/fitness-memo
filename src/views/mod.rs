@@ -1,10 +1,10 @@
-//! 画面の共通土台。ボトムタブ 4 つ + 全画面が依存する日付コンテキスト。
+//! 画面の共通土台。ボトムタブ 3 つ + 全画面が依存する日付コンテキスト。
 
 pub mod calendar;
 pub mod chart;
+pub mod day;
 pub mod menu;
 pub mod progress;
-pub mod today;
 
 use std::cell::Cell;
 use std::time::Duration;
@@ -13,13 +13,12 @@ use chrono::{Datelike, Local, NaiveDate, Weekday};
 use leptos::prelude::*;
 
 use crate::core::Elapsed;
-use crate::model::{Db, Kind, SetEntry};
+use crate::model::{Db, SetEntry};
 use crate::storage;
 
 use calendar::Calendar;
 use menu::Menu;
 use progress::Progress;
-use today::Today;
 
 // ── コンテキスト ────────────────────────────────────────────────────────────
 
@@ -35,7 +34,10 @@ pub struct DbCtx(pub RwSignal<Db>);
 pub struct DateCtx {
     /// 実時刻から求めた「今日」。レジューム / タブ切替で再評価する
     pub today: RwSignal<NaiveDate>,
-    /// 今日タブが表示している日付。過去日編集中だけ `today` と食い違う
+    /// 記録タブが選んでいる日付。カレンダーの選択日と編集対象を兼ねる**唯一の真実源**。
+    ///
+    /// カレンダーと入力欄が同じ画面に載っているので、ここを二重に持つと
+    /// 「グリッドで選んだ日」と「下の入力欄が書き込む日」がずれる。
     pub selected: RwSignal<NaiveDate>,
 }
 
@@ -52,7 +54,11 @@ impl DateCtx {
         }
     }
 
-    /// 他タブから「この日を編集」で今日タブを開くときに使う。
+    /// 日付を選ぶ。**同値ならシグナルを動かさない。**
+    ///
+    /// `RwSignal::set` は同値でも購読者へ通知するので、素で書くと選択中の日セルを
+    /// もう一度タップしただけで `<ConditionRow />` が作り直され、体重欄に「62.」まで
+    /// 打った中間状態が確定値へ巻き戻る。
     pub fn open(&self, date: NaiveDate) {
         if self.selected.get_untracked() != date {
             self.selected.set(date);
@@ -61,16 +67,24 @@ impl DateCtx {
 
     /// 現在日付を引き直す。
     ///
-    /// `force` は「visible 復帰」で真。ユーザーが明示的に過去日を選んでいても当日へ戻す。
-    /// タブ切替（`force = false`）では、当日を見ていた場合だけ新しい当日へ追従する。
-    fn resync(&self, force: bool) {
+    /// ★ **選択日は「当日を見ていたときだけ」新しい当日へ追従させる。**
+    ///
+    /// iOS のホーム画面 PWA は再起動されず何日もレジュームされるので、日付を跨いだ
+    /// 操作が前日に記録されるのを防ぐ必要がある。ただし「明示的に選んだ過去日」まで
+    /// 巻き戻してはいけない。以前は visible 復帰だけ無条件に当日へ戻していたが、
+    /// それが安全だったのはカレンダーの選択日が別シグナルで resync の影響外に
+    /// あったから。選択日を一本化した今それを残すと、7 月の記録を見ている最中に
+    /// 通知からアプリへ戻るだけで月表示ごと今日へ飛ぶ。
+    ///
+    /// 誤記帳の防止はカレンダーのハイライトと `past-banner` が担う（日付が常時見える）。
+    fn resync(&self) {
         let now = today_local();
         let prev = self.today.get_untracked();
         if prev != now {
             self.today.set(now);
         }
-        if (force || self.selected.get_untracked() == prev) && self.selected.get_untracked() != now
-        {
+        let selected = self.selected.get_untracked();
+        if selected == prev && selected != now {
             self.selected.set(now);
         }
     }
@@ -199,22 +213,15 @@ pub fn parse_reps(s: &str) -> Option<u32> {
     s.trim().parse::<u32>().ok().filter(|r| *r > 0)
 }
 
-/// 1 セットの表示。"60×10" / "+10×8" / "60秒"
-pub fn fmt_set(kind: Kind, s: &SetEntry) -> String {
-    match kind {
-        Kind::Weighted => format!("{}×{}", fmt_weight(s.weight), s.reps),
-        // Bodyweight の weight は「追加重量」。指標には入らないが表示はする
-        Kind::Bodyweight if s.weight > 0.0 => format!("+{}×{}", fmt_weight(s.weight), s.reps),
-        Kind::Bodyweight => format!("{}", s.reps),
-        Kind::Duration => format!("{}秒", s.reps),
-    }
-}
-
-/// レップ欄の単位ラベル。
-pub fn reps_unit(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Duration => "秒",
-        _ => "回",
+/// 1 セットの表示。重量ありなら "60×10"、重量なしなら "12"。
+///
+/// 単位（回 / 秒）は添えない。プランクの 60 に「回」と付くほうが嘘になるし、
+/// それが秒だと分かるのは種目名からで、表記から読むものではない。
+pub fn fmt_set(s: &SetEntry) -> String {
+    if s.weight > 0.0 {
+        format!("{}×{}", fmt_weight(s.weight), s.reps)
+    } else {
+        format!("{}", s.reps)
     }
 }
 
@@ -272,19 +279,18 @@ pub fn scroll_to_id(element_id: String) {
 
 // ── タブ ────────────────────────────────────────────────────────────────────
 
+/// ボトムタブ。
+///
+/// `Record` はカレンダーと選択日のエディタを 1 画面に載せたもの。
+/// 以前は「今日」と「カレンダー」が別タブで、過去日を直すたびに往復していた。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
-    Today,
-    Calendar,
+    Record,
     Progress,
     Menu,
 }
 
 /// 現在のタブ。
-///
-/// ボトムタブ以外からもタブを移す導線がある（カレンダーの「この日に記録する」）。
-/// ここを `provide_context` しないと他画面から遷移する手段が無くなり、DOM を引いて
-/// 合成クリックを投げるような**アプリの動作が `data-testid` に依存する**実装に落ちる。
 #[derive(Clone, Copy)]
 pub struct TabCtx(pub RwSignal<Tab>);
 
@@ -293,15 +299,11 @@ impl TabCtx {
     ///
     /// **切替のたびに「今日」を再評価する**のが要点。iOS のホーム画面 PWA は再起動されず
     /// 何日もレジュームされるので、mount 時に決めた日付を持ち回ると日付を跨いだ操作が
-    /// 前日に記録される。`resync(false)` なので、ユーザーが明示的に選んだ過去日は残る。
+    /// 前日に記録される。明示的に選んだ過去日は `resync` が保つ。
     pub fn switch(&self, dates: DateCtx, to: Tab) {
-        dates.resync(false);
+        dates.resync();
         self.0.set(to);
     }
-}
-
-pub fn use_tab() -> TabCtx {
-    use_context::<TabCtx>().expect("TabCtx が provide されていない")
 }
 
 #[component]
@@ -320,7 +322,7 @@ pub fn App() -> impl IntoView {
     let kb = KbCtx(RwSignal::new(false));
     provide_context(kb);
 
-    let tab = RwSignal::new(Tab::Today);
+    let tab = RwSignal::new(Tab::Record);
     let tabs = TabCtx(tab);
     provide_context(tabs);
 
@@ -331,7 +333,7 @@ pub fn App() -> impl IntoView {
         storage::save_debounced(db.get());
     });
 
-    // ★ hidden で flush、visible 復帰で当日へリセット。
+    // ★ hidden で flush、visible 復帰で「今日」を引き直す。
     //   visibilitychange は Document で発火するが bubbles: true なので window で捕捉できる。
     //   leptos に visibilitychange の typed event は無いので untyped を使う。
     let listener = window_event_listener_untyped("visibilitychange", move |_| {
@@ -339,7 +341,7 @@ pub fn App() -> impl IntoView {
         if document().hidden() {
             storage::flush();
         } else {
-            dates.resync(true);
+            dates.resync();
         }
     });
     on_cleanup(move || listener.remove());
@@ -383,16 +385,14 @@ pub fn App() -> impl IntoView {
 
             <main class="screen">
                 {move || match tab.get() {
-                    Tab::Today => view! { <Today /> }.into_any(),
-                    Tab::Calendar => view! { <Calendar /> }.into_any(),
+                    Tab::Record => view! { <Calendar /> }.into_any(),
                     Tab::Progress => view! { <Progress /> }.into_any(),
                     Tab::Menu => view! { <Menu /> }.into_any(),
                 }}
             </main>
 
             <nav class="bottom-tabs" data-testid="bottom-tabs">
-                {tab_button(Tab::Today, "今日", "tab-today")}
-                {tab_button(Tab::Calendar, "カレンダー", "tab-calendar")}
+                {tab_button(Tab::Record, "記録", "tab-record")}
                 {tab_button(Tab::Progress, "推移", "tab-progress")}
                 {tab_button(Tab::Menu, "種目", "tab-menu")}
             </nav>

@@ -1,9 +1,13 @@
 # ADR-0009: 部位別の指標を volume ではなくセット数にする
 
-- **状態**: 採用
+- **状態**: 置換済み（[ADR-0033](0033-metric-is-a-view-setting.md)）
 - **日付**: 2026-08-08
 - **カテゴリ**: data-model
 - **関連**: [ADR-0007](0007-exercise-kind-explicit.md), [ADR-0004](../architecture/0004-no-chart-library-hand-rolled-svg.md)
+
+> **置換済み。** セット数固定をやめ、部位も種目も**選択中の指標**をその範囲で合計する。
+> `Kind` の廃止で「単位が違って足せない」という制約自体が消えたため。
+> → [ADR-0033](0033-metric-is-a-view-setting.md)
 
 ## 背景
 

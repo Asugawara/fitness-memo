@@ -1,9 +1,13 @@
 # ADR-0022: トレ前情報とトレ中情報を排他表示にする
 
-- **状態**: 採用
+- **状態**: 置換済み（[ADR-0035](0035-record-tab-calendar-with-day-editor.md)）
 - **日付**: 2026-08-08
 - **カテゴリ**: ux
 - **関連**: [ADR-0021](0021-copy-button-only-when-empty.md), [ADR-0006](../data-model/0006-at-optional-same-day-only.md)
+
+> **置換済み。** カレンダーを同じ画面の上に載せたことで大きいヒーローを置く余地が無くなり、
+> 経過と部位チップは常時 1 行へ圧縮した。トレ前 / トレ中の出し分けも意味を失っている。
+> → [ADR-0035](0035-record-tab-calendar-with-day-editor.md)
 
 ## 背景
 

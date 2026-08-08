@@ -61,47 +61,93 @@ pub fn load() -> (Db, Option<String>) {
         );
     };
 
-    // 現行キー → 旧世代キーの順に探す。最初に中身が入っていたものを採用する
-    let found = std::iter::once(KEY)
-        .chain(LEGACY_KEYS.iter().copied())
-        .find_map(|key| {
-            let raw = store
-                .get_item(key)
-                .ok()
-                .flatten()
-                .filter(|raw| !raw.trim().is_empty())?;
-            Some((key, raw))
-        });
+    // ★ 現行キー → 旧世代キーの順に、**`migrate` が通るまで**降りていく。
+    //
+    //   「最初に中身があったキー」で打ち切ると、v2 だけが壊れたときに健全な v1 が
+    //   残っていてもプリセットに落ちる。それでは旧キーを残している意味が無い
+    //   （旧キーは全損に対する唯一の退路。ADR-0034）。
+    let mut quarantined = false;
+    for key in std::iter::once(KEY).chain(LEGACY_KEYS.iter().copied()) {
+        let Some(raw) = store
+            .get_item(key)
+            .ok()
+            .flatten()
+            .filter(|raw| !raw.trim().is_empty())
+        else {
+            continue;
+        };
 
-    let Some((key, raw)) = found else {
-        // 初回起動。プリセットを投入する
-        return (presets::seeded_db(), None);
-    };
-
-    match core::migrate(&raw) {
-        Ok(db) => {
-            // 旧世代から読んだときは現行キーへ写しておく。App 側の Effect が 400ms 後に
-            // 保存するので必須ではないが、その前にプロセスを kill されると次回も
-            // 旧キーから読み直すことになるため、ここで確定させる。
-            // **旧キーは消さない**（旧版へ戻ったときの退路）
-            if key != KEY {
-                save(&db);
+        match core::migrate(&raw) {
+            Ok(db) => {
+                let note = if key == KEY {
+                    // 採用したのは現行キー。旧世代のほうが新しければ知らせる（下記）
+                    newer_legacy_note(&store, &db)
+                } else {
+                    // 旧世代から読んだので現行キーへ写す。App 側の Effect が 400ms 後に
+                    // 保存するが、その前にプロセスを kill されると次回も旧キーから
+                    // 読み直すことになるため、ここで確定させる。**旧キーは消さない**
+                    save(&db);
+                    quarantined.then(|| {
+                        "最新のデータを復元できなかったため、以前のバックアップから復元しました"
+                            .to_string()
+                    })
+                };
+                return (db, note);
             }
-            (db, None)
-        }
-        Err(_) => {
-            // ★ 破損データをプリセットで黙って上書きするのは全損を確定させる動作。
-            //   必ず退避してから差し替える。退避先は読んだキー側に付ける
-            let backup_key = format!("{key}.bak-{}", Local::now().timestamp_millis());
-            let saved = store.set_item(&backup_key, &raw).is_ok();
-            let msg = if saved {
-                "以前のデータを復元できませんでした（退避済み）"
-            } else {
-                "以前のデータを復元できませんでした（退避にも失敗しました）"
-            };
-            (presets::seeded_db(), Some(msg.to_string()))
+            Err(_) => {
+                // ★ 破損データをプリセットで黙って上書きするのは全損を確定させる動作。
+                //   必ず退避してから次の世代へ進む。退避先は読んだキー側に付ける
+                let backup_key = format!("{key}.bak-{}", Local::now().timestamp_millis());
+                let _ = store.set_item(&backup_key, &raw);
+                quarantined = true;
+            }
         }
     }
+
+    if quarantined {
+        // どの世代も読めなかった。退避は済んでいる
+        return (
+            presets::seeded_db(),
+            Some("以前のデータを復元できませんでした（退避済み）".to_string()),
+        );
+    }
+
+    // 初回起動。プリセットを投入する
+    (presets::seeded_db(), None)
+}
+
+/// 現行キーを採用したとき、旧世代のほうに**新しい記録**が残っていれば知らせる。
+///
+/// ★ 旧版へロールバックしている間の記録は旧キーに書かれる。新版へ戻ると現行キーが
+/// 非空なのでそのまま採用され、ロールバック期間の記録が黙って画面から消える。
+/// 自動マージはしない（同じ日を両方で編集していると、どちらを正とするか決められない）。
+/// **消えていないことだけは伝える。**
+fn newer_legacy_note(store: &web_sys::Storage, current: &Db) -> Option<String> {
+    // 日付キーはゼロ埋め ISO なので辞書順比較でよい
+    let newest = |db: &Db| db.sessions.keys().next_back().cloned();
+    let mine = newest(current);
+
+    for key in LEGACY_KEYS {
+        let Some(raw) = store
+            .get_item(key)
+            .ok()
+            .flatten()
+            .filter(|raw| !raw.trim().is_empty())
+        else {
+            continue;
+        };
+        let Ok(old) = core::migrate(&raw) else {
+            continue;
+        };
+        if let Some(theirs) = newest(&old)
+            && mine.as_deref().is_none_or(|m| theirs.as_str() > m)
+        {
+            return Some(format!(
+                "以前のバージョンで付けた記録が {theirs} まで残っています（今の表示には含まれていません）"
+            ));
+        }
+    }
+    None
 }
 
 /// 即時保存。

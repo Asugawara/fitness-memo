@@ -190,6 +190,71 @@ test('旧キー v1 の記録を引き継いで v2 に書き、v1 は消さない
   expect(migrated.groups.map((g) => g.name)).toEqual(['胸']);
 });
 
+// ★ 旧キーは「全損に対する唯一の退路」（ADR-0034）。現行キーが壊れたときに
+//   そこへ降りられなければ、退路を用意した意味が無い。
+//   「最初に中身があったキーで打ち切る」実装だと、健全な v1 が残っているのに
+//   プリセットが表示され、直後の保存でそれが確定してしまう。
+test('v2 が壊れていても健全な v1 があればそこから復元する', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('fitness-memo/v2', '{壊れている');
+    localStorage.setItem(
+      'fitness-memo/v1',
+      JSON.stringify({
+        schema: 1,
+        next_id: 100,
+        groups: [{ id: 1, name: '胸', color: '#e0524a', order: 0 }],
+        exercises: [{ id: 10, name: '生き残りベンチ', group_id: 1, kind: 'Weighted', order: 0 }],
+        sessions: {
+          '2020-01-02': { logs: [{ exercise_id: 10, sets: [{ weight: 60, reps: 10 }], at: null }] },
+        },
+      }),
+    );
+  });
+  await page.goto('./');
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+
+  // プリセットに落ちていない = v1 から復元できている
+  const db = await page.evaluate(() => JSON.parse(localStorage.getItem('fitness-memo/v2')));
+  expect(db.exercises.map((e) => e.name)).toContain('生き残りベンチ');
+  expect(db.groups.map((g) => g.name)).toEqual(['胸']);
+
+  // 壊れていた v2 は退避されている（黙って捨てない）
+  const backups = await page.evaluate(() =>
+    Object.keys(localStorage).filter((k) => k.startsWith('fitness-memo/v2.bak-')),
+  );
+  expect(backups.length).toBeGreaterThan(0);
+
+  // 何が起きたかを黙らない
+  await expect(page.getByTestId('restore-notice')).toContainText('バックアップから復元');
+});
+
+// ★ ロールバック中に旧版が v1 へ書いた記録は、新版へ戻ると現行キーが採用されるので
+//   画面から消える。自動マージはしない（同じ日を両方で編集していると正が決まらない）が、
+//   **消えていないことは伝える**。無言の欠落が一番たちが悪い。
+test('v1 のほうが新しい記録を持っていると通知が出る', async ({ page }) => {
+  const mkDb = (date) => ({
+    schema: 2,
+    next_id: 100,
+    groups: [{ id: 1, name: '胸', color: '#e0524a', order: 0 }],
+    exercises: [{ id: 10, name: 'ベンチ', group_id: 1, order: 0 }],
+    sessions: {
+      [date]: { logs: [{ exercise_id: 10, sets: [{ weight: 60, reps: 10 }], at: null }] },
+    },
+  });
+  await page.addInitScript((dbs) => {
+    localStorage.setItem('fitness-memo/v2', JSON.stringify(dbs.v2));
+    localStorage.setItem('fitness-memo/v1', JSON.stringify(dbs.v1));
+  }, { v2: mkDb('2020-01-02'), v1: mkDb('2020-03-09') });
+
+  await page.goto('./');
+  await expect(page.getByTestId('restore-notice')).toContainText('2020-03-09');
+
+  // 採用しているのは v2 のまま（v1 で上書きしない）
+  await expect(page.getByTestId('elapsed')).toBeVisible();
+  const kept = await page.evaluate(() => JSON.parse(localStorage.getItem('fitness-memo/v2')));
+  expect(Object.keys(kept.sessions)).toEqual(['2020-01-02']);
+});
+
 test('オフラインでも起動し記録が読める（SW の navigate 分岐の検証）', async (
   { page, context, browserName },
   testInfo,

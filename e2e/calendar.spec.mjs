@@ -269,6 +269,33 @@ test('記録がある日をタップすると既存のセットが入力欄に�
 //   以前は visible 復帰で選択日を無条件に今日へ戻していた。選択日を DateCtx へ
 //   一本化した今それを残すと、7 月の記録を見ている最中に通知からアプリへ戻るだけで
 //   月表示ごと今日へ飛ぶ（カレンダーと入力欄が同じ画面に載っているため）
+// ★ resync の「守る側」。日付を跨いでアプリを開き直したとき、当日を見ていたなら
+//   新しい今日へ追従しなければならない。ここが外れると、深夜〜翌日にアプリを再開した
+//   ユーザーが**前日に誤記帳する**（force を落とした変更で一番壊してはいけない性質）。
+test('当日を見ていた場合は、日付を跨いだ復帰で新しい今日へ追従する', async ({ page }) => {
+  await page.clock.install();
+  await page.goto('./');
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+
+  const before = new Date();
+  await expect(page.getByTestId('today-date')).toHaveText(fmtDate(before));
+  await expect(page.getByTestId('past-banner')).toHaveCount(0);
+
+  // 端末の時計を翌日へ進めてから可視復帰させる（iOS のレジューム相当）
+  const tomorrow = new Date(before);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  await page.clock.setSystemTime(tomorrow);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
+  });
+
+  // 選択日が新しい今日へ動き、「編集中」にはならない
+  await expect(page.getByTestId('today-date')).toHaveText(fmtDate(tomorrow));
+  await expect(page.getByTestId('past-banner')).toHaveCount(0);
+  await expect(page.getByTestId('cal-title')).toHaveText(fmtMonth(tomorrow));
+});
+
 test('明示的に選んだ過去日は、アプリを背面に送って戻しても維持される', async ({ page }) => {
   const target = daysAgo(5);
 

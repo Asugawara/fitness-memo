@@ -1,14 +1,11 @@
 import { test, expect } from '@playwright/test';
 
-// 計画の smoke ケースのうち 8 以外を実装（カレンダーは e2e/calendar.spec.mjs で
-// worker-c が担当）。src/views/{today,mod,progress,chart,menu}.rs の data-testid を使う。
+// 記録タブ（カレンダー + 選択日エディタ）と推移・種目タブの E2E。
+// src/views/{day,calendar,mod,progress,chart,menu}.rs の data-testid を使う。
 //
-// ケース4・5・7・9 は「前日の記録」を前提にするが、calendar.rs（過去日を選ぶ導線）
-// がまだ無く、today タブ単体には dates.selected を today 以外にする UI 操作が
-// 存在しない（mod.rs の DateCtx::open は calendar.rs からの呼び出しを想定した
-// pub fn だが、現時点でどこからも呼ばれていない）。そのため「UI からバックフィル
-// する」という書き込み経路そのものは検証できず、seedPastLogs() で localStorage に
-// バックフィル済み（at: null）のデータを直接注入し、読み込み〜表示側だけを検証する。
+// 「前日の記録がある状態」は seedPastLogs() で localStorage に直接注入して作る。
+// UI から過去日へ書き込む経路そのものの検証（ExerciseLog.at が null になること）は
+// e2e/calendar.spec.mjs が担当する。ここは読み込み〜表示側を見る。
 
 test.beforeEach(async ({ page }) => {
   // ★ baseURL がサブパス（例 /fitness-memo/）を持つとき、先頭 "/" は絶対パス参照として
@@ -102,7 +99,7 @@ async function seedPastLogs(page, entries) {
   await page.reload();
 }
 
-test('1. 初回起動でプリセットが投入され「今日」タブが出る', async ({ page }) => {
+test('1. 初回起動でプリセットが投入され記録タブが出る', async ({ page }) => {
   await expect(page.getByTestId('screen-record')).toBeVisible();
   await expect(page.getByTestId('tab-record')).toHaveClass(/active/);
 
@@ -148,7 +145,7 @@ test('3. hidden への visibilitychange を発火してからリロードして�
   await expect(reloadedCard.getByTestId('set-row').nth(0).getByTestId('set-reps')).toHaveValue('10');
 });
 
-test('4. 前日にバックフィルした記録があると、今日タブの経過表示が「昨日」になる', async ({ page }) => {
+test('4. 前日にバックフィルした記録があると、経過表示が「昨日」になる', async ({ page }) => {
   // at: null（バックフィル済み）で注入する。これが at: Some(now) だと
   // 「たった今」になってしまい、要件「最後のトレーニングから」の出力が嘘になる
   await seedPastLogs(page, [
@@ -343,7 +340,7 @@ test('10. 同じ日に同じ種目を再度追加してもカードは増えず�
   await expect(row0.getByTestId('set-weight')).toHaveValue('70');
 });
 
-test('11. 種目タブでの改名・部位変更・新規追加が今日タブに反映され、アーカイブは推移タブから参照できる', async ({ page }) => {
+test('11. 種目タブでの改名・部位変更・新規追加が記録タブに反映され、アーカイブは推移タブから参照できる', async ({ page }) => {
   await page.getByTestId('tab-menu').click();
   await expect(page.getByTestId('screen-menu')).toBeVisible();
 

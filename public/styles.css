@@ -494,6 +494,14 @@ h3 {
   /* 下のカードが透けるとボタンの文字と重なって読めなくなる。上端 14px だけぼかし、
      そこから下は地色で塗り切る（40% 指定だとボタン本体の高さまで半透明が残る） */
   background: linear-gradient(to bottom, transparent 0, var(--bg) 14px);
+  /* ★ 透明な上端 14px は「見えているのに押せない帯」になる。帯自体はクリックを
+     素通しし、ボタンだけが受け取るようにする（過去に z-index 欠落で押せない要素を
+     作っているので、新設する overlay 状の要素では毎回これを確認する） */
+  pointer-events: none;
+}
+
+.add-wrap > button {
+  pointer-events: auto;
 }
 
 /* ★ キーボード表示中は隠す（bottom を詰めるのは誤り）。

@@ -20,7 +20,7 @@ use super::{
     recency_class, scroll_to_id, short_elapsed, use_dates, use_db, use_kb,
 };
 
-/// 今日タブが表示しているカード 1 枚。
+/// 選択日に並べているカード 1 枚。
 ///
 /// 日付キーを持つのは `<For>` のキーに混ぜるため。過去日へ切り替えたときにカードの
 /// DOM ごと作り直さないと、カード内の編集中文字列が前の日のまま残る。

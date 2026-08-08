@@ -465,13 +465,6 @@ h3 {
   color: var(--warn);
 }
 
-/* カード末尾の「この種目を外す」。見出しの ✕ から移設した */
-.card-remove {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 2px;
-}
-
 .warn {
   flex-basis: 100%;
   padding-left: 1.9em;
@@ -499,6 +492,34 @@ h3 {
 .card-foot strong {
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+
+/* 「今日 1,080」を 1 かたまりにして、フッタ左端を外す導線に空ける */
+.foot-total {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+/* ★ 破壊的操作でも「静止時は警告色を持たない」。--warn は確認 UI（.warn-box /
+   .row-confirm）だけの持ち物で、入口は常に --muted。以前ここは 15px の --warn で、
+   カード内で最も目立つ文字列だった（カードの枚数だけ橙の行が縦に並んでいた）。
+
+   グリフまで行削除の ✕ にそろえるのは誤り。直上にある「行の ✕」と同じ列・同じ見た目に
+   なり、1 セットとカード全体のどちらが消えるのか読めなくなる。そろえるのは
+   「静かな入口 → 押したときだけ警告色の確認」という作法のほうで、見た目ではない。
+
+   左端に置くのは、カードの右端が「行の ✕ → + セット → sticky の種目を追加」という
+   動線の列だから。実測で + セットとは 41px しか離れておらず右端が完全一致、最後の
+   カードでは追加ボタンと縦に 9px 重なり、横は 390px 幅で約 7.5px しかなかった
+   （.add-wrap の帯は pointer-events:none なのでタップは下へ抜ける）。
+
+   .link-btn（0,1,0）と同詳細度だと色を上書きできないので子孫セレクタ（0,2,0）で書く。
+   ファイル末尾の .danger と同じ事情。min-height:44px はタップ標的なので縮めない。
+   詳細は ADR-0043 */
+.card-foot .card-remove {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 /* ── ボタン ─────────────────────────────────────────────────────────────── */

@@ -11,7 +11,7 @@
 
   <rect class="hlp-ghost" x="18" y="52" width="24" height="24" rx="6" />
 
-  <rect class="hlp-panel" x="50" y="56" width="60" height="17" rx="4" />
+  <rect class="hlp-raised" x="50" y="56" width="60" height="17" rx="4" />
   <rect class="hlp-ghost" x="55" y="62.5" width="32" height="4" rx="2" />
 
   <rect class="hlp-ghost" x="18" y="86" width="92" height="3.5" rx="1.75" />

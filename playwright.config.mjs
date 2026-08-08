@@ -6,6 +6,12 @@ const BASE = normalizeBase(process.env.E2E_BASE || '/');
 // 成果物を `DIST_DIR=dist-release` で配信させることで、他ワーカーが並行して既定の
 // dist/ に trunk build し続けていても、そこに引きずられずに検証できる
 // (未設定時は "dist"。scripts/static-server.mjs 側の同名の仕組みを参照)
+//
+// ★ 同じ罠は `trunk serve` でも踏む。watch が走るたびに既定の dist/ を書き換えるので、
+//   起動したまま E2E を回すと配信中の wasm が差し替わり、「screen-record が現れない」
+//   型の失敗が実行ごとに 1〜2 件出る（アプリのバグではない）。E2E の前に必ず止めるか、
+//   DIST_DIR を分けること。実測: trunk serve あり 35〜38 秒で 1〜2 件 fail /
+//   なし 17 秒で 174 件 pass。
 const DIST_DIR = process.env.DIST_DIR || 'dist';
 
 function normalizeBase(base) {

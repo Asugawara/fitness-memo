@@ -6,9 +6,10 @@
 //!
 //! 導線を 2 層にしてある。
 //!
-//! - [`InstallBanner`]: 記録タブ最上部。standalone でなく、かつストレージが分かれうる
-//!   環境のときだけ出る。**手順を必要とする人は必ずこの状態にいる**（人に勧めるときも
-//!   渡すのは URL なので、相手側にバナーが出る）ので、これが本命の導線。
+//! - [`InstallBanner`]: 記録タブ末尾（「種目を追加」より下）。standalone でなく、かつ
+//!   ストレージが分かれうる環境のときだけ出る。**手順を必要とする人は必ずこの状態に
+//!   いる**（人に勧めるときも渡すのは URL なので、相手側にバナーが出る）ので、これが
+//!   本命の導線。ただし初期表示では折り返しの下にあり、スクロールしないと見えない。
 //! - [`InstallHelpLink`]: 種目タブ冒頭。standalone になったあとの読み返しと、
 //!   [`super::storage_may_split`] が将来の UA 変更で壊れたときの逃げ道。
 //!
@@ -35,7 +36,7 @@ const STEP1_SVG: &str = include_str!("../../assets/help/step1-share.svg");
 const STEP2_SVG: &str = include_str!("../../assets/help/step2-add.svg");
 const STEP3_SVG: &str = include_str!("../../assets/help/step3-confirm.svg");
 
-/// 記録タブ最上部の警告バナー。押すと手順シートが開く。
+/// 記録タブ末尾の警告バナー。押すと手順シートが開く。
 ///
 /// トーンは `.warn-box` 寄りの枠線で、`.notice` のような塗りにはしない。記録タブに
 /// 常駐して毎回目に入るので、塗りは閉じられる一時通知のほうに残す。
@@ -52,8 +53,12 @@ pub fn InstallBanner() -> impl IntoView {
     let dismissed = RwSignal::new(storage::install_hint_dismissed());
 
     view! {
+        // ★ `dismissed.get()` を先に書く。`applicable && !dismissed.get()` にすると
+        //   `applicable` が false のとき短絡してシグナルを購読せず、依存ゼロの
+        //   クロージャになる。今は無害だが、後から `applicable` をシグナル化した
+        //   ときに順序依存の罠として顕在化する
         {move || {
-            (applicable && !dismissed.get())
+            (!dismissed.get() && applicable)
                 .then(|| {
                     view! {
                         // ★ 箱は <div>。<button> の入れ子は不正な HTML なので、
@@ -68,9 +73,10 @@ pub fn InstallBanner() -> impl IntoView {
                                     <strong>"記録を付ける前にホーム画面に追加してください"</strong>
                                     "Safari のタブで付けた記録は引き継がれません"
                                 </span>
-                                <span class="install-hint-cta" aria-hidden="true">
-                                    "追加のしかた ›"
-                                </span>
+                                // ★ aria-hidden を付けないこと。付けるとアクセシブル名から
+                                //   落ち、支援技術には「押すと何が起きるか」を示す唯一の
+                                //   語が届かなくなる（残るのは警告文だけになる）
+                                <span class="install-hint-cta">"追加のしかた ›"</span>
                             </button>
                             // aria-label は残す。見た目は ✕ でも支援技術と E2E の
                             // role+name には言葉で届く必要がある
@@ -86,10 +92,12 @@ pub fn InstallBanner() -> impl IntoView {
                                 "✕"
                             </button>
                         </div>
+                        // シートも条件の中に置く。バナーが出ない状態では `open` を
+                        // 立てる手段が無いので、外に出すと開けないシートが残るだけ
+                        <InstallHelpSheet open=open />
                     }
                 })
         }}
-        <InstallHelpSheet open=open />
     }
 }
 

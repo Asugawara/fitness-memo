@@ -381,6 +381,12 @@ test('オフラインでも起動し記録が読める（SW の navigate 分岐�
 // （= pre-commit が回す唯一のブラウザ）でどちらのケースを踏むかが暗黙になるので、
 // UA は test.use で明示して全 project で同じ分岐を通す。
 
+// ★ 以下の否定テストは `toHaveCount(0)` で「出ない」ことを見るので、testid を改名すると
+//   全部が無言で常に通るようになる。実在の担保は同ファイルの肯定テストが持っている:
+//   `install-hint` は「バナーは『種目を追加』より下に…」が boundingBox で、
+//   `install-hint-open` / `install-hint-dismiss` は各々をクリックするテストが握っている。
+//   testid を変えるときは、肯定側が落ちることを確認してから否定側を直すこと。
+
 const UA_IPHONE = devices['iPhone 15 Pro'].userAgent;
 const UA_ANDROID = devices['Pixel 7'].userAgent;
 

@@ -4,7 +4,7 @@
   <rect class="hlp-ghost" x="18" y="18" width="92" height="4" rx="2" />
   <rect class="hlp-ghost" x="18" y="27" width="70" height="4" rx="2" />
 
-  <rect class="hlp-panel" x="8" y="44" width="112" height="110" rx="12" />
+  <rect class="hlp-raised" x="8" y="44" width="112" height="110" rx="12" />
   <rect class="hlp-ghost" x="58" y="48" width="12" height="2.5" rx="1.25" />
 
   <rect class="hlp-ghost" x="18" y="54" width="10" height="10" rx="2.5" />

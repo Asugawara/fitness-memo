@@ -147,8 +147,9 @@ h3 {
 
 /* ── 通知・注意書き ─────────────────────────────────────────────────────── */
 
-/* ★ .notice と .install-hint で規則を共有しない。前者は <div>、後者は <button> で、
-   まとめると .notice を触った次の人がボタンの形を無言で変える */
+/* ★ .notice と .install-hint で規則を共有しない。前者は「閉じられる一時通知」で
+   ベタ塗り、後者は「常駐する警告」で枠線と、役割もトーンも別物。まとめると
+   一方を触った次の人がもう一方の見た目を無言で変える */
 .notice {
   border-radius: 10px;
   padding: 10px 12px;
@@ -170,9 +171,6 @@ h3 {
 }
 
 /* 記録タブ末尾の警告バナー。押すと手順シートが開く。
-   ★ <button> なので UA 既定の枠・中央寄せ・shrink-to-fit を全部上書きする必要がある。
-     appearance:none は付けない（WebKit の UA テーマ問題は select の menulist 固有で、
-     素の button + background + border-radius は他のボタンで通っている）。
    ★ 本文を --warn にしない。ダークの --warn は淡橙 #e2a06a で、輝度比だけなら
      #0b0b0c 上で約 8.9 あるが、13px の日本語を橙一色で 2 行流すと読みづらい。
      警告であることは枠線と CTA の色で示し、文字は --text / --muted に任せる。
@@ -189,9 +187,13 @@ h3 {
   font-size: 13px;
 }
 
-/* 押すと手順シートが開くほう。枠は箱が持つので自分は持たない。
+/* 押すと手順シートが開くほう。こちらが <button> なので UA 既定の枠・中央寄せ・
+   shrink-to-fit を打ち消す（枠は箱側が持つ）。appearance:none は付けない
+   （WebKit の UA テーマ問題は select の menulist 固有で、素の button +
+   background + border-radius は .primary / .pick などで通っている）。
    ★ 横並びにしない。iPhone 幅では見出しと「追加のしかた ›」が横幅を取り合って
-     見出しが 2 行に折り返す。縦に積んで CTA だけ右寄せにすると 3 行で収まる */
+     見出しが 2 行に折り返す。縦に積んで CTA だけ右寄せにすると 3 行で収まる
+     （320px 幅までいくと 4 行になるが実害は無いので許容する） */
 .install-hint-body {
   display: flex;
   flex-direction: column;
@@ -1258,8 +1260,20 @@ h3 {
 }
 
 /* 図の色。SVG 側は座標と class だけを持ち、色は全部ここで与える
-   （fill="var(--accent)" は presentation attribute では解決されない）。 */
+   （fill="var(--accent)" は presentation attribute では解決されない）。
+
+   ★ 端末の面は --surface にしない。シート地（.sheet）が --surface なので、同じ色だと
+     面と背景が同一になり（light で 1.16:1）「下からシートが上がってきた」が絵として
+     伝わらない。端末を --bg、その上に載るもの（共有シート・入力欄）を --surface に
+     すると、ライトでもダークでも「上に載っているほうが明るい」向きで層が読める。 */
 .hlp-panel {
+  fill: var(--bg);
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+
+/* 端末の上に載るもの。面より一段手前に見せる */
+.hlp-raised {
   fill: var(--surface);
   stroke: var(--line);
   stroke-width: 1.5;

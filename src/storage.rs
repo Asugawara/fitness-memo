@@ -404,11 +404,11 @@ pub fn dismiss_install_hint() {
     let Some(store) = store() else {
         return;
     };
-    // フィールドが増えたら `..ui_state()` で既存値を引き継ぐこと。今は 1 つなので
-    // 書き足すと clippy::needless_update に当たる
-    let next = UiState {
-        install_hint_dismissed: true,
-    };
+    // ★ 読んでから 1 フィールドだけ差し替える。`UiState { install_hint_dismissed: true }`
+    //   と書くとフィールドが増えたときに既存値を黙って消す。`..ui_state()` を足す形は
+    //   フィールドが 1 つの間 clippy::needless_update に当たるので、この形にしておく
+    let mut next = ui_state();
+    next.install_hint_dismissed = true;
     if let Ok(json) = serde_json::to_string(&next) {
         let _ = store.set_item(UI_KEY, &json);
     }

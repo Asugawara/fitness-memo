@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-08
 - **カテゴリ**: storage
-- **関連**: [ADR-0012](0012-quarantine-on-parse-failure.md), [ADR-0013](0013-flush-on-visibilitychange.md), [ADR-0014](0014-defer-export-import.md), [ADR-0039](0039-no-same-origin-redundancy.md)
+- **関連**: [ADR-0012](0012-quarantine-on-parse-failure.md), [ADR-0013](0013-flush-on-visibilitychange.md), [ADR-0014](0014-defer-export-import.md), [ADR-0039](0039-no-same-origin-redundancy.md), [ADR-0042](0042-ui-state-in-separate-key.md)
 
 > **追記（ADR-0037 / ADR-0039 時点）**
 > - **`save()` の `QuotaExceededError` 握りつぶしを撤回した。** 「当たったときに気づけない」
@@ -13,6 +13,9 @@
 >   （実測した上限 約 5 MiB に対しては変わらず十分）
 > - 上限は**オリジン単位で全キー合計**（キー単位ではない）。世代スナップショットを
 >   持つと本体と食い合うので採らない（[ADR-0039](0039-no-same-origin-redundancy.md)）
+
+> [!NOTE]
+> **「単一キー」は `Db` についての決定である。** [ADR-0042](0042-ui-state-in-separate-key.md) で UI の状態を `fitness-memo/ui/v1` に分けたので、`localStorage` のキー自体は 2 本ある。この ADR が単一キーにした理由は `Db` の参照整合性を部分書き込みで壊さないことなので、`Db` を参照しないキーには及ばない。
 
 ## 背景
 

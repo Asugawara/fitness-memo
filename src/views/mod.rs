@@ -4,6 +4,7 @@ pub mod backup;
 pub mod calendar;
 pub mod chart;
 pub mod day;
+pub mod help;
 pub mod menu;
 pub mod progress;
 
@@ -267,6 +268,26 @@ pub fn is_standalone() -> bool {
         .ok()
         .flatten()
         .is_some_and(|m| m.matches())
+}
+
+/// ブラウザのタブと standalone で `localStorage` が分かれうる環境か（＝警告を出す対象か）。
+///
+/// ★ 「iOS を当てる」形にしないのが要点。iPadOS 13+ の Safari は既定で desktop-class の
+/// UA（`Macintosh; Intel Mac OS X …`）を出すので、`iPhone` / `iPad` を探しにいくと
+/// ストレージ分離が同じく起きる iPad が保護対象から落ちる。逆に Android Chrome は
+/// タブと PWA でストレージを共有するので、そこに出す警告は事実として偽になる。
+/// だから**除外側だけを列挙し、判定できない環境は警告を出す側に倒す**
+/// （`is_standalone` が match_media の失敗を false に倒しているのと同じ方針）。
+///
+/// 副作用として PC ブラウザにも出る。これは受容する（このアプリは iPhone のホーム画面
+/// から使うものなので、PC で開いた人にそう伝わるのは害ではない）。精度が要るように
+/// なったら `maxTouchPoints` を足す。
+pub fn storage_may_split() -> bool {
+    window()
+        .navigator()
+        .user_agent()
+        .map(|ua| !ua.contains("Android"))
+        .unwrap_or(true)
 }
 
 /// 次のフレームで指定 id の要素までスクロールする。

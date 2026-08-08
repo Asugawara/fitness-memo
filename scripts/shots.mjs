@@ -55,6 +55,19 @@ const SEED = [
   { daysAgo: 0, name: 'ダンベルプレス', sets: [[22.5, 12], [22.5, 10]] },
 ];
 
+/**
+ * 撮影用の体重（`daysAgo` 28 → 0 の毎日）。推移タブの第2軸に出る（ADR-0044）。
+ *
+ * ★ 記録日だけでなく**毎日**入れる。体重は毎日でトレーニングは週数回、という
+ *   実際の使い方でしか X 軸の合併ドメイン（最後にトレした日より後の計量まで軸が
+ *   伸びる）が絵に出ない。値は乱数にせず直書きして、撮り直しても同じ絵になるようにする。
+ */
+const BODY_WEIGHTS = [
+  68.4, 68.6, 68.3, 68.5, 68.9, 68.7, 68.6, 69.0, 68.8, 69.1,
+  68.9, 69.2, 69.4, 69.1, 69.3, 69.6, 69.4, 69.2, 69.5, 69.8,
+  69.6, 69.9, 70.1, 69.8, 70.0, 70.3, 70.1, 70.4, 70.2,
+].map((kg, i, all) => ({ daysAgo: all.length - 1 - i, kg }));
+
 async function waitForServer(url, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -105,8 +118,10 @@ try {
     document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
   });
 
-  await page.evaluate((seed) => {
-    const KEY = 'fitness-memo/v2';
+  await page.evaluate(({ seed, weights }) => {
+    // ★ storage.rs の KEY と一致していること。schema 世代ごとにキーを切る運用
+    //   （ADR-0034）なので、ここが古いと getItem が null を返して黙って落ちる
+    const KEY = 'fitness-memo/v3';
     const db = JSON.parse(localStorage.getItem(KEY));
     // Local::now().date_naive() と揃えるため UTC ではなくローカル日付で組み立てる
     const dateKey = (daysAgo) => {
@@ -128,8 +143,15 @@ try {
       });
       db.sessions[key] = session;
     }
+    // トレーニングしていない日にも体重は入る（Session::is_empty はそれを空扱いしない）
+    for (const { daysAgo, kg } of weights) {
+      const key = dateKey(daysAgo);
+      const session = db.sessions[key] ?? { logs: [], body_weight: null, note: '' };
+      session.body_weight = kg;
+      db.sessions[key] = session;
+    }
     localStorage.setItem(KEY, JSON.stringify(db));
-  }, SEED);
+  }, { seed: SEED, weights: BODY_WEIGHTS });
 
   await page.reload();
 

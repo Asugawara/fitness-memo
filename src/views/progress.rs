@@ -228,6 +228,24 @@ pub fn Progress() -> impl IntoView {
         })
     });
 
+    // ★ 体重は「対象」でも「指標」でもなく常に重なる第2軸なので、target / metric を
+    //   購読しない。種目を切り替えても再計算されない
+    let weight = Memo::new(move |_| {
+        let today = dates.today.get();
+        let period = period.get();
+        db.with(|d| {
+            let (from, to) = bounds(period, today, earliest_session(d));
+            let raw = core::body_weight_series(d, from, to);
+            // ★ 合計ではなく平均。`aggregate_weekly` に通すと「全期間」で 400kg になる。
+            //   週キーは指標側と一致するので、2 本の線は同じ日付軸に並ぶ
+            if period == Period::All {
+                core::aggregate_weekly_avg(&raw)
+            } else {
+                raw
+            }
+        })
+    });
+
     let stats = Memo::new(move |_| {
         let s = series.get();
         let last = s.last().map(|(_, v)| *v);
@@ -425,14 +443,33 @@ pub fn Progress() -> impl IntoView {
                 </div>
             </div>
 
-            <Chart series=series unit=unit />
+            <Chart series=series unit=unit weight=weight />
 
             {move || {
                 (period.get() == Period::All)
                     .then(|| {
+                        // 体重が 1 件も無い人に「体重は週平均」と言わない
+                        let note = if weight.get().is_empty() {
+                            "全期間は週単位で集計しています"
+                        } else {
+                            "全期間は週単位で集計しています（体重は週平均）"
+                        };
                         view! {
                             <p class="muted note" data-testid="weekly-note">
-                                "全期間は週単位で集計しています"
+                                {note}
+                            </p>
+                        }
+                    })
+            }}
+
+            // ★ その期間にその種目の記録が無くても体重の点線は出る。左軸が消えているので
+            //   何のグラフか分からなくなるのを 1 行で補う
+            {move || {
+                (series.get().is_empty() && !weight.get().is_empty())
+                    .then(|| {
+                        view! {
+                            <p class="muted note" data-testid="chart-metric-empty">
+                                "この期間、この種目の記録はありません"
                             </p>
                         }
                     })

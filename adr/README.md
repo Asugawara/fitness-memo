@@ -20,6 +20,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0002](architecture/0002-no-router-tab-enum-signal.md) | ルーターを使わずタブを enum signal で切り替える | 採用 |
 | [0003](architecture/0003-wasm-target-scoped-dependencies.md) | UI 依存を wasm32 の target 別 dependencies に置く | 採用 |
 | [0004](architecture/0004-no-chart-library-hand-rolled-svg.md) | グラフライブラリを使わず SVG を自前で描く | 採用 |
+| [0041](architecture/0041-help-figures-as-included-svg.md) | ヘルプの図を `assets/` の SVG に置き `include_str!` + `inner_html` で挿す | 採用 |
 
 ### data-model — データ構造と不変条件
 
@@ -68,6 +69,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0035](ux/0035-record-tab-calendar-with-day-editor.md) | 記録タブをカレンダー + 選択日エディタの単一画面にする | 採用 |
 | [0036](ux/0036-set-entry-prefill-and-focus.md) | セット追加は直前行の重量をコピーして回数欄へフォーカスする | 採用 |
 | [0037](ux/0037-copy-whole-day-menu.md) | 1 日分のメニューは候補リストから 1 タップで丸ごとコピーする | 採用 |
+| [0040](ux/0040-install-guide-banner-and-sheet.md) | ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする | 採用 |
 
 ### deploy — 配信とブランチ運用
 

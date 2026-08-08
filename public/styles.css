@@ -565,15 +565,6 @@ h3 {
   pointer-events: auto;
 }
 
-/* ★ 候補リストを出している間は sticky を解く。
-   sticky の不透明な帯は常に画面下 ~90px を覆うので、そのままだと候補の 2 行目以降が
-   隠れて「前回のメニューは 1 件しかない」ように見える（スクロールすれば出てくるが、
-   トレ中に気付ける作りではない）。カードが 0 枚のこの状態では、sticky の目的である
-   「カードが増えるほど下へ逃げる」現象自体が起きない。 */
-.add-wrap.unpinned {
-  position: static;
-  background: none;
-}
 
 /* ★ キーボード表示中は隠す（bottom を詰めるのは誤り）。
    iOS standalone はキーボード表示時に layout viewport が縮まないので、

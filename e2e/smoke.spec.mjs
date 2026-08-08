@@ -639,9 +639,11 @@ test('部位が同じでも種目構成が違えば別々の候補として並�
 });
 
 test('コピーできる種目が残っていない日は候補に出ない（押せない行を作らない）', async ({ page }) => {
+  // ★ 空セットの日はここでは作れない。seedPastLogs は最後に reload するので
+  //   core::migrate が「空セットのログしか無いセッション」を丸ごと捨てる。
+  //   その状態を仕込んでも検証しているのは migrate であって候補判定ではない
+  //   （空セットの除外は core の recent_menus_skips_days_with_nothing_copyable で見る）
   await seedPastLogs(page, [
-    // 空セットだけの日はそもそもコピー対象が無い
-    { daysAgo: 2, exerciseName: 'ベンチプレス', sets: [] },
     { daysAgo: 3, exerciseName: 'スクワット', sets: [{ weight: 80, reps: 5 }] },
   ]);
   await expect(page.getByTestId('menu-candidate')).toHaveCount(1);

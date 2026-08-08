@@ -184,10 +184,13 @@ pub fn copy_day(db: &mut Db, from: NaiveDate, to: NaiveDate, at: Option<i64>) ->
         return Vec::new();
     }
 
-    // ★ 既にログのある日には書かない。UI は空の日にしか導線を出さないが、カードの
-    //   再構築は Effect 経由なので「ログのある日 × 空のカード」の 1 tick が存在する。
-    //   加えて、空セットのログが残る旧データを弾かないと exercise_id が重複して
-    //   「1 日 1 種目 1 ログ」が壊れる
+    // ★ 既にログのある日には書かない。UI は「カードが 0 枚の日」にしか導線を出さないが、
+    //   カードの再構築は Effect 経由なので「ログのある日 × 空のカード」の 1 tick が
+    //   存在する。そこを踏むと exercise_id が重複して「1 日 1 種目 1 ログ」が壊れる。
+    //
+    //   判定は `is_trained()` ではなく `logs.is_empty()` にする。空セットのログは
+    //   `migrate` が読み込みのたびに落とすので通常は存在しないが、判定を緩めると
+    //   「同じ種目のログが 2 本ある」状態を作れてしまう側に倒れる
     let to_key = date_key(to);
     if db.sessions.get(&to_key).is_some_and(|s| !s.logs.is_empty()) {
         return Vec::new();
@@ -765,8 +768,11 @@ mod tests {
             archived: true,
             ..ex(40, "封印した種目", 1)
         });
-        // 空セットだけの日
-        put(&mut db, d(2026, 8, 2), vec![log(10, &[], None)]);
+        // 空セットだけの日。
+        // ★ 8/5 が拾う種目（10）とは**別の種目**にする。同じ 10 にすると、この日は
+        //   空セットフィルタではなく 8/5 との重複排除で落ちるので、フィルタを丸ごと
+        //   消してもテストが通ってしまう（実際に一度そうなっていた）
+        put(&mut db, d(2026, 8, 2), vec![log(11, &[], None)]);
         // 削除済み種目（db.exercises に無い ID）だけの日
         put(&mut db, d(2026, 8, 3), vec![log(99, &[(10.0, 10)], None)]);
         // アーカイブ済み種目だけの日
@@ -787,24 +793,37 @@ mod tests {
         assert_eq!(got[0].exercises, vec![10], "アーカイブ済みは数にも入れない");
     }
 
+    /// ★ 名前どおり「除外する」ことだけを見るテスト。**走査の打ち切り
+    /// （`break`）そのものは観測できない** — `break` を `continue` に変えても
+    /// 出力は同一になる。打ち切りは速度の話で、外から見える振る舞いではない。
     #[test]
-    fn recent_menus_stops_at_the_lookback_limit() {
+    fn recent_menus_excludes_days_older_than_the_lookback() {
         let mut db = menu_db();
         let before = d(2026, 8, 8);
+        let at_day = |n: i64| before - TimeDelta::days(n);
         put(
             &mut db,
-            before - TimeDelta::days(MENU_LOOKBACK_DAYS - 1),
+            at_day(MENU_LOOKBACK_DAYS - 1),
             vec![log(10, &[(50.0, 10)], None)],
+        );
+        // ちょうど 180 日前は含む（境界を固定する。`<` を `<=` にすると落ちる）
+        put(
+            &mut db,
+            at_day(MENU_LOOKBACK_DAYS),
+            vec![log(20, &[(0.0, 60)], None)],
         );
         put(
             &mut db,
-            before - TimeDelta::days(MENU_LOOKBACK_DAYS + 1),
-            vec![log(20, &[(0.0, 60)], None)],
+            at_day(MENU_LOOKBACK_DAYS + 1),
+            vec![log(30, &[(80.0, 5)], None)],
         );
 
         let got = recent_menus(&db, before, 4);
-        assert_eq!(got.len(), 1, "打ち切りより古い日は候補にしない");
-        assert_eq!(got[0].exercises, vec![10]);
+        assert_eq!(
+            got.iter().map(|c| c.date).collect::<Vec<_>>(),
+            vec![at_day(MENU_LOOKBACK_DAYS - 1), at_day(MENU_LOOKBACK_DAYS)],
+            "181 日前は落とし、ちょうど 180 日前は残す"
+        );
     }
 
     #[test]

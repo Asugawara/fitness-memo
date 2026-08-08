@@ -200,6 +200,52 @@ test('★ UI から過去日に記録すると ExerciseLog.at が null になり
   await expect(page.getByTestId('elapsed')).toHaveText('昨日');
 });
 
+test('当日にメニューを丸ごとコピーすると at に epoch ms が入る（過去日との対照）', async ({ page }) => {
+  const before = Date.now();
+  const source = daysAgo(3);
+
+  // コピー元を UI から作ってから今日に戻る
+  await openDay(page, source);
+  const card = await addExercise(page, 'ベンチプレス');
+  await fillSet(card, 0, { weight: 60, reps: 10 });
+  await blurActive(page);
+  await page.getByTestId('back-to-today').click();
+
+  const candidate = page.getByTestId('menu-candidate');
+  await expect(candidate).toHaveCount(1);
+  await candidate.first().click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
+
+  await flushToStorage(page);
+  const db = await readDb(page);
+  const log = db.sessions[dateKey(new Date())].logs[0];
+  // ★ is_today を無視して常に None を渡す実装だとここで落ちる。
+  //   過去日側のテストだけでは None が正しいのか固定値なのか区別が付かない
+  expect(log.at, '当日コピーは at に epoch ms が入る').not.toBeNull();
+  expect(log.at).toBeGreaterThanOrEqual(before);
+  expect(log.at).toBeLessThanOrEqual(Date.now());
+});
+
+test('未来日にはメニュー候補を出さない（やっていない記録を集計に乗せない）', async ({ page }) => {
+  const source = daysAgo(2);
+  const future = new Date();
+  future.setDate(future.getDate() + 2);
+
+  await openDay(page, source);
+  const card = await addExercise(page, 'ベンチプレス');
+  await fillSet(card, 0, { weight: 60, reps: 10 });
+  await blurActive(page);
+
+  // 今日は候補が出る
+  await page.getByTestId('back-to-today').click();
+  await expect(page.getByTestId('menu-candidate')).toHaveCount(1);
+
+  // 未来日は空でも出さない。カレンダーの日セルは未来でも押せるので到達可能
+  await openDay(page, future);
+  await expect(page.getByTestId('exercise-card')).toHaveCount(0);
+  await expect(page.getByTestId('menu-copy')).toHaveCount(0);
+});
+
 test('★ 過去日にメニューを丸ごとコピーしても at は null のままで、経過表示が日数粒度に落ちる', async ({
   page,
 }) => {

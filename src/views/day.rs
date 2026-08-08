@@ -57,9 +57,9 @@ fn card_dom_id(ex: ExerciseId) -> String {
 
 /// 候補リストに並べる上限。
 ///
-/// ★ 増やさない。候補を出している間は「種目を追加」の sticky を解いてあるので
-/// 隠れはしないが、行が増えるほど縦に伸びてカレンダーの下から遠ざかる。
-/// 4 日サイクルの分割法まではこれで足りる。
+/// ★ 増やさない。上にカレンダーが載っているぶん候補は最初から画面外に始まるので、
+/// 行が増えるほどスクロール量が伸びる。実測（393×760・4 件）では 1 回スクロールすれば
+/// 4 件と「種目を追加」が同時に収まる。4 日サイクルの分割法まではこれで足りる。
 const MENU_CANDIDATES: usize = 4;
 /// 1 行に出す部位名の数。溢れたら「他」を付ける。
 const MENU_GROUP_CAP: usize = 3;
@@ -256,8 +256,12 @@ pub fn DayEditor() -> impl IntoView {
 
     // 「前回のメニューから始める」の候補。
     //
-    // ★ 先に cards で短絡する。空の日でも ConditionRow の体重入力は 1 文字ごとに
-    //   commit するので、これが無いと打鍵のたびに履歴走査が走る
+    // カードがある日は候補を出さないので、履歴を走査せず即座に抜ける。セットの数値は
+    // 1 文字ごとに commit するため、ここを通さないと打鍵のたびに `recent_menus` が走る。
+    //
+    // ★ 逆に**空の日では短絡しない**（`cards` が空なので下へ素通りする）。空の日の
+    //   体重・メモ入力では毎文字 db を読み直すままで、そこは守っていない。候補は数件・
+    //   走査も 180 日で打ち切られるので実測では問題にならないが、取り違えないこと。
     let menus = Memo::new(move |_| {
         if !cards.get().is_empty() {
             return Vec::new();
@@ -410,8 +414,7 @@ pub fn DayEditor() -> impl IntoView {
                     })
             }}
 
-            // ★ 候補リストを出している間は sticky を解く（styles.css の .unpinned 参照）
-            <div class="add-wrap" class:unpinned=move || !menus.get().is_empty()>
+            <div class="add-wrap">
                 <button
                     class="primary"
                     data-testid="add-exercise"

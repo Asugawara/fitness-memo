@@ -93,12 +93,6 @@ h3 {
   margin: 0 auto;
 }
 
-.stub {
-  color: var(--muted);
-  text-align: center;
-  padding: 48px 0;
-}
-
 /* ── ボトムタブ ─────────────────────────────────────────────────────────── */
 
 /* ★ .bottom-tabs / .sheet-backdrop / .sheet は 3 つとも position: fixed。
@@ -160,7 +154,11 @@ h3 {
   gap: 8px;
   margin: 10px 14px 0;
   background: var(--warn);
-  color: #fff;
+  /* ★ #fff 直書きだとダークで破綻する。--warn はライトが濃橙 #b4560c、ダークが
+     淡橙 #e2a06a と明度が反転するため、白固定では実測 light 4.91 / dark 2.22 になる。
+     --accent-text は「強い塗りの上に載せる文字色」でモード間で反転するトークンなので、
+     ここに使うと light 4.91（据え置き）/ dark 8.58 になる。 */
+  color: var(--accent-text);
 }
 
 .notice span {
@@ -805,6 +803,20 @@ h3 {
   min-height: 44px;
   color: var(--text);
   cursor: pointer;
+}
+
+/* 選択状態と当日。calendar.rs の s_day() が同じ宣言をインラインでも出しているので
+   実際にはインライン側が勝つが、値は一致させてある。ここに置いておかないと
+   「class:is-today / class:is-picked が付いているのに CSS に定義が無い」状態になり、
+   インラインを外した瞬間に状態表示が無言で消える。装飾は CSS 側が正とする。 */
+.cal-day.is-today {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.cal-day.is-picked {
+  border-color: var(--accent);
+  background: var(--chip-0);
 }
 
 .cal-num {

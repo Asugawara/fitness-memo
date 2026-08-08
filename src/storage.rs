@@ -119,6 +119,9 @@ pub fn load() -> (Db, Option<String>) {
     //   （旧キーは全損に対する唯一の退路。ADR-0034）。
     let mut quarantined = false;
     let mut newer: Option<u32> = None;
+    // ★ 退避に失敗したまま先へ進むと、下の `save()` が原本を上書きして永久に失う。
+    //   退避が「呼ばれた」ことと「成立した」ことは違う
+    let mut rescue_failed = false;
 
     for key in std::iter::once(KEY).chain(LEGACY_KEYS.iter().copied()) {
         let Some(raw) = store
@@ -135,6 +138,14 @@ pub fn load() -> (Db, Option<String>) {
                 let note = if key == KEY {
                     // 採用したのは現行キー。旧世代のほうが新しければ知らせる（下記）
                     newer_legacy_note(&store, &db)
+                } else if rescue_failed {
+                    // ★ 退避できていない原本が現行キーに残っている。ここで `save` すると
+                    //   それを上書きして永久に失う。**書かずに表示だけする。**
+                    //   次回起動もこの世代から読み直せばよく、原本は残る
+                    Some(
+                        "空き容量が足りず、読めなかったデータを保管できませんでした。以前のバックアップの内容を表示しています（この画面での変更はまだ保存されません。空き容量を空けてください）"
+                            .to_string(),
+                    )
                 } else {
                     // 旧世代から読んだので現行キーへ写す。App 側の Effect が 400ms 後に
                     // 保存するが、その前にプロセスを kill されると次回も旧キーから
@@ -157,14 +168,18 @@ pub fn load() -> (Db, Option<String>) {
             //   必ず退避してから次の世代へ進む。退避先は読んだキー側に付ける
             Err(core::RestoreError::Broken(_)) => {
                 let backup_key = format!("{key}.bak-{}", Local::now().timestamp_millis());
-                let _ = store.set_item(&backup_key, &raw);
+                if store.set_item(&backup_key, &raw).is_err() {
+                    rescue_failed = true;
+                }
                 quarantined = true;
             }
             // 新しい版が書いたデータ。**壊れてはいない**ので退避先も文言も分ける。
             // 「復元できませんでした」と出すと、新しい版に戻せば救えることが伝わらない
             Err(core::RestoreError::Unsupported(v)) => {
                 let backup_key = format!("{key}.newer-{v}-{}", Local::now().timestamp_millis());
-                let _ = store.set_item(&backup_key, &raw);
+                if store.set_item(&backup_key, &raw).is_err() {
+                    rescue_failed = true;
+                }
                 newer = Some(v);
             }
         }

@@ -175,8 +175,31 @@ pub fn download_file(name: &str, json: &str) {
 }
 
 /// クリップボードへ。**クリックハンドラから同期的に呼ぶこと。**
-pub fn copy_text(text: &str) {
-    let _ = window().navigator().clipboard().write_text(text);
+///
+/// ★ 成否を捨ててはいけない。共有シートが使えない端末ではここが最後のバックアップ
+/// 経路で、失敗を「コピーしました」と報告すると、書けたつもりで端末を初期化される。
+/// 表示の更新にジェスチャの窓は要らないので、非同期に受けて構わない。
+pub fn copy_text(text: &str, done: impl FnOnce(bool) + 'static) {
+    let promise = window().navigator().clipboard().write_text(text);
+
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(Some(
+        Box::new(done) as Box<dyn FnOnce(bool)>
+    )));
+    let ok_slot = std::rc::Rc::clone(&slot);
+    let on_ok = Closure::wrap(Box::new(move |_: JsValue| {
+        if let Some(f) = ok_slot.borrow_mut().take() {
+            f(true);
+        }
+    }) as Box<dyn FnMut(JsValue)>);
+    let on_err = Closure::wrap(Box::new(move |_: JsValue| {
+        if let Some(f) = slot.borrow_mut().take() {
+            f(false);
+        }
+    }) as Box<dyn FnMut(JsValue)>);
+
+    let _ = promise.then2(&on_ok, &on_err);
+    on_ok.forget();
+    on_err.forget();
 }
 
 /// 選択されたファイルを読む。読み込みにジェスチャは要らないので非同期でよい。

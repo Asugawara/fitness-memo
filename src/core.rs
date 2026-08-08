@@ -477,10 +477,34 @@ fn normalize(db: &mut Db) {
         merge_same_day(sessions.entry(date_key(date)).or_default(), session);
     }
     for session in sessions.values_mut() {
+        drop_unrepresentable_weights(session);
         dedupe_logs(session);
     }
     sessions.retain(|_, s| !s.is_empty());
     db.sessions = sessions;
+}
+
+/// `f32` で表せない重量を捨てる。**取り込み境界で必ず通すこと。**
+///
+/// ★ ここが無いと、1 回の取り込みで**次回起動から永久に読めなくなる**:
+///
+/// 1. `3.5e38` は f64 では有限なので serde は受理し、f32 へ落として `inf` にする
+/// 2. `serde_json::to_string` は `inf` / `NaN` を**エラーにせず `"weight":null`** と書く
+///    （`save()` は成功するので容量超過の検知にも引っかからない）
+/// 3. 次の起動で `null` は f32 にできず `Broken` → 退避 → 旧世代へ降格。退避した
+///    データも同じ理由で読み戻せない
+///
+/// 負の重量も落とす。UI の `parse_weight` が弾くので入力からは入らないが、取り込みには
+/// 入りうる。入ると [`log_rank`] の「重量は非負」という前提が崩れ、`to_bits` の順序が
+/// 反転してマージが悪いほうを勝たせる。
+fn drop_unrepresentable_weights(s: &mut Session) {
+    for log in &mut s.logs {
+        log.sets
+            .retain(|set| set.weight.is_finite() && set.weight >= 0.0);
+    }
+    if !s.body_weight.is_some_and(|w| w.is_finite() && w > 0.0) {
+        s.body_weight = None;
+    }
 }
 
 /// schema 2 までの形。**ここでしか使わない**ので private に閉じる。
@@ -563,10 +587,22 @@ fn upgrade_from_sequential(old: legacy::Db, ids: &mut IdGen) -> Db {
     // ② プリセット名に一致するものを固定 ID へ寄せる
     pin_presets(&old, &mut groups, &mut exercises);
 
-    // ③ 以降は引くだけ。**`or_insert` は使わない** — 引けないなら ① の列挙漏れ、
-    //    つまりバグなので、黙って新しい ID を作らず落として気づけるようにする
-    let to_group = |id: u32| -> GroupId { groups[&id] };
-    let to_exercise = |id: u32| -> ExerciseId { exercises[&id] };
+    // ③ 以降は引くだけ。**`or_insert` は使わない**（引けたりする度に新しい ID を
+    //    作ると、同じ旧 ID が別々の新 ID になって参照が割れる）。
+    //
+    //    ★ ただし添字アクセスで panic させてはいけない。`migrate` は `load()` から
+    //      呼ばれるので、wasm では panic = abort = 白画面。次回起動も同じデータで
+    //      同じ panic を踏み、`Err` 経路を通らないので**退避もフォールバックも
+    //      発動しない**（起動不能ループ）。デバッグでは落として気づき、本番では
+    //      番兵 ID に落として起動を守る。番兵はどの実体も指さないので合流はしない
+    let to_group = |id: u32| -> GroupId {
+        debug_assert!(groups.contains_key(&id), "① の列挙漏れ: group {id}");
+        groups.get(&id).copied().unwrap_or_default()
+    };
+    let to_exercise = |id: u32| -> ExerciseId {
+        debug_assert!(exercises.contains_key(&id), "① の列挙漏れ: exercise {id}");
+        exercises.get(&id).copied().unwrap_or_default()
+    };
 
     Db {
         schema: SCHEMA,
@@ -868,6 +904,31 @@ impl MergeReport {
 /// セット列の辞書順まで見て、必ず一方に決まるようにする。
 type LogRank = (usize, u64, Vec<(u32, u32)>);
 
+/// 別名写像で同じ種目に落ちたログを 1 本にまとめる。**強いほうを残す。**
+///
+/// 連結してはいけない（同じファイルを 2 回入れるとセットが倍になる）。初出の順序は保つ。
+fn dedupe_by_exercise(logs: Vec<ExerciseLog>) -> Vec<ExerciseLog> {
+    let mut order: Vec<ExerciseId> = Vec::new();
+    let mut best: HashMap<ExerciseId, ExerciseLog> = HashMap::new();
+    for log in logs {
+        match best.get_mut(&log.exercise_id) {
+            Some(existing) => {
+                if log_rank(&log) > log_rank(existing) {
+                    *existing = log;
+                }
+            }
+            None => {
+                order.push(log.exercise_id);
+                best.insert(log.exercise_id, log);
+            }
+        }
+    }
+    order
+        .into_iter()
+        .filter_map(|id| best.remove(&id))
+        .collect()
+}
+
 fn log_rank(l: &ExerciseLog) -> LogRank {
     let volume: f64 = l.sets.iter().map(set_volume).sum();
     (
@@ -959,7 +1020,7 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
     // ── セッション ──
     for (date, session) in theirs.sessions {
         // ★ どの枝を通るかに関わらず、先に写像を適用しておく
-        let logs: Vec<ExerciseLog> = session
+        let mapped: Vec<ExerciseLog> = session
             .logs
             .into_iter()
             .map(|l| ExerciseLog {
@@ -970,6 +1031,12 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
                 ..l
             })
             .collect();
+        // ★ 写像は単射とは限らない。取り込み先で改名済みの種目と、取り込む側の
+        //   同名の別種目が同じ ID に落ちると、同じ日に同一 exercise_id のログが
+        //   2 本できる（ADR-0008「1 日 1 種目 1 ログ」違反）。そのまま入れると
+        //   画面は 1 本目しか見ず、**次回起動の dedupe_logs が別種目のセットを
+        //   連結する** — このリリースが潰そうとしている壊れ方そのものになる
+        let logs = dedupe_by_exercise(mapped);
 
         let Some(dst) = mine.sessions.get_mut(&date) else {
             report.sessions_added += 1;
@@ -2259,6 +2326,44 @@ mod tests {
         assert_eq!(summarize(&Db::default()), DbSummary::default());
     }
 
+    /// ★ 敵対的レビューで実証された全損経路の回帰テスト。
+    ///
+    /// `3.5e38` は f64 では有限なので serde が受理し、f32 に落として `inf` にする。
+    /// `serde_json` はそれを**エラーではなく `"weight":null`** と書くので、保存は成功し、
+    /// **次の起動で自分が書いた JSON を読めなくなる**（`Broken` → 退避 → 旧世代へ降格）。
+    #[test]
+    fn import_drops_weights_that_f32_cannot_represent() {
+        let raw = r#"{
+          "schema": 3, "groups": [], "exercises": [],
+          "sessions": {
+            "2026-08-08": { "logs": [
+              {"exercise_id": "00000000000h", "sets": [
+                {"weight": 3.5e38, "reps": 10},
+                {"weight": 60.0, "reps": 8},
+                {"weight": -5.0, "reps": 5}
+              ]}
+            ], "body_weight": 3.5e38 }
+          }
+        }"#;
+
+        let db = parse_import(raw, &mut ids()).expect("読める");
+
+        let sets = &db.sessions["2026-08-08"].logs[0].sets;
+        assert_eq!(sets.len(), 1, "表せない重量が残った: {sets:?}");
+        assert_eq!(sets[0].weight, 60.0);
+        assert_eq!(db.sessions["2026-08-08"].body_weight, None);
+
+        // ★ 肝心なのは「書き戻せること」。ここが往復するなら次の起動で死なない
+        let round = parse_import(&export_json(&db), &mut ids()).expect("読み戻せる");
+        assert_eq!(round, db);
+        // `body_weight` の null は Option の正常な表現。危険なのは重量側の null
+        // （f32 に戻せず、次の起動で丸ごと Broken になる）
+        assert!(
+            !export_json(&db).contains("\"weight\":null"),
+            "Infinity が weight の null として書き出された"
+        );
+    }
+
     // ── merge_db ────────────────────────────────────────────────────────────
 
     /// 「ログが指す種目名」の一覧。ID ではなく名前で見るので、参照が別物に
@@ -2512,6 +2617,84 @@ mod tests {
 
         assert_eq!(forward.sessions[&day].logs[0].sets, heavy());
         assert_eq!(backward.sessions[&day].logs[0].sets, heavy());
+    }
+
+    /// ★ 敵対的レビューで実証された経路の回帰テスト。
+    ///
+    /// 取り込み先で種目を改名しており、取り込む側に「元の名前の同じ種目」と
+    /// 「新しい名前の別種目」の両方がある場合、写像は 2 つを同じ ID に落とす。
+    /// そのまま同じ日に入れると同一 `exercise_id` のログが 2 本でき、
+    /// **次回起動の `dedupe_logs` が別種目のセットを連結する**。
+    #[test]
+    fn merge_does_not_let_two_incoming_exercises_collapse_into_one_log() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let chest = crate::presets::preset_group_id("胸").expect("プリセット");
+
+        // mine: ベンチプレスを「マイベンチ」に改名済み
+        let mut mine = crate::presets::seeded_db();
+        mine.exercises
+            .iter_mut()
+            .find(|e| e.id == bench)
+            .expect("プリセット")
+            .name = "マイベンチ".into();
+
+        // theirs: 同じ ID の「ベンチプレス」と、別 ID の「マイベンチ」を両方持つ
+        let mut theirs = crate::presets::seeded_db();
+        let other = ExerciseId::from_bits(0xE001);
+        theirs.exercises.push(Exercise {
+            id: other,
+            name: "マイベンチ".into(),
+            group_id: chest,
+            order: 9,
+            archived: false,
+        });
+        theirs.sessions.insert(
+            date_key(d(2026, 9, 9)),
+            Session {
+                logs: vec![
+                    ExerciseLog {
+                        exercise_id: bench,
+                        sets: vec![SetEntry {
+                            weight: 60.0,
+                            reps: 10,
+                        }],
+                        at: None,
+                    },
+                    ExerciseLog {
+                        exercise_id: other,
+                        sets: vec![SetEntry {
+                            weight: 40.0,
+                            reps: 12,
+                        }],
+                        at: None,
+                    },
+                ],
+                ..Session::default()
+            },
+        );
+
+        merge_db(&mut mine, theirs);
+
+        let logs = &mine.sessions[&date_key(d(2026, 9, 9))].logs;
+        let mut seen: Vec<ExerciseId> = logs.iter().map(|l| l.exercise_id).collect();
+        let total = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            total,
+            "同じ日に同一 exercise_id のログが 2 本ある"
+        );
+
+        // 次回起動（= normalize）を通しても、別種目のセットが連結されない
+        let reloaded = parse_import(&export_json(&mine), &mut ids()).expect("読み戻せる");
+        for log in &reloaded.sessions[&date_key(d(2026, 9, 9))].logs {
+            assert!(
+                log.sets.len() <= 1,
+                "別種目のセットが連結された: {:?}",
+                log.sets
+            );
+        }
     }
 
     /// メモを無条件に連結すると、同じファイルを 2 回入れて 2 倍になる。

@@ -126,6 +126,10 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
     let note = RwSignal::new(None::<String>);
     // 取り込み直前の退避キー。「元に戻す」で使う
     let undo = RwSignal::new(None::<String>);
+    // 「元に戻す」の確認待ち。巻き戻しは取り込みと同じくらい破壊的なので確認を挟む
+    let confirm_undo = RwSignal::new(false);
+    // 控えが取れなかったときの「それでも実行する」確認待ち
+    let force = RwSignal::new(false);
     let backups = RwSignal::new(Vec::<String>::new());
 
     let refresh_backups = move || backups.set(storage::backup_keys());
@@ -139,6 +143,11 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         pending.set(None);
         note.set(None);
         pasted.set(String::new());
+        // ★ 「元に戻す」を持ち越さない。iOS の PWA は何日もレジュームされるので、
+        //   残しておくと数日後に誤タップされ、その間の記録が消える
+        undo.set(None);
+        confirm_undo.set(false);
+        force.set(false);
     };
 
     // ── 書き出し ──
@@ -168,19 +177,28 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                 note.set(Some(format!("{name} を書き出しました")));
             }
             transfer::Route::Clipboard => {
-                transfer::copy_text(&json);
-                note.set(Some(
-                    "コピーしました。メモや自分宛メールに貼り付けて保存してください".into(),
-                ));
+                // ★ 成否を待ってから文言を決める。失敗を「コピーしました」と出すと、
+                //   書けたつもりで端末を初期化されかねない
+                transfer::copy_text(&json, move |ok| {
+                    note.set(Some(if ok {
+                        "コピーしました。メモや自分宛メールに貼り付けて保存してください".into()
+                    } else {
+                        "コピーできませんでした。下の「うまくいかないとき」のテキストを長押しして選択してください".to_string()
+                    }));
+                });
             }
         }
     };
 
     let do_copy = move |_| {
-        transfer::copy_text(&payload.get_untracked());
-        note.set(Some(
-            "コピーしました。うまくいかないときは下のテキストを長押しして選択してください".into(),
-        ));
+        transfer::copy_text(&payload.get_untracked(), move |ok| {
+            note.set(Some(if ok {
+                "コピーしました。うまくいかないときは下のテキストを長押しして選択してください"
+                    .into()
+            } else {
+                "コピーできませんでした。下のテキストを長押しして選択してください".to_string()
+            }));
+        });
     };
 
     // ── 読み込み ──
@@ -217,8 +235,20 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         let Some(Pending { db: next, .. }) = pending.get_untracked() else {
             return;
         };
-        // ★ 何よりも先に控えを取る。失敗したらその事実を文言に出す
+        // ★ 何よりも先に控えを取る
         let snapshot = storage::snapshot_current();
+        // ★ 控えが取れないまま進めてはいけない（`storage::snapshot_current` の契約）。
+        //   容量が逼迫しているときに起きるが、そういう端末ほど失うものが大きい。
+        //   実行**後**に「戻せません」と言われても手遅れなので、先に止める
+        if snapshot.is_none() && !force.get_untracked() {
+            force.set(true);
+            note.set(Some(
+                "控えを保存できません（空き容量が足りない可能性があります）。このまま取り込むと元に戻せません。もう一度押すと実行します"
+                    .into(),
+            ));
+            return;
+        }
+        force.set(false);
         let picked = mode.get_untracked();
 
         let message = match picked {
@@ -246,11 +276,12 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         };
         db.with_untracked(storage::replace_now);
 
-        let message = match snapshot {
+        let message = match &snapshot {
             Some(_) => message,
             None => format!("{message}\n（控えを保存できなかったので、元に戻せません）"),
         };
         undo.set(snapshot);
+        confirm_undo.set(false);
         pending.set(None);
         pasted.set(String::new());
         note.set(Some(message));
@@ -261,16 +292,35 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         let Some(key) = undo.get_untracked() else {
             return;
         };
+        // ★ 巻き戻しは取り込みと同じだけ破壊的（戻す先より後に付けた記録が消える）。
+        //   一度確認を挟む
+        if !confirm_undo.get_untracked() {
+            confirm_undo.set(true);
+            note.set(Some(format!(
+                "{} の状態に戻します。それ以降に付けた記録は消えます。もう一度押すと実行します",
+                backup_label(&key)
+            )));
+            return;
+        }
         let Some(raw) = storage::read_backup(&key) else {
             note.set(Some("控えを読み出せませんでした".into()));
             return;
         };
         match storage::with_ids(|ids| core::parse_import(&raw, ids)) {
             Ok(prev) => {
+                // ★ 巻き戻す前の状態も退避する。これが無いと「戻す」で消えた分を
+                //   取り戻す手段が無くなる（復旧操作そのものが全損経路になる）
+                let saved = storage::snapshot_current().is_some();
                 db.set(prev);
                 db.with_untracked(storage::replace_now);
                 undo.set(None);
-                note.set(Some("元に戻しました".into()));
+                confirm_undo.set(false);
+                note.set(Some(if saved {
+                    "元に戻しました（戻す前の状態も保管しています）".to_string()
+                } else {
+                    "元に戻しました（戻す前の状態は保管できませんでした）".to_string()
+                }));
+                refresh_backups();
             }
             Err(e) => note.set(Some(e.message())),
         }

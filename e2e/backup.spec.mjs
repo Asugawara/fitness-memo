@@ -99,13 +99,48 @@ test('置き換えは前後の件数を見せ、控えを取ってから実行�
   const saved = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
   expect(Object.keys(saved.sessions)).toContain('2026-08-01');
 
-  // ★ 「元に戻す」はシートを開いている間だけの導線（リロードすると消える）。
-  //   取り込み直後に間違いに気づくのが典型なので、そこで戻せれば足りる。
-  //   リロード後は下の退避データ一覧から救う
+  // ★ 「元に戻す」は取り込みと同じだけ破壊的（戻す先より後の記録が消える）ので
+  //   確認を挟む。1 回目は実行せず、何に戻るかを出すだけ
+  await page.getByTestId('backup-undo').click();
+  await expect(page.getByTestId('backup-note')).toContainText('もう一度押すと実行します');
+  const notYet = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
+  expect(Object.keys(notYet.sessions), '1 回目のタップで実行された').toContain('2026-08-01');
+
   await page.getByTestId('backup-undo').click();
   await expect(page.getByTestId('backup-note')).toContainText('元に戻しました');
   const restored = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
   expect(Object.keys(restored.sessions)).not.toContain('2026-08-01');
+
+  // ★ 巻き戻し**前**の状態も退避されている。復旧操作そのものが全損経路にならない
+  const preKeysAfterUndo = await page.evaluate(() =>
+    Object.keys(localStorage).filter((k) => k.includes('.pre-')),
+  );
+  expect(preKeysAfterUndo.length, '戻す前の状態が保管されていない').toBeGreaterThan(1);
+});
+
+// ★ シートを閉じたら「元に戻す」を持ち越さない。iOS の PWA は何日もレジュームされる
+//   ので、残しておくと数日後に誤タップされ、その間の記録が消える。
+test('シートを閉じると「元に戻す」は消える', async ({ page }) => {
+  await openSheet(page);
+  const incoming = await page.evaluate(() => {
+    const base = JSON.parse(document.querySelector('[data-testid="backup-json"]').value);
+    base.sessions['2026-08-01'] = {
+      logs: [],
+      body_weight: 70,
+      note: 'あとで消す',
+    };
+    return JSON.stringify(base);
+  });
+
+  await page.getByTestId('backup-pane-import').click();
+  await paste(page, incoming);
+  await page.getByTestId('backup-apply').click();
+  await expect(page.getByTestId('backup-undo')).toBeVisible();
+
+  await page.getByTestId('backup-sheet-close').click();
+  await page.getByTestId('open-backup').click();
+  await page.getByTestId('backup-pane-import').click();
+  await expect(page.getByTestId('backup-undo')).toHaveCount(0);
 });
 
 // ADR-0012 が「退避データを UI から読む手段がない ... iPhone 単体では実質的に

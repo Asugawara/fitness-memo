@@ -104,7 +104,13 @@ h3 {
       隠れた種目を狙ったタップが別タブへの遷移になり、入力を見失う（こちらが重症）
    タブバーにも明示的に値を置く。シート側だけ正の値にしても直るが、タブバーが auto
    のままだと将来 fixed 要素を足したときに同じ事故が再発する。
-   （menu.rs のシートはインラインで z-index を持っていたため無事だった = 原因の裏付け） */
+   （menu.rs のシートはインラインで z-index を持っていたため無事だった = 原因の裏付け）
+
+   現在の重なり順:
+     .add-wrap（sticky）   9  … タブバーより下。シート表示中は backdrop に覆われる
+     .bottom-tabs         10
+     .sheet-backdrop      19
+     .sheet               20 */
 .bottom-tabs {
   position: fixed;
   left: 0;
@@ -171,7 +177,15 @@ h3 {
   margin: 0 0 12px;
 }
 
-/* ── 今日タブ ───────────────────────────────────────────────────────────── */
+/* ── 記録タブ（選択日の入力欄） ─────────────────────────────────────────── */
+
+/* カレンダーと入力欄の境。上に月フッタ、下に日付見出しが来る */
+.day {
+  display: block;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
 
 .day-head {
   display: flex;
@@ -181,7 +195,7 @@ h3 {
 }
 
 .day-head h1 {
-  font-size: 20px;
+  font-size: 18px;
 }
 
 .day-head.past h1 {
@@ -194,57 +208,35 @@ h3 {
 }
 
 .past-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 8px 12px;
+  margin: 6px 0 0;
+  padding: 6px 10px;
   border-radius: 10px;
   border: 1px solid var(--warn);
   color: var(--warn);
-  font-size: 13px;
+  font-size: 12px;
 }
 
+/* ★ 経過と部位チップは常時 1 行。カレンダーが上に載って縦が伸びたので、
+   以前の 34px ヒーロー + 中央寄せチップを置く余地は無い。
+   出し分け（トレ前 / トレ中）もやめて 1 形態に統一してある */
 .hero {
-  text-align: center;
-  padding: 20px 0 12px;
-}
-
-.hero-label {
-  margin: 0;
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.hero-value {
-  margin: 4px 0 16px;
-  font-size: 34px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  color: var(--hero);
-}
-
-.hero.folded {
   display: flex;
   align-items: center;
-  gap: 10px;
   flex-wrap: wrap;
-  text-align: left;
-  padding: 6px 0 10px;
-  font-size: 13px;
+  gap: 6px 10px;
+  padding: 2px 0 10px;
+  font-size: 12px;
   color: var(--muted);
+}
+
+.hero-elapsed {
+  white-space: nowrap;
 }
 
 .chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  justify-content: center;
-}
-
-.chips.inline {
-  justify-content: flex-start;
 }
 
 .chip {
@@ -459,10 +451,32 @@ h3 {
   font-weight: 600;
 }
 
+/* ★「種目を追加」。カード列の末尾に置くと、カードが増えるほど下へ逃げる。
+   探して下スクロールする途中にカードの削除導線があるので、追加しようとして
+   削除する事故が起きていた。sticky で常に画面内へ留める。
+
+   z-index はタブバー(10) より下・バックドロップ(19) より下の 9。
+   （styles.css 冒頭の重なり順コメントを参照。position:fixed / sticky 要素は
+   z-index を省くと DOM 順で重なりが決まり、過去に押せない要素を作っている） */
 .add-wrap {
+  position: sticky;
+  bottom: calc(var(--tabbar) + env(safe-area-inset-bottom) + 8px);
+  z-index: 9;
   display: flex;
   justify-content: center;
   padding: 8px 0 4px;
+  /* 下のカードが透けると sticky に見えないので地を敷く。上端はぼかして境目を消す */
+  background: linear-gradient(to bottom, transparent, var(--bg) 40%);
+}
+
+/* ★ キーボード表示中は隠す（bottom を詰めるのは誤り）。
+   iOS standalone はキーボード表示時に layout viewport が縮まないので、
+   sticky の貼り付き先である「下端」はキーボードの裏になる。bottom:8px にしても
+   ボタンはキーボードに隠れたままで、しかも DevTools では再現しないので
+   E2E でも目視でも検出できない。打ち込み中に追加ボタンは要らないので、
+   タブバーと同じく消すのが ADR-0019 の思想とも一貫する */
+.kb-open .add-wrap {
+  display: none;
 }
 
 .icon-btn {
@@ -879,46 +893,6 @@ h3 {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-}
-
-/* 選択日のパネル。画面末尾なので .card の下余白は落とす */
-.cal-detail {
-  margin-bottom: 0;
-}
-
-/* 右端の指標列を行またぎで揃える */
-.cal-logs {
-  list-style: none;
-  margin: 8px 0 0;
-  padding: 0;
-  font-variant-numeric: tabular-nums;
-}
-
-.cal-log {
-  padding: 1px 0;
-}
-
-.cal-log-name {
-  color: var(--text);
-  font-weight: 600;
-  font-size: 13px;
-}
-
-/* 「この日を編集」/「この日に記録する」。区切り方は .card-foot に揃える */
-.cal-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-}
-
-/* 「記録なし」が無い（記録がある）日でもボタンを右端に寄せる */
-.cal-open {
-  min-height: 44px;
-  margin-left: auto;
 }
 
 /* ── 種目タブ ───────────────────────────────────────────────────────────── */

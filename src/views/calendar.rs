@@ -1,12 +1,14 @@
-//! カレンダータブ。
+//! 記録タブ。**月カレンダー + その下に選択日の入力欄**の 1 画面。
 //!
 //! 月グリッド（日〜土）+ 前月・翌月ナビ。実施日に部位カラーのドット（最大 3 色）。
-//! 月フッタに「実施 N 日 / 合計 X kg·回」。
+//! 月フッタに「実施 N 日 / 合計 / セット」。その下に [`DayEditor`]。
 //!
-//! **この画面の核心は「どの日付にどの筋トレ項目をしたかを追加できる」こと。**
-//! 記録がある日もない日も、タップすればその日付で今日タブを開ける導線を必ず出す。
-//! 最も典型的な「昨日記録し忘れた分をカレンダーから入れる」が成立しなければ要件を
-//! 満たさないので、記録が無い日は「記録なし」＋「この日に記録する」を必ず表示する。
+//! **日セルをタップすると、そのまま下の入力欄がその日のものになる。**
+//! 以前は読み取り専用のサマリと「この日を編集」ボタンを挟んで別タブへ飛ばしていたが、
+//! 「昨日記録し忘れた分を入れる」たびにタブを往復することになっていた。
+//!
+//! 選択日は `DateCtx::selected` **だけ**が持つ。ここにローカルの `picked` を併置すると
+//! 「グリッドで選んだ日」と「入力欄が書き込む日」がずれる余地ができる。
 //!
 //! 実施日の判定は [`Session::is_trained`]（セット付きのログが 1 つでもあるか）で行う。
 //! 過去日を閲覧しただけの空セッションを実施日にしないための境界。
@@ -18,7 +20,8 @@ use crate::core;
 use crate::core::Metric;
 use crate::model::{Db, Group, GroupId, Session};
 
-use super::{Tab, fmt_date, fmt_metric, fmt_set, fmt_weight, use_dates, use_db, use_tab};
+use super::day::DayEditor;
+use super::{fmt_metric, is_standalone, use_dates, use_db};
 
 /// 日曜始まり。`Weekday::num_days_from_sunday()` の 0..=6 とインデックスが一致する。
 const WEEKDAYS: [&str; 7] = ["日", "月", "火", "水", "木", "金", "土"];
@@ -131,79 +134,41 @@ fn month_data(db: &Db, first: NaiveDate) -> MonthData {
     out
 }
 
-// ── 選択日のサマリ ──────────────────────────────────────────────────────────
-
-#[derive(Clone, PartialEq)]
-struct LogLine {
-    name: String,
-    group: String,
-    sets: String,
-    metric: String,
-}
-
-#[derive(Clone, PartialEq, Default)]
-struct DayDetail {
-    logs: Vec<LogLine>,
-    body_weight: Option<String>,
-    note: String,
-}
-
-fn day_detail(db: &Db, date: NaiveDate) -> DayDetail {
-    let Some(session) = db.sessions.get(&core::date_key(date)) else {
-        return DayDetail::default();
-    };
-    let logs = session
-        .logs
-        .iter()
-        .filter(|l| !l.sets.is_empty())
-        .map(|l| {
-            let exercise = db.exercise(l.exercise_id);
-            LogLine {
-                name: exercise.map_or_else(|| "(削除された種目)".to_string(), |e| e.name.clone()),
-                group: exercise
-                    .and_then(|e| db.group(e.group_id))
-                    .map(|g| g.name.clone())
-                    .unwrap_or_default(),
-                sets: l.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  "),
-                metric: fmt_metric(core::log_value(Metric::Volume, l)),
-            }
-        })
-        .collect();
-    DayDetail {
-        logs,
-        body_weight: session.body_weight.map(fmt_weight),
-        note: session.note.clone(),
-    }
-}
-
 // ── 画面 ────────────────────────────────────────────────────────────────────
 
 #[component]
 pub fn Calendar() -> impl IntoView {
     let db = use_db();
     let dates = use_dates();
-    let tabs = use_tab();
 
     // タブ切替のたびにこのコンポーネントは作り直されるので、開くたび「見ている日付」の月
     // から始まる（過去日を編集中なら、その月がそのまま出る）
     let month = RwSignal::new(first_of_month(dates.selected.get_untracked()));
-    let picked = RwSignal::new(dates.selected.get_untracked());
+
+    // 選択日が月をまたいだらグリッドを追従させる（「今日へ戻る」や日跨ぎの resync 経由）。
+    // 逆向き（月ナビ）は選択日を動かさない — 隣の月を眺めるだけで編集対象が変わるのは困る
+    Effect::new(move |_| {
+        let first = first_of_month(dates.selected.get());
+        if month.get_untracked() != first {
+            month.set(first);
+        }
+    });
 
     let data = Memo::new(move |_| db.with(|d| month_data(d, month.get())));
-    let detail = Memo::new(move |_| db.with(|d| day_detail(d, picked.get())));
-    let trained = Memo::new(move |_| detail.with(|d| !d.logs.is_empty()));
-
-    // ★ 日付を先に確定させてからタブを切り替える。
-    //   `TabCtx::switch` は `dates.resync(false)` を通るが、`selected` が `today` と
-    //   食い違っていれば当日へ戻さない実装なので、この順序なら選んだ過去日が残り、
-    //   今日タブ側が「編集中」バナーを出す。
-    let open_day = move |date: NaiveDate| {
-        dates.open(date);
-        tabs.switch(dates, Tab::Today);
-    };
 
     view! {
-        <section class="calendar" data-testid="screen-calendar">
+        <section class="calendar" data-testid="screen-record">
+            // ★ iOS では Safari のタブと standalone PWA で localStorage が共有されない。
+            //   先に Safari で記録すると、ホーム画面に追加した後で全部見えなくなる
+            {(!is_standalone())
+                .then(|| {
+                    view! {
+                        <p class="install-hint" data-testid="install-hint">
+                            "記録を付ける前にホーム画面に追加してください。Safari のタブで付けた記録は引き継がれません"
+                        </p>
+                    }
+                })}
+
             <header class="cal-nav">
                 <button
                     class="icon-btn"
@@ -250,11 +215,14 @@ pub fn Calendar() -> impl IntoView {
                                             class="cal-day"
                                             class:is-trained=c.trained
                                             class:is-today=move || date == dates.today.get()
-                                            class:is-picked=move || date == picked.get()
+                                            class:is-picked=move || date == dates.selected.get()
                                             data-testid="cal-day"
                                             data-date=core::date_key(date)
                                             data-trained=if c.trained { "true" } else { "false" }
-                                            on:click=move |_| picked.set(date)
+                                            // ★ set ではなく open。RwSignal::set は同値でも通知するので、
+                                            //   選択中の日をもう一度タップすると下の ConditionRow が
+                                            //   作り直され、体重欄の「62.」が確定値へ巻き戻る
+                                            on:click=move |_| dates.open(date)
                                         >
                                             <span class="cal-num">{c.day}</span>
                                             <span class="cal-dots">
@@ -302,87 +270,10 @@ pub fn Calendar() -> impl IntoView {
                 </div>
             </dl>
 
-            <article class="card cal-detail" data-testid="cal-detail">
-                <header class="card-head">
-                    <h2 data-testid="cal-detail-date">{move || fmt_date(picked.get())}</h2>
-                </header>
-
-                // 体重・メモは実施の有無に関わらず、入っていれば出す
-                {move || {
-                    let (weight, note) = detail
-                        .with(|d| (d.body_weight.clone(), d.note.trim().to_string()));
-                    let has_note = !note.is_empty();
-                    (weight.is_some() || has_note)
-                        .then(move || {
-                            view! {
-                                <p class="last-row" data-testid="cal-condition">
-                                    {weight
-                                        .map(|w| {
-                                            view! {
-                                                <span data-testid="cal-body-weight">
-                                                    {format!("体重 {w} kg")}
-                                                </span>
-                                            }
-                                        })}
-                                    {has_note
-                                        .then(move || {
-                                            view! { <span data-testid="cal-note">{note}</span> }
-                                        })}
-                                </p>
-                            }
-                        })
-                }}
-
-                {move || {
-                    let logs = detail.with(|d| d.logs.clone());
-                    (!logs.is_empty())
-                        .then(|| {
-                            view! {
-                                <ul class="cal-logs" data-testid="cal-logs">
-                                    {logs
-                                        .into_iter()
-                                        .map(|l| {
-                                            view! {
-                                                <li class="last-row cal-log" data-testid="cal-log">
-                                                    <span class="cal-log-name">
-                                                        {l.name}
-                                                    </span>
-                                                    <span class="group-name">{l.group}</span>
-                                                    <span class="sets">{l.sets}</span>
-                                                    <span class="metric">{l.metric}</span>
-                                                </li>
-                                            }
-                                        })
-                                        .collect::<Vec<_>>()}
-                                </ul>
-                            }
-                        })
-                }}
-
-                // ★ 記録が無い日でも必ず「記録なし」と「この日に記録する」を出す。
-                //   要件の動詞は「カレンダーに対して追加できる」で、最も典型的な
-                //   「昨日記録し忘れた分をカレンダーから入れる」がここで成立する
-                <div class="cal-actions">
-                    {move || {
-                        (!trained.get())
-                            .then(|| {
-                                view! {
-                                    <span class="muted" data-testid="cal-empty">
-                                        "記録なし"
-                                    </span>
-                                }
-                            })
-                    }}
-                    <button
-                        class="primary cal-open"
-                        data-testid="cal-open-day"
-                        data-mode=move || if trained.get() { "edit" } else { "new" }
-                        on:click=move |_| open_day(picked.get_untracked())
-                    >
-                        {move || if trained.get() { "この日を編集" } else { "この日に記録する" }}
-                    </button>
-                </div>
-            </article>
+            // ★ 選択日の入力欄。読み取り専用のサマリと「この日を編集」ボタンは持たない。
+            //   日をタップした時点でここがその日のものになるので、記録がある日も無い日も
+            //   同じ 1 手で書ける（要件「カレンダーに対して追加できる」の成立点）
+            <DayEditor />
         </section>
     }
 }

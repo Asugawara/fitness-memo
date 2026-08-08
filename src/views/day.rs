@@ -1,20 +1,23 @@
-//! 今日タブ（メイン画面）。
+//! 記録タブの下半分。**カレンダーで選んだ 1 日**の入力欄。
 //!
-//! 「非常にシンプル」を満たすため**トレ前の情報とトレ中の情報を排他にする**。
-//! 経過時間ヒーローと部位チップは眺めるための情報で、セット入力中は不要なので
-//! 1 種目でも追加されたら 1 行に畳む。
+//! 単独のタブではなく [`super::calendar`] が自分の下に置くコンポーネント。
+//! 書き込み対象の日付は `DateCtx::selected` だけが決める（カレンダーの選択日と同一）。
+//!
+//! 経過時間と部位チップは「今日どこを鍛えるか」を決めるための情報なので、
+//! カレンダーと入力欄に挟まれた**常時 1 行**に圧縮してある。以前は種目を 1 つでも
+//! 追加したら畳む排他表示にしていたが、上にカレンダーが載って画面が縦に伸びた今は
+//! 大きいヒーローを置く余地が無く、出し分ける意味も無くなった。
 
 use chrono::NaiveDate;
 use leptos::prelude::*;
 
 use crate::core;
 use crate::core::Metric;
-use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, SetEntry};
+use crate::model::{Db, ExerciseId, ExerciseLog, SetEntry};
 
 use super::{
-    fmt_date, fmt_metric, fmt_set, fmt_weight, is_standalone, kb_blur, kb_focus, now_ms,
-    parse_reps, parse_weight, recency_class, scroll_to_id, short_elapsed, use_dates, use_db,
-    use_kb,
+    fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms, parse_reps, parse_weight,
+    recency_class, scroll_to_id, short_elapsed, use_dates, use_db, use_kb,
 };
 
 /// 今日タブが表示しているカード 1 枚。
@@ -85,7 +88,7 @@ fn write_log(db: &mut Db, date: NaiveDate, ex: ExerciseId, sets: Vec<SetEntry>, 
 }
 
 #[component]
-pub fn Today() -> impl IntoView {
+pub fn DayEditor() -> impl IntoView {
     let db = use_db();
     let dates = use_dates();
 
@@ -149,32 +152,6 @@ pub fn Today() -> impl IntoView {
         })
     });
 
-    // 畳んだヒーローに出すのは「今日やった部位」だけ（計画のモック: 最後から 2日5時間 · 胸 3d）
-    let today_chips = Memo::new(move |_| {
-        let today = dates.today.get();
-        let ids: Vec<ExerciseId> = cards.get().iter().map(|c| c.ex).collect();
-        before_today.with(|snapshot| {
-            let by_group = core::elapsed_by_group(snapshot, now_ms(), today);
-            let mut seen: Vec<GroupId> = Vec::new();
-            for ex in &ids {
-                if let Some(e) = snapshot.exercise(*ex)
-                    && !seen.contains(&e.group_id)
-                {
-                    seen.push(e.group_id);
-                }
-            }
-            seen.into_iter()
-                .filter_map(|gid| {
-                    snapshot
-                        .group(gid)
-                        .map(|g| (g.name.clone(), by_group.get(&gid).copied()) as Chip)
-                })
-                .collect::<Vec<_>>()
-        })
-    });
-
-    let training = move || !cards.get().is_empty();
-
     let pick = move |ex: ExerciseId| {
         sheet.set(false);
         let date = core::date_key(dates.selected.get_untracked());
@@ -186,42 +163,60 @@ pub fn Today() -> impl IntoView {
         scroll_to_id(card_dom_id(ex));
     };
 
-    let chip_row = move |chips: Vec<Chip>, class: &'static str| {
-        view! {
-            <div class=format!("chips {class}") data-testid="group-chips">
-                {chips
-                    .into_iter()
-                    .map(|(name, e)| {
-                        let label = e.map_or_else(|| "—".to_string(), short_elapsed);
-                        view! {
-                            <span class="chip" data-recency=recency_class(e) data-testid="group-chip">
-                                <b>{name}</b>
-                                <i>{label}</i>
-                            </span>
-                        }
-                    })
-                    .collect::<Vec<_>>()}
-            </div>
-        }
-    };
-
     view! {
-        <section class="today" data-testid="screen-today">
-            // ★ iOS では Safari のタブと standalone PWA で localStorage が共有されない。
-            //   先に Safari で記録すると、ホーム画面に追加した後で全部見えなくなる
-            {(!is_standalone())
-                .then(|| {
-                    view! {
-                        <p class="install-hint" data-testid="install-hint">
-                            "記録を付ける前にホーム画面に追加してください。Safari のタブで付けた記録は引き継がれません"
-                        </p>
-                    }
-                })}
+        <section class="day" data-testid="screen-day">
+            // ★ 経過と部位チップは常時 1 行。カレンダーのドットは「いつやったか」しか
+            //   示さないので、「どの部位が空いているか」はここでしか読めない
+            <div class="hero" data-testid="hero">
+                // ラベルと値を分けて持つ（値だけを読めるようにしておく）
+                <span class="hero-elapsed">
+                    "最後から "
+                    <b data-testid="elapsed">
+                        {move || {
+                            elapsed.get().map_or_else(|| "—".to_string(), core::humanize)
+                        }}
+                    </b>
+                </span>
+                <div class="chips" data-testid="group-chips">
+                    {move || {
+                        all_chips
+                            .get()
+                            .into_iter()
+                            .map(|(name, e)| {
+                                let label = e.map_or_else(|| "—".to_string(), short_elapsed);
+                                view! {
+                                    <span
+                                        class="chip"
+                                        data-recency=recency_class(e)
+                                        data-testid="group-chip"
+                                    >
+                                        <b>{name}</b>
+                                        <i>{label}</i>
+                                    </span>
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                    }}
+                </div>
+            </div>
 
             <header class="day-head" class:past=move || dates.is_past_edit()>
                 <h1 data-testid="today-date">{move || fmt_date(dates.selected.get())}</h1>
                 {move || {
-                    (!dates.is_past_edit()).then(|| view! { <span class="badge">"今日"</span> })
+                    if dates.is_past_edit() {
+                        view! {
+                            <button
+                                class="link-btn"
+                                data-testid="back-to-today"
+                                on:click=move |_| dates.back_to_today()
+                            >
+                                "今日へ戻る"
+                            </button>
+                        }
+                            .into_any()
+                    } else {
+                        view! { <span class="badge">"今日"</span> }.into_any()
+                    }
                 }}
             </header>
 
@@ -230,50 +225,11 @@ pub fn Today() -> impl IntoView {
                     .is_past_edit()
                     .then(|| {
                         view! {
-                            <div class="past-banner" data-testid="past-banner">
-                                <span>
-                                    {move || format!("{} を編集中", fmt_date(dates.selected.get()))}
-                                </span>
-                                <button
-                                    class="link-btn"
-                                    data-testid="back-to-today"
-                                    on:click=move |_| dates.back_to_today()
-                                >
-                                    "今日へ戻る"
-                                </button>
-                            </div>
+                            <p class="past-banner" data-testid="past-banner">
+                                {move || format!("{} を編集中", fmt_date(dates.selected.get()))}
+                            </p>
                         }
                     })
-            }}
-
-            // 経過時間ヒーロー。過去日編集中は「今」の情報なので出さない
-            {move || {
-                if dates.is_past_edit() {
-                    return None;
-                }
-                let value = elapsed.get().map_or_else(|| "—".to_string(), core::humanize);
-                Some(
-                    if training() {
-                        view! {
-                            <div class="hero folded" data-testid="hero">
-                                <span data-testid="elapsed">{format!("最後から {value}")}</span>
-                                {chip_row(today_chips.get(), "inline")}
-                            </div>
-                        }
-                            .into_any()
-                    } else {
-                        view! {
-                            <div class="hero" data-testid="hero">
-                                <p class="hero-label">"最後のトレーニングから"</p>
-                                <p class="hero-value" data-testid="elapsed">
-                                    {value}
-                                </p>
-                                {chip_row(all_chips.get(), "")}
-                            </div>
-                        }
-                            .into_any()
-                    },
-                )
             }}
 
             // 体重・体調メモ。日付が変わったら初期値ごと作り直す

@@ -66,7 +66,7 @@ async function waitForSwActivated(page) {
 
 /** hidden への visibilitychange を発火させ、pending の debounce 保存を即時 flush する。 */
 async function flushToStorage(page) {
-  await page.getByTestId('screen-today').waitFor({ state: 'visible' });
+  await page.getByTestId('screen-record').waitFor({ state: 'visible' });
   await page.evaluate(() => {
     Object.defineProperty(document, 'hidden', { value: true, configurable: true });
     document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
@@ -128,7 +128,7 @@ test('破損した JSON を注入すると退避キーが作られ、復元失�
   await page.goto('./');
 
   await expect(page.getByTestId('restore-notice')).toContainText('復元できませんでした');
-  await expect(page.getByTestId('screen-today')).toBeVisible();
+  await expect(page.getByTestId('screen-record')).toBeVisible();
 
   const backupKeys = await page.evaluate(() =>
     Object.keys(localStorage).filter((k) => k.startsWith('fitness-memo/v2.bak-')),
@@ -161,7 +161,7 @@ test('旧キー v1 の記録を引き継いで v2 に書き、v1 は消さない
     );
   });
   await page.goto('./');
-  await expect(page.getByTestId('screen-today')).toBeVisible();
+  await expect(page.getByTestId('screen-record')).toBeVisible();
   // 破損扱いになっていない（プリセットへのフォールバックが起きていない）
   await expect(page.getByTestId('restore-notice')).toHaveCount(0);
 

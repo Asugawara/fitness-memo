@@ -39,6 +39,9 @@ async function blurActive(page) {
 
 /** 「種目を追加」シートからプリセットを選び、追加されたカードを返す。 */
 async function addExercise(page, name) {
+  // ★ 入力欄にフォーカスが残ると .kb-open で追加ボタンごと隠れる（iOS でキーボードの
+  //   裏に回るのを避ける仕様）。連続で種目を足すテストのために毎回 blur してから押す
+  await blurActive(page);
   await page.getByTestId('add-exercise').click();
   await page
     .getByTestId('add-sheet')
@@ -56,7 +59,7 @@ async function flushToStorage(page) {
   // page.goto() の解決は wasm(数十MBのdebugビルド)のロード完了を保証しない。
   // today 画面が出た時点なら App() の Effect::new が既に一度走っており
   // PENDING に初期 Db が積まれているので、それを待ってから flush する
-  await page.getByTestId('screen-today').waitFor({ state: 'visible' });
+  await page.getByTestId('screen-record').waitFor({ state: 'visible' });
   await page.evaluate(() => {
     Object.defineProperty(document, 'hidden', { value: true, configurable: true });
     document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
@@ -100,8 +103,8 @@ async function seedPastLogs(page, entries) {
 }
 
 test('1. 初回起動でプリセットが投入され「今日」タブが出る', async ({ page }) => {
-  await expect(page.getByTestId('screen-today')).toBeVisible();
-  await expect(page.getByTestId('tab-today')).toHaveClass(/active/);
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+  await expect(page.getByTestId('tab-record')).toHaveClass(/active/);
 
   // まだ何も記録していないので経過時間は「—」、部位チップは6部位分
   await expect(page.getByTestId('elapsed')).toHaveText('—');
@@ -327,6 +330,7 @@ test('10. 同じ日に同じ種目を再度追加してもカードは増えず�
   await expect(page.getByTestId('exercise-card')).toHaveCount(1);
 
   // 既に追加済みの種目をもう一度ピックしても新規カードは作られない
+  await blurActive(page);
   await page.getByTestId('add-exercise').click();
   await page
     .getByTestId('add-sheet')
@@ -375,7 +379,7 @@ test('11. 種目タブでの改名・部位変更・新規追加が今日タブ�
   await page.getByTestId('new-exercise-submit').click();
 
   // 今日タブの「種目を追加」シートに、改名後の名前・新規種目の両方が反映されている
-  await page.getByTestId('tab-today').click();
+  await page.getByTestId('tab-record').click();
   await page.getByTestId('add-exercise').click();
   const addSheet = page.getByTestId('add-sheet');
   await expect(addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('サイドレイズ改') })).toBeVisible();
@@ -401,7 +405,7 @@ test('11. 種目タブでの改名・部位変更・新規追加が今日タブ�
   await page.getByTestId('archive-exercise').click();
   await expect(page.getByTestId('menu-sheet')).toHaveCount(0);
 
-  await page.getByTestId('tab-today').click();
+  await page.getByTestId('tab-record').click();
   await page.getByTestId('add-exercise').click();
   await expect(
     page.getByTestId('add-sheet').getByTestId('pick-exercise').filter({ hasText: exactText('テスト種目') }),

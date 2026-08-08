@@ -55,6 +55,10 @@ fn card_dom_id(ex: ExerciseId) -> String {
     format!("card-{ex}")
 }
 
+fn confirm_dom_id(ex: ExerciseId) -> String {
+    format!("confirm-{ex}")
+}
+
 /// その日・その種目のセットを丸ごと差し替える。
 fn write_log(db: &mut Db, date: NaiveDate, ex: ExerciseId, sets: Vec<SetEntry>, is_today: bool) {
     let key = core::date_key(date);
@@ -823,7 +827,12 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                 <button
                     class="link-btn danger"
                     data-testid="close-card"
-                    on:click=move |_| confirm_close.set(true)
+                    on:click=move |_| {
+                        confirm_close.set(true);
+                        // ★ 確認はカード末尾に出るので、sticky の「種目を追加」の背後に
+                        //   入って見えないことがある。開いたら必ず視界へ送る
+                        scroll_to_id(confirm_dom_id(ex));
+                    }
                 >
                     "この種目を外す"
                 </button>
@@ -834,7 +843,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                     .get()
                     .then(|| {
                         view! {
-                            <div class="warn-box">
+                            <div class="warn-box" id=confirm_dom_id(ex)>
                                 <p data-testid="close-card-warning">
                                     "この日の記録が消えます"
                                 </p>

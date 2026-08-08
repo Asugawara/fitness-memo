@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::{Datelike, NaiveDate, TimeDelta};
 
-use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, SCHEMA, Session};
+use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, SCHEMA, Session, SetEntry};
 
 /// `Db::sessions` のキー書式。ゼロ埋め ISO なので辞書順 = 時系列順になる。
 pub const DATE_FMT: &str = "%Y-%m-%d";
@@ -97,6 +97,119 @@ pub fn last_log_before(
                 .find(|l| l.exercise_id == ex && !l.sets.is_empty())?;
             Some((parse_date_key(key)?, log))
         })
+}
+
+// ── メニューのコピー ────────────────────────────────────────────────────────
+
+/// メニュー候補として遡る上限。
+///
+/// 打ち切りが要るのは、毎回同じ種目構成しか無いユーザー（全身法）だと重複排除が
+/// 効かず、`limit` 件に届かないまま全履歴を舐めてしまうため。半年より古いメニューを
+/// 「前回」として出す意味も薄い。
+const MENU_LOOKBACK_DAYS: i64 = 180;
+
+/// コピー元のメニュー候補 1 件。
+#[derive(Clone, Debug, PartialEq)]
+pub struct MenuCandidate {
+    pub date: NaiveDate,
+    /// **実際にコピーされる種目 ID。** 元の日のログ順。
+    pub exercises: Vec<ExerciseId>,
+}
+
+/// その日の「コピーできるログ」だけを返す。
+///
+/// ★ [`recent_menus`] と [`copy_day`] は必ず**これを通す**。2 つのフィルタがずれると
+/// 「5 種目」と表示された候補を押しても何も起きない死んだボタンができる。
+///
+/// アーカイブ済みを外すのは、「種目を追加」シートがアーカイブ済みを出さないため。
+/// コピーで復活させると、カードを閉じたあとユーザーが自力で戻せない種目になる。
+fn copyable(db: &Db, date: NaiveDate) -> impl Iterator<Item = &ExerciseLog> {
+    db.sessions
+        .get(&date_key(date))
+        .into_iter()
+        .flat_map(|s| s.logs.iter())
+        .filter(|l| !l.sets.is_empty())
+        .filter(|l| db.exercise(l.exercise_id).is_some_and(|e| !e.archived))
+}
+
+/// 指定日より**厳密に前**の、直近のメニュー候補（新しい順、最大 `limit` 件）。
+///
+/// 同じ種目構成の日は新しい方だけ残す。重複排除のキーを**種目集合**にしているのは、
+/// 部位集合にすると A/B 法（同じ部位構成・違う種目）が 1 件に潰れ、利用者が却下した
+/// 「直前の日をコピー」と同じものへ静かに退化するため。表示は部位名で出すが、
+/// **キーとラベルは別物にする。**
+pub fn recent_menus(db: &Db, before: NaiveDate, limit: usize) -> Vec<MenuCandidate> {
+    let floor = before - TimeDelta::days(MENU_LOOKBACK_DAYS);
+    let mut seen: Vec<Vec<ExerciseId>> = Vec::new();
+    let mut out: Vec<MenuCandidate> = Vec::new();
+    for key in db.sessions.range(..date_key(before)).rev().map(|(k, _)| k) {
+        if out.len() >= limit {
+            break;
+        }
+        let Some(date) = parse_date_key(key) else {
+            continue;
+        };
+        // rev() なので日付は降順。1 つ下回ったら以降も全部下回る
+        if date < floor {
+            break;
+        }
+        let exercises: Vec<ExerciseId> = copyable(db, date).map(|l| l.exercise_id).collect();
+        // 全種目がアーカイブ済み / 削除済み / 空セットの日は候補にしない（押せない行を作らない）
+        if exercises.is_empty() {
+            continue;
+        }
+        let mut dedupe_key = exercises.clone();
+        dedupe_key.sort_unstable();
+        if seen.contains(&dedupe_key) {
+            continue;
+        }
+        seen.push(dedupe_key);
+        out.push(MenuCandidate { date, exercises });
+    }
+    out
+}
+
+/// `from` の日のメニューを `to` の日へ複製し、**複製した種目 ID** を返す。
+///
+/// `at` は呼び出し側が渡す（core は時計を持たない）。当日なら `Some(now)`、
+/// 過去日バックフィルなら `None`。
+///
+/// 体重と体調メモは複製しない。どちらもその日の観測値であってメニュー構成ではない。
+pub fn copy_day(db: &mut Db, from: NaiveDate, to: NaiveDate, at: Option<i64>) -> Vec<ExerciseId> {
+    // `&db` と `&mut db` の借用を分けるため先に取り出しておく
+    let picked: Vec<(ExerciseId, Vec<SetEntry>)> = copyable(db, from)
+        .map(|l| (l.exercise_id, l.sets.clone()))
+        .collect();
+    if picked.is_empty() {
+        return Vec::new();
+    }
+
+    // ★ 既にログのある日には書かない。UI は空の日にしか導線を出さないが、カードの
+    //   再構築は Effect 経由なので「ログのある日 × 空のカード」の 1 tick が存在する。
+    //   加えて、空セットのログが残る旧データを弾かないと exercise_id が重複して
+    //   「1 日 1 種目 1 ログ」が壊れる
+    let to_key = date_key(to);
+    if db.sessions.get(&to_key).is_some_and(|s| !s.logs.is_empty()) {
+        return Vec::new();
+    }
+
+    // ★ or_default で取る。insert で置き換えると、空の日に先に打ち込まれた
+    //   体重・体調メモが消える（ConditionRow は 1 文字ごとに commit する）
+    let session = db.sessions.entry(to_key).or_default();
+    let mut copied = Vec::with_capacity(picked.len());
+    for (exercise_id, sets) in picked {
+        copied.push(exercise_id);
+        // ★ ExerciseLog を clone してはいけない。clone すると元の日の `at` を
+        //   引き継ぎ、`at = None` にしたい過去日バックフィルに古い epoch が入る。
+        //   すると elapsed_matching が Exact を返し、「14日3時間」のような
+        //   捏造された精度が表示される（ADR-0006 が防いでいるのはこれ）
+        session.logs.push(ExerciseLog {
+            exercise_id,
+            sets,
+            at,
+        });
+    }
+    copied
 }
 
 /// `from`〜`to`（両端含む）のセッションを日付順で走査する。
@@ -568,6 +681,293 @@ mod tests {
 
         let (date, _) = last_log_before(&db, 10, d(2026, 8, 8)).expect("8/1 まで遡る");
         assert_eq!(date, d(2026, 8, 1));
+    }
+
+    // ── メニューのコピー ────────────────────────────────────────────────────
+
+    /// 脚に 2 種目足した Db。
+    ///
+    /// `test_db()` 自体は変えない（脚に種目が無いことに依存しているテストがある）。
+    /// 「同じ部位構成・違う種目」を作れないと種目集合キーの検証ができないので、
+    /// ここでだけ足す。
+    fn menu_db() -> Db {
+        let mut db = test_db();
+        db.exercises.push(ex(30, "スクワット", 3));
+        db.exercises.push(ex(31, "レッグプレス", 3));
+        db
+    }
+
+    #[test]
+    fn recent_menus_returns_newest_first_and_excludes_the_day_itself() {
+        let mut db = menu_db();
+        put(&mut db, d(2026, 8, 1), vec![log(10, &[(50.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 4), vec![log(20, &[(0.0, 60)], None)]);
+        put(&mut db, d(2026, 8, 8), vec![log(30, &[(80.0, 5)], None)]);
+
+        let got = recent_menus(&db, d(2026, 8, 8), 4);
+        // 8/8 自身は候補にならない（厳密に前）
+        assert_eq!(
+            got.iter().map(|c| c.date).collect::<Vec<_>>(),
+            vec![d(2026, 8, 4), d(2026, 8, 1)]
+        );
+        assert_eq!(got[0].exercises, vec![20]);
+
+        // limit を超えない
+        assert_eq!(recent_menus(&db, d(2026, 8, 9), 2).len(), 2);
+        assert!(recent_menus(&db, d(2026, 8, 1), 4).is_empty());
+    }
+
+    #[test]
+    fn recent_menus_keeps_two_days_with_the_same_groups_but_different_exercises() {
+        // ★ 重複排除キーを部位集合にすると落ちるテスト。
+        //   A/B 法（同じ脚の日でも種目が違う）が 1 件に潰れると、利用者が却下した
+        //   「直前の日をコピー」と同じものに退化する
+        let mut db = menu_db();
+        put(&mut db, d(2026, 8, 2), vec![log(31, &[(100.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 5), vec![log(30, &[(80.0, 5)], None)]);
+
+        let got = recent_menus(&db, d(2026, 8, 8), 4);
+        assert_eq!(got.len(), 2, "部位が同じでも種目が違えば別の候補");
+        assert_eq!(got[0].exercises, vec![30]);
+        assert_eq!(got[1].exercises, vec![31]);
+    }
+
+    #[test]
+    fn recent_menus_dedupes_days_with_the_same_exercise_set() {
+        let mut db = menu_db();
+        // 並び順が違うだけの同じ構成。キーはソートするので同一視される
+        put(
+            &mut db,
+            d(2026, 8, 2),
+            vec![log(10, &[(50.0, 10)], None), log(11, &[(0.0, 20)], None)],
+        );
+        put(
+            &mut db,
+            d(2026, 8, 5),
+            vec![log(11, &[(0.0, 15)], None), log(10, &[(60.0, 8)], None)],
+        );
+        put(&mut db, d(2026, 8, 6), vec![log(30, &[(80.0, 5)], None)]);
+
+        let got = recent_menus(&db, d(2026, 8, 8), 4);
+        assert_eq!(
+            got.iter().map(|c| c.date).collect::<Vec<_>>(),
+            vec![d(2026, 8, 6), d(2026, 8, 5)],
+            "同じ種目集合は新しい方だけ残る"
+        );
+        // 残るのは新しい方の並び順
+        assert_eq!(got[1].exercises, vec![11, 10]);
+    }
+
+    #[test]
+    fn recent_menus_skips_days_with_nothing_copyable() {
+        let mut db = menu_db();
+        db.exercises.push(Exercise {
+            archived: true,
+            ..ex(40, "封印した種目", 1)
+        });
+        // 空セットだけの日
+        put(&mut db, d(2026, 8, 2), vec![log(10, &[], None)]);
+        // 削除済み種目（db.exercises に無い ID）だけの日
+        put(&mut db, d(2026, 8, 3), vec![log(99, &[(10.0, 10)], None)]);
+        // アーカイブ済み種目だけの日
+        put(&mut db, d(2026, 8, 4), vec![log(40, &[(10.0, 10)], None)]);
+        // アーカイブ済みが混ざった日は、残りだけが候補になる
+        put(
+            &mut db,
+            d(2026, 8, 5),
+            vec![log(40, &[(10.0, 10)], None), log(10, &[(60.0, 8)], None)],
+        );
+
+        let got = recent_menus(&db, d(2026, 8, 8), 4);
+        assert_eq!(
+            got.iter().map(|c| c.date).collect::<Vec<_>>(),
+            vec![d(2026, 8, 5)],
+            "押しても何も起きない候補を作らない"
+        );
+        assert_eq!(got[0].exercises, vec![10], "アーカイブ済みは数にも入れない");
+    }
+
+    #[test]
+    fn recent_menus_stops_at_the_lookback_limit() {
+        let mut db = menu_db();
+        let before = d(2026, 8, 8);
+        put(
+            &mut db,
+            before - TimeDelta::days(MENU_LOOKBACK_DAYS - 1),
+            vec![log(10, &[(50.0, 10)], None)],
+        );
+        put(
+            &mut db,
+            before - TimeDelta::days(MENU_LOOKBACK_DAYS + 1),
+            vec![log(20, &[(0.0, 60)], None)],
+        );
+
+        let got = recent_menus(&db, before, 4);
+        assert_eq!(got.len(), 1, "打ち切りより古い日は候補にしない");
+        assert_eq!(got[0].exercises, vec![10]);
+    }
+
+    #[test]
+    fn copy_day_duplicates_every_set_in_order() {
+        let mut db = menu_db();
+        put(
+            &mut db,
+            d(2026, 8, 5),
+            vec![
+                log(10, &[(60.0, 10), (60.0, 8)], None),
+                log(11, &[(0.0, 20)], None),
+            ],
+        );
+
+        let copied = copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None);
+        assert_eq!(copied, vec![10, 11]);
+
+        let session = db
+            .sessions
+            .get(&date_key(d(2026, 8, 8)))
+            .expect("できている");
+        assert_eq!(
+            session
+                .logs
+                .iter()
+                .map(|l| l.exercise_id)
+                .collect::<Vec<_>>(),
+            vec![10, 11],
+            "元の日のログ順を保つ"
+        );
+        assert_eq!(session.logs[0].sets, vec![set(60.0, 10), set(60.0, 8)]);
+        assert_eq!(session.logs[1].sets, vec![set(0.0, 20)]);
+        // 元の日は変わらない
+        assert_eq!(
+            db.sessions
+                .get(&date_key(d(2026, 8, 5)))
+                .unwrap()
+                .logs
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn copy_day_always_uses_the_given_at_never_the_source_one() {
+        // ★ ExerciseLog を clone すると元の `at` が付いてくる。ADR-0006 の回帰テスト
+        let mut db = menu_db();
+        put(
+            &mut db,
+            d(2026, 8, 5),
+            vec![log(10, &[(60.0, 10)], Some(1_000_000))],
+        );
+
+        copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None);
+        let session = db.sessions.get(&date_key(d(2026, 8, 8))).unwrap();
+        assert_eq!(
+            session.logs[0].at, None,
+            "過去日バックフィルは at を持たない"
+        );
+
+        copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 9), Some(42));
+        let session = db.sessions.get(&date_key(d(2026, 8, 9))).unwrap();
+        assert_eq!(session.logs[0].at, Some(42), "当日入力は渡した値をそのまま");
+    }
+
+    #[test]
+    fn copy_day_with_no_at_keeps_elapsed_in_day_granularity() {
+        // 上の観測形。`at` が漏れると「たった今」寄りの Exact になり要件の出力が嘘になる
+        let mut db = menu_db();
+        let now = 1_800_000_000_000;
+        put(
+            &mut db,
+            d(2026, 8, 1),
+            vec![log(10, &[(60.0, 10)], Some(now))],
+        );
+        copy_day(&mut db, d(2026, 8, 1), d(2026, 8, 6), None);
+
+        let elapsed = elapsed_since_last(&db, now, d(2026, 8, 8)).expect("記録がある");
+        assert_eq!(elapsed, Elapsed::Days(2), "日付キーだけで測る");
+    }
+
+    #[test]
+    fn copy_day_does_nothing_when_the_target_already_has_logs() {
+        let mut db = menu_db();
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(60.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 8), vec![log(20, &[(0.0, 60)], None)]);
+        let before = db.sessions.get(&date_key(d(2026, 8, 8))).cloned();
+
+        assert!(copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None).is_empty());
+        assert_eq!(db.sessions.get(&date_key(d(2026, 8, 8))).cloned(), before);
+    }
+
+    #[test]
+    fn copy_day_refuses_a_target_holding_an_empty_set_log() {
+        // 空セットのログが残る旧データに書き足すと exercise_id が重複し、
+        // 「1 日 1 種目 1 ログ」（ADR-0008）が壊れる
+        let mut db = menu_db();
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(60.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 8), vec![log(10, &[], None)]);
+
+        assert!(copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None).is_empty());
+        let logs = &db.sessions.get(&date_key(d(2026, 8, 8))).unwrap().logs;
+        assert_eq!(logs.len(), 1, "exercise_id が重複しない");
+    }
+
+    #[test]
+    fn copy_day_keeps_the_body_weight_and_note_already_on_the_target() {
+        let mut db = menu_db();
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(60.0, 10)], None)]);
+        db.sessions.insert(
+            date_key(d(2026, 8, 8)),
+            Session {
+                logs: Vec::new(),
+                body_weight: Some(70.5),
+                note: "よく寝た".into(),
+            },
+        );
+
+        assert_eq!(
+            copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None),
+            vec![10]
+        );
+        let session = db.sessions.get(&date_key(d(2026, 8, 8))).unwrap();
+        assert_eq!(session.body_weight, Some(70.5), "体重はコピーで消えない");
+        assert_eq!(session.note, "よく寝た");
+        assert_eq!(session.logs.len(), 1);
+    }
+
+    #[test]
+    fn copy_day_does_not_copy_the_source_body_weight_and_note() {
+        let mut db = menu_db();
+        db.sessions.insert(
+            date_key(d(2026, 8, 5)),
+            Session {
+                logs: vec![log(10, &[(60.0, 10)], None)],
+                body_weight: Some(70.5),
+                note: "絶好調".into(),
+            },
+        );
+
+        copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None);
+        let session = db.sessions.get(&date_key(d(2026, 8, 8))).unwrap();
+        assert_eq!(session.body_weight, None, "その日の観測値は運ばない");
+        assert_eq!(session.note, "");
+    }
+
+    #[test]
+    fn copy_day_leaves_no_empty_session_when_there_is_nothing_to_copy() {
+        let mut db = menu_db();
+        db.exercises.push(Exercise {
+            archived: true,
+            ..ex(40, "封印した種目", 1)
+        });
+        put(&mut db, d(2026, 8, 5), vec![log(40, &[(10.0, 10)], None)]);
+
+        // コピー元が存在しない
+        assert!(copy_day(&mut db, d(2026, 7, 1), d(2026, 8, 8), None).is_empty());
+        // コピー元はあるが全種目アーカイブ済み
+        assert!(copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None).is_empty());
+        assert!(
+            !db.sessions.contains_key(&date_key(d(2026, 8, 8))),
+            "空の Session を置き去りにしない"
+        );
     }
 
     // ── 系列 ────────────────────────────────────────────────────────────────

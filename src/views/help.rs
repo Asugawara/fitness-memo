@@ -27,6 +27,8 @@
 
 use leptos::prelude::*;
 
+use crate::storage;
+
 use super::{is_standalone, storage_may_split};
 
 const STEP1_SVG: &str = include_str!("../../assets/help/step1-share.svg");
@@ -41,27 +43,52 @@ const STEP3_SVG: &str = include_str!("../../assets/help/step3-confirm.svg");
 pub fn InstallBanner() -> impl IntoView {
     let open = RwSignal::new(false);
 
-    // 一度きりの評価で足りる。タブを切り替えると `match tab.get()` が Calendar ごと
-    // 作り直すので、追加したあとに記録タブへ戻ってくれば消える
-    let show = !is_standalone() && storage_may_split();
+    // 環境の判定は一度きりの評価で足りる。タブを切り替えると `match tab.get()` が
+    // Calendar ごと作り直すので、追加したあとに記録タブへ戻ってくれば消える
+    let applicable = !is_standalone() && storage_may_split();
+
+    // ★ 「閉じたか」だけシグナルにする。✕ を押した瞬間に消えてほしいが、
+    //   localStorage を読み直すのは起動時の 1 回で足りる
+    let dismissed = RwSignal::new(storage::install_hint_dismissed());
 
     view! {
-        {show
-            .then(|| {
-                view! {
-                    <button
-                        class="install-hint"
-                        data-testid="install-hint"
-                        on:click=move |_| open.set(true)
-                    >
-                        <span class="install-hint-text">
-                            <strong>"記録を付ける前にホーム画面に追加してください"</strong>
-                            "Safari のタブで付けた記録は引き継がれません"
-                        </span>
-                        <span class="install-hint-cta" aria-hidden="true">"追加のしかた ›"</span>
-                    </button>
-                }
-            })}
+        {move || {
+            (applicable && !dismissed.get())
+                .then(|| {
+                    view! {
+                        // ★ 箱は <div>。<button> の入れ子は不正な HTML なので、
+                        //   「シートを開く」と「閉じる」を兄弟のボタンに分ける
+                        <div class="install-hint" data-testid="install-hint">
+                            <button
+                                class="install-hint-body"
+                                data-testid="install-hint-open"
+                                on:click=move |_| open.set(true)
+                            >
+                                <span class="install-hint-text">
+                                    <strong>"記録を付ける前にホーム画面に追加してください"</strong>
+                                    "Safari のタブで付けた記録は引き継がれません"
+                                </span>
+                                <span class="install-hint-cta" aria-hidden="true">
+                                    "追加のしかた ›"
+                                </span>
+                            </button>
+                            // aria-label は残す。見た目は ✕ でも支援技術と E2E の
+                            // role+name には言葉で届く必要がある
+                            <button
+                                class="icon-btn"
+                                aria-label="この案内を今後表示しない"
+                                data-testid="install-hint-dismiss"
+                                on:click=move |_| {
+                                    storage::dismiss_install_hint();
+                                    dismissed.set(true);
+                                }
+                            >
+                                "✕"
+                            </button>
+                        </div>
+                    }
+                })
+        }}
         <InstallHelpSheet open=open />
     }
 }

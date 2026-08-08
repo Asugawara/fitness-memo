@@ -423,7 +423,7 @@ test.describe('ストレージが分かれうる環境（iPhone の UA）', () =
 
   test('記録タブの警告バナーを押すと手順シートが開く', async ({ page }) => {
     await page.goto('./');
-    await page.getByTestId('install-hint').click();
+    await page.getByTestId('install-hint-open').click();
 
     const sheet = page.getByTestId('install-sheet');
     await expect(sheet).toBeVisible();
@@ -431,6 +431,50 @@ test.describe('ストレージが分かれうる環境（iPhone の UA）', () =
     // include_str! + inner_html の経路が生きているかの検証。SVG に XML 宣言や DOCTYPE が
     // 混ざると HTML フラグメントパーサが bogus comment にして図が 1 枚も出なくなる
     await expect(sheet.locator('.hlp-fig > svg')).toHaveCount(3);
+  });
+
+  test('✕ を押すとバナーが消え、リロードしても復活しない', async ({ page }) => {
+    await page.goto('./');
+    await expect(page.getByTestId('install-hint')).toBeVisible();
+
+    await page.getByTestId('install-hint-dismiss').click();
+    await expect(page.getByTestId('install-hint')).toHaveCount(0);
+
+    await page.reload();
+    await expect(page.getByTestId('screen-record')).toBeVisible();
+    await expect(page.getByTestId('install-hint')).toHaveCount(0);
+  });
+
+  // ADR-0040 が「消しても手順自体は失われない」ことを ✕ を入れる条件にしているので固定する
+  test('✕ で消しても種目タブから手順シートを開ける', async ({ page }) => {
+    await page.goto('./');
+    await page.getByTestId('install-hint-dismiss').click();
+    await expect(page.getByTestId('install-hint')).toHaveCount(0);
+
+    await page.getByTestId('tab-menu').click();
+    await page.getByTestId('install-help-link').click();
+
+    await expect(page.getByTestId('install-sheet')).toBeVisible();
+  });
+
+  // UI のフラグを Db と混ぜないこと（ADR-0014 の「Db の JSON がそのままエクスポート
+  // 形式」という前提を守る）。混ぜると export に UI 状態が混入する
+  test('✕ の記録は Db のキーではなく UI 専用キーに入る', async ({ page }) => {
+    await page.goto('./');
+    await page.getByTestId('install-hint-dismiss').click();
+    await expect(page.getByTestId('install-hint')).toHaveCount(0);
+
+    // Db の保存は 400ms debounce なので、書かれた状態にしてから中身を見る
+    await flushToStorage(page);
+
+    const stored = await page.evaluate(() => ({
+      db: localStorage.getItem('fitness-memo/v3'),
+      ui: localStorage.getItem('fitness-memo/ui/v1'),
+    }));
+    expect(stored.ui).toContain('install_hint_dismissed');
+    // Db が書かれていること自体も確認する（null だと下の assert が空振りする）
+    expect(stored.db).toContain('"schema"');
+    expect(stored.db).not.toContain('install_hint');
   });
 
   test('バナーは「種目を追加」より下にあり、sticky な帯に覆われない', async ({ page }) => {
@@ -448,11 +492,11 @@ test.describe('ストレージが分かれうる環境（iPhone の UA）', () =
     await page.goto('./');
     const sheet = page.getByTestId('install-sheet');
 
-    await page.getByTestId('install-hint').click();
+    await page.getByTestId('install-hint-open').click();
     await page.getByTestId('install-sheet-close').click();
     await expect(sheet).toBeHidden();
 
-    await page.getByTestId('install-hint').click();
+    await page.getByTestId('install-hint-open').click();
     // backdrop は inset:0 なので中央はシート本体に覆われている。左上を突く
     await page.getByTestId('install-sheet-backdrop').click({ position: { x: 8, y: 8 } });
     await expect(sheet).toBeHidden();

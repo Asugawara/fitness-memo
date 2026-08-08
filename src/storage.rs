@@ -361,3 +361,55 @@ fn cancel_pending_timer() {
         handle.clear();
     }
 }
+
+// ── UI の状態 ───────────────────────────────────────────────────────────────
+//
+// ★ `Db` に混ぜない。`Db` の JSON はそのままエクスポート形式になる前提（ADR-0014）で、
+//   UI 都合のフィールドを入れるとその前提が崩れる。schema 世代を切る必要も出る。
+//
+// ★ ADR-0011 の単一キー方針にも反しない。あの方針は「`Db` の参照整合性を部分書き込みで
+//   壊さない」ためのもので、`Db` を一切参照しないフラグには及ばない。
+//
+// ★ このキーは失われても害がない。読めなければ案内がもう一度出るだけなので、
+//   移行（`LEGACY_KEYS`）も退避（`.bak-`）も持たせない。
+
+/// UI の状態を持つキー。`Db` とは分ける。
+const UI_KEY: &str = "fitness-memo/ui/v1";
+
+/// `UI_KEY` に入れる内容。フィールドは全て `#[serde(default)]` にして、
+/// 増減しても既存の JSON がそのまま読めるようにする（読めなくても害はないが、
+/// 無意味に案内が復活するのは避ける）。
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct UiState {
+    #[serde(default)]
+    install_hint_dismissed: bool,
+}
+
+fn ui_state() -> UiState {
+    store()
+        .and_then(|s| s.get_item(UI_KEY).ok().flatten())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// ホーム画面追加の案内を利用者が閉じたか。
+pub fn install_hint_dismissed() -> bool {
+    ui_state().install_hint_dismissed
+}
+
+/// ホーム画面追加の案内を今後出さない。
+///
+/// クリック 1 回きりなので debounce しない（`save_debounced` と違って連打されない）。
+pub fn dismiss_install_hint() {
+    let Some(store) = store() else {
+        return;
+    };
+    // フィールドが増えたら `..ui_state()` で既存値を引き継ぐこと。今は 1 つなので
+    // 書き足すと clippy::needless_update に当たる
+    let next = UiState {
+        install_hint_dismissed: true,
+    };
+    if let Ok(json) = serde_json::to_string(&next) {
+        let _ = store.set_item(UI_KEY, &json);
+    }
+}

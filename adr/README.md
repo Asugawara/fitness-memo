@@ -46,6 +46,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0034](storage/0034-storage-key-per-schema-generation.md) | 保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す | 採用 |
 | [0038](storage/0038-share-sheet-over-download.md) | 書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない | 採用 |
 | [0039](storage/0039-no-same-origin-redundancy.md) | 同一オリジン内の多層バックアップを採用しない | 採用 |
+| [0042](storage/0042-ui-state-in-separate-key.md) | UI の状態を `Db` に入れず別キーに置く | 採用 |
 
 ### pwa — オフライン動作と iOS 実機
 

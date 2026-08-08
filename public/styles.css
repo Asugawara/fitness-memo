@@ -178,20 +178,30 @@ h3 {
      警告であることは枠線と CTA の色で示し、文字は --text / --muted に任せる。
    ★ .notice のようなベタ塗りにもしない。塗りは「閉じられる一時通知」の側に残す。 */
 .install-hint {
-  /* ★ 横並びにしない。iPhone 幅では見出しと「追加のしかた ›」が横幅を取り合って
+  /* 箱は <div>。中身のボタン（シートを開く）と ✕（今後表示しない）を横に並べる。
+     ✕ を上端に寄せるので align-items は flex-start */
+  display: flex;
+  align-items: flex-start;
+  margin: 16px 0 0;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+/* 押すと手順シートが開くほう。枠は箱が持つので自分は持たない。
+   ★ 横並びにしない。iPhone 幅では見出しと「追加のしかた ›」が横幅を取り合って
      見出しが 2 行に折り返す。縦に積んで CTA だけ右寄せにすると 3 行で収まる */
+.install-hint-body {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  width: 100%;
+  flex: 1;
   min-height: 44px;
-  margin: 16px 0 0;
-  padding: 10px 12px;
-  border: 1px solid var(--warn);
-  border-radius: 10px;
+  padding: 6px 0;
+  border: 0;
   background: none;
   color: var(--muted);
-  font-size: 13px;
   text-align: left;
 }
 

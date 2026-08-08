@@ -21,8 +21,8 @@
 
 
 <script type="module">
-import init, * as bindings from '/fitness-memo/fitness-memo-3d85c9c43542393e.js';
-const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-3d85c9c43542393e_bg.wasm' });
+import init, * as bindings from '/fitness-memo/fitness-memo-a06cd4738d777b71.js';
+const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-a06cd4738d777b71_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -31,7 +31,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-<link rel="modulepreload" href="/fitness-memo/fitness-memo-3d85c9c43542393e.js" crossorigin="anonymous" integrity="sha384-Lb/uQ1l/fp54D8sxOIawLWEpTKzzn08FpkIRaRmLhfKQ0lm429Nr1MkRmFlsnbUI"><link rel="preload" href="/fitness-memo/fitness-memo-3d85c9c43542393e_bg.wasm" crossorigin="anonymous" integrity="sha384-8yUspkdhjonC3v6MCgNhER6U3gypGATiGewJE3YI748P8umWReFsMDwziPIEv8wu" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/fitness-memo/fitness-memo-a06cd4738d777b71.js" crossorigin="anonymous" integrity="sha384-Lb/uQ1l/fp54D8sxOIawLWEpTKzzn08FpkIRaRmLhfKQ0lm429Nr1MkRmFlsnbUI"><link rel="preload" href="/fitness-memo/fitness-memo-a06cd4738d777b71_bg.wasm" crossorigin="anonymous" integrity="sha384-A8HVXbuvCDwvL+Nbw+oPZ5MGt5iCRWodhyRQ6uGGSs76tVlhG4qrMduiSkPGGT6m" as="fetch" type="application/wasm"></head>
 <body>
 <script>
 if ('serviceWorker' in navigator) {

@@ -218,7 +218,7 @@ test('オフラインでも起動し記録が読める（SW の navigate 分岐�
     expect(response?.fromServiceWorker()).toBe(true);
 
     await expect(page.getByTestId('exercise-card')).toHaveCount(1);
-    await expect(page.getByTestId('today-metric')).toHaveText('600 kg·回');
+    await expect(page.getByTestId('today-metric')).toHaveText('600');
 
     await context.setOffline(false);
   } finally {

@@ -13,7 +13,7 @@ use chrono::{Datelike, Local, NaiveDate, Weekday};
 use leptos::prelude::*;
 
 use crate::core::Elapsed;
-use crate::model::{Db, Kind, SetEntry};
+use crate::model::{Db, SetEntry};
 use crate::storage;
 
 use calendar::Calendar;
@@ -199,22 +199,15 @@ pub fn parse_reps(s: &str) -> Option<u32> {
     s.trim().parse::<u32>().ok().filter(|r| *r > 0)
 }
 
-/// 1 セットの表示。"60×10" / "+10×8" / "60秒"
-pub fn fmt_set(kind: Kind, s: &SetEntry) -> String {
-    match kind {
-        Kind::Weighted => format!("{}×{}", fmt_weight(s.weight), s.reps),
-        // Bodyweight の weight は「追加重量」。指標には入らないが表示はする
-        Kind::Bodyweight if s.weight > 0.0 => format!("+{}×{}", fmt_weight(s.weight), s.reps),
-        Kind::Bodyweight => format!("{}", s.reps),
-        Kind::Duration => format!("{}秒", s.reps),
-    }
-}
-
-/// レップ欄の単位ラベル。
-pub fn reps_unit(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Duration => "秒",
-        _ => "回",
+/// 1 セットの表示。重量ありなら "60×10"、重量なしなら "12"。
+///
+/// 単位（回 / 秒）は添えない。プランクの 60 に「回」と付くほうが嘘になるし、
+/// それが秒だと分かるのは種目名からで、表記から読むものではない。
+pub fn fmt_set(s: &SetEntry) -> String {
+    if s.weight > 0.0 {
+        format!("{}×{}", fmt_weight(s.weight), s.reps)
+    } else {
+        format!("{}", s.reps)
     }
 }
 

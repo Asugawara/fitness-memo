@@ -8,12 +8,13 @@ use chrono::NaiveDate;
 use leptos::prelude::*;
 
 use crate::core;
-use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, Kind, SetEntry};
+use crate::core::Metric;
+use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, SetEntry};
 
 use super::{
     fmt_date, fmt_metric, fmt_set, fmt_weight, is_standalone, kb_blur, kb_focus, now_ms,
-    parse_reps, parse_weight, recency_class, reps_unit, scroll_to_id, short_elapsed, use_dates,
-    use_db, use_kb,
+    parse_reps, parse_weight, recency_class, scroll_to_id, short_elapsed, use_dates, use_db,
+    use_kb,
 };
 
 /// 今日タブが表示しているカード 1 枚。
@@ -484,10 +485,6 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
 
     // Memo にするのは「値が変わったときだけ」下流を再描画させるため。
     // 素の closure だと db が動くたびに構造ごと作り直され、入力中の文字列が消える
-    let kind = Memo::new(move |_| {
-        db.with(|d| d.exercise(ex).map(|e| e.kind))
-            .unwrap_or(Kind::Weighted)
-    });
     let name = Memo::new(move |_| {
         db.with(|d| d.exercise(ex).map(|e| e.name.clone()))
             .unwrap_or_else(|| "(削除された種目)".to_string())
@@ -542,6 +539,22 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
         vec![Row::blank(0)]
     } else {
         initial
+    });
+
+    // ★ この種目が普段「重量を使う」種目かを**実データから**判定する。
+    //
+    // 旧実装は `Kind::Weighted` で判定していたが `Kind` は無くなった。単に
+    // 判定を消すわけにいかないのは、新しい指標が「重量が空 = 重量 1」だから。
+    // ベンチプレスで重量を入れ忘れると 600 が黙って 10 になり、グラフが崩れても
+    // 気づく手掛かりが無い。逆に全種目で警告を出すと懸垂 12 回の毎行に
+    // 「重量未入力」が出て邪魔になる。
+    //
+    // 前回ログか、この日の他の行に重量が入っていれば「重量を使う種目」とみなす。
+    let uses_weight = Memo::new(move |_| {
+        last.with(|l| {
+            l.as_ref()
+                .is_some_and(|(_, log)| log.sets.iter().any(|s| s.weight > 0.0))
+        }) || rows.with(|rs| rs.iter().any(|r| parse_weight(&r.weight) > 0.0))
     });
 
     let commit = move || {
@@ -616,7 +629,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
             d.sessions
                 .get(&key)
                 .and_then(|s| s.log_of(ex))
-                .map_or(0.0, |l| core::log_metric(kind.get(), l))
+                .map_or(0.0, |l| core::log_value(Metric::Volume, l))
         })
     };
 
@@ -641,18 +654,8 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                     Some((date, log)) => {
                         let days = (dates.selected.get() - date).num_days();
                         let when = core::humanize(core::Elapsed::Days(days));
-                        let k = kind.get();
-                        let sets = log
-                            .sets
-                            .iter()
-                            .map(|s| fmt_set(k, s))
-                            .collect::<Vec<_>>()
-                            .join("  ");
-                        let metric = format!(
-                            "{} {}",
-                            fmt_metric(core::log_metric(k, &log)),
-                            core::unit_of(k),
-                        );
+                        let sets = log.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  ");
+                        let metric = fmt_metric(core::log_value(Metric::Volume, &log));
                         view! {
                             <span class="when" data-testid="last-log">{format!("前回 {when}")}</span>
                             <span class="sets">{sets}</span>
@@ -688,10 +691,10 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                         let index = move || {
                             rows.with(|rs| rs.iter().position(|r| r.key == key).map_or(0, |i| i + 1))
                         };
-                        // Weighted で reps だけ入っている行は「入力忘れ」の可能性が高い。
-                        // 黙って指標を減らさず、行にヒントを出して保持する
+                        // 重量を使う種目で reps だけ入っている行は「入力忘れ」の可能性が高い。
+                        // 黙って指標を変えず、行にヒントを出して保持する
                         let weight_missing = move || {
-                            kind.get() == Kind::Weighted
+                            uses_weight.get()
                                 && rows.with(|rs| {
                                     rs.iter()
                                         .find(|r| r.key == key)
@@ -704,10 +707,10 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                         view! {
                             <div class="set-row" data-testid="set-row">
                                 <span class="set-no">{index}</span>
-                                {move || {
-                                    (kind.get() != Kind::Duration)
-                                        .then(|| {
-                                            view! {
+                                {
+                                    // 重量欄は常に出す。空のままなら重量 1 として数えられるので、
+                                    // 自重種目でも時間種目でも「入れなければよい」で成立する
+                                    view! {
                                                 <input
                                                     class="num"
                                                     type="text"
@@ -731,8 +734,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                                 <span class="unit">"kg"</span>
                                                 <span class="times">"×"</span>
                                             }
-                                        })
-                                }}
+                                }
                                 <input
                                     class="num"
                                     type="text"
@@ -752,7 +754,8 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                         commit();
                                     }
                                 />
-                                <span class="unit">{move || reps_unit(kind.get())}</span>
+                                // 回数欄に単位は添えない。プランクの 60 に「回」と付くほうが
+                                // 嘘になるし、それが秒だと分かるのは種目名からで表記からではない
                                 <button
                                     class="icon-btn"
                                     aria-label="このセットを削除"
@@ -786,9 +789,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
             // 比べても意味がないため（比較は推移タブで行う）
             <footer class="card-foot">
                 <span>"今日"</span>
-                <strong data-testid="today-metric">
-                    {move || format!("{} {}", fmt_metric(today_metric()), core::unit_of(kind.get()))}
-                </strong>
+                <strong data-testid="today-metric">{move || fmt_metric(today_metric())}</strong>
             </footer>
         </article>
     }

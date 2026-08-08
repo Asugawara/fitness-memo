@@ -24,6 +24,19 @@ function exactText(s) {
   return new RegExp(`^${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
 }
 
+/**
+ * フォーカスを外す。
+ *
+ * ★ 入力欄にフォーカスが残っていると `.app` に `kb-open` が付き、styles.css の
+ *   `.kb-open .bottom-tabs { display: none }` でタブバーごと消える（iOS の
+ *   キーボード対策なので設計どおり）。blur せずにタブを押すとクリックがタイムアウトする。
+ */
+async function blurActive(page) {
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+}
+
 /** 「種目を追加」シートからプリセットを選び、追加されたカードを返す。 */
 async function addExercise(page, name) {
   await page.getByTestId('add-exercise').click();
@@ -113,7 +126,7 @@ test('2. 種目を追加してセットを2行入力すると指標表示が正�
   await rows.nth(1).getByTestId('set-weight').fill('60');
   await rows.nth(1).getByTestId('set-reps').fill('8');
 
-  await expect(card.getByTestId('today-metric')).toHaveText('1,080 kg·回');
+  await expect(card.getByTestId('today-metric')).toHaveText('1,080');
 });
 
 test('3. hidden への visibilitychange を発火してからリロードしても入力が残る', async ({ page }) => {
@@ -127,7 +140,7 @@ test('3. hidden への visibilitychange を発火してからリロードして�
   await page.reload();
 
   const reloadedCard = page.getByTestId('exercise-card');
-  await expect(reloadedCard.getByTestId('today-metric')).toHaveText('600 kg·回');
+  await expect(reloadedCard.getByTestId('today-metric')).toHaveText('600');
   await expect(reloadedCard.getByTestId('set-row').nth(0).getByTestId('set-weight')).toHaveValue('60');
   await expect(reloadedCard.getByTestId('set-row').nth(0).getByTestId('set-reps')).toHaveValue('10');
 });
@@ -185,7 +198,7 @@ test('7. 部位チップは実施部位に日数、未実施の部位には「�
   await expect(page.getByTestId('group-chip').filter({ hasText: '体幹' })).toContainText('—');
 });
 
-test('9. 推移タブの種目別グラフに2点描かれ、単位は種目の Kind で決まる（推論ではない）', async ({ page }) => {
+test('9. 推移タブの種目別グラフに2点描かれ、重量なしの記録も指標を持つ', async ({ page }) => {
   await seedPastLogs(page, [
     { daysAgo: 2, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
     { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 8 }] },
@@ -195,20 +208,73 @@ test('9. 推移タブの種目別グラフに2点描かれ、単位は種目の 
   await page.getByTestId('tab-progress').click();
   await expect(page.getByTestId('screen-progress')).toBeVisible();
 
-  // 既定選択は最初の種目=ベンチプレス（Kind::Weighted）。2点入っていること
+  // 既定選択は記録のある最初の種目=ベンチプレス。2点入っていること
   const chart = page.getByTestId('chart');
   await expect(chart).toHaveAttribute('data-points', '2');
   // SVG 属性は無検査で setAttribute されるため、viewBox や stroke-width を snake_case で
   // 書くとコンパイルは通るのに実行時に黙って無視される罠がある。polyline が実際に
   // 描画されていることまで確認する（属性名だけでなく描画結果を見る）
   await expect(chart.locator('polyline')).toHaveCount(1);
-  await expect(page.getByTestId('stat-best')).toHaveText('600 kg·回');
+  await expect(page.getByTestId('stat-best')).toHaveText('600');
 
-  // Kind::Bodyweight（懸垂）に切り替えると単位が「回」になる。データからの推論では
-  // なく種目の明示属性で決まることの検証: 推論方式だと自重種目に加重した瞬間に
-  // 系列全体の単位が volume へ切り替わり、過去データが遡及的に潰れてしまう
+  // ★ 重量を入れない記録（懸垂 12 回）も 0 に潰れず 12 になる。
+  //   指標は「重量 × 回数、重量が空なら重量 1」の単一式なので、種目ごとに
+  //   式を切り替えなくても自重種目が実質レップ数として意味を持つ
   await page.getByTestId('target-select').selectOption({ label: '懸垂' });
-  await expect(page.getByTestId('stat-best')).toHaveText('12 回');
+  await expect(page.getByTestId('stat-best')).toHaveText('12');
+});
+
+test('推移タブの指標セグメントでボリューム / セット数 / 回数を切り替えられる', async ({ page }) => {
+  await seedPastLogs(page, [
+    {
+      daysAgo: 1,
+      exerciseName: 'ベンチプレス',
+      sets: [
+        { weight: 60, reps: 10 },
+        { weight: 60, reps: 8 },
+      ],
+    },
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+  const best = page.getByTestId('stat-best');
+  const metrics = page.getByTestId('metric-select').getByTestId('metric-btn');
+
+  // 既定はボリューム。60×10 + 60×8 = 1,080（単位表記なし）
+  await expect(best).toHaveText('1,080');
+
+  await metrics.filter({ hasText: 'セット数' }).click();
+  await expect(best).toHaveText('2 セット');
+
+  await metrics.filter({ hasText: '回数' }).click();
+  await expect(best).toHaveText('18 回');
+
+  // ★ 単位は指標だけで決まる。対象種目を切り替えても軸の意味は変わらない
+  //   （旧 Kind 方式では種目ごとに単位が変わっていた）
+  await page.getByTestId('target-select').selectOption({ label: '胸' });
+  await expect(best).toContainText('回');
+});
+
+test('推移タブの候補には記録のある種目だけが出る', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+
+  await page.getByTestId('tab-progress').click();
+
+  const options = page.getByTestId('target-select').locator('option');
+  await expect(options.filter({ hasText: exactText('ベンチプレス') })).toHaveCount(1);
+  // プリセットは 28 種目あるが、使っていないものは並べない
+  await expect(options.filter({ hasText: exactText('スクワット') })).toHaveCount(0);
+  await expect(options.filter({ hasText: exactText('プランク') })).toHaveCount(0);
+  // 記録のある種目を持たない部位も出ない
+  await expect(options.filter({ hasText: exactText('脚') })).toHaveCount(0);
+  await expect(options.filter({ hasText: exactText('胸') })).toHaveCount(1);
+});
+
+test('記録が 1 件も無いと推移タブは空状態の説明を出す', async ({ page }) => {
+  await page.getByTestId('tab-progress').click();
+  await expect(page.getByTestId('progress-empty')).toContainText('まだ記録がありません');
 });
 
 // worker-d が実機相当の網羅スイープで見つけた真バグの退行テスト。Y軸ラベルは
@@ -273,11 +339,11 @@ test('10. 同じ日に同じ種目を再度追加してもカードは増えず�
   await expect(row0.getByTestId('set-weight')).toHaveValue('70');
 });
 
-test('11. 種目タブでの改名・部位変更・Kind変更・新規追加が今日タブに反映され、アーカイブは推移タブから参照できる', async ({ page }) => {
+test('11. 種目タブでの改名・部位変更・新規追加が今日タブに反映され、アーカイブは推移タブから参照できる', async ({ page }) => {
   await page.getByTestId('tab-menu').click();
   await expect(page.getByTestId('screen-menu')).toBeVisible();
 
-  // 改名 + 部位変更（肩→腕）+ Kind変更（加重→自重）を1つの種目に対して行う
+  // 改名 + 部位変更（肩→腕）を1つの種目に対して行う
   await page.getByTestId('exercise-name').filter({ hasText: exactText('サイドレイズ') }).click();
   const menuSheet = page.getByTestId('menu-sheet');
   await expect(menuSheet).toBeVisible();
@@ -289,17 +355,10 @@ test('11. 種目タブでの改名・部位変更・Kind変更・新規追加が
     .filter({ hasText: exactText('腕') })
     .click();
 
-  // ★ Kind はデータから推論せず種目の明示属性。変更時は「グラフの単位が変わります」を
-  // 必ず挟む（自重種目に加重した瞬間に系列全体の単位が切り替わり過去データが遡及的に
-  // 壊れるのを防ぐ設計）。警告を経てから確定する
-  await page
-    .getByTestId('exercise-kinds')
-    .getByTestId('kind-option')
-    .filter({ hasText: /^自重/ })
-    .click();
-  await expect(page.getByTestId('kind-warning')).toContainText('単位が変わります');
-  await page.getByTestId('kind-confirm').click();
-  await expect(page.getByTestId('kind-warning')).toHaveCount(0);
+  // ★ 種目は「指標の種類」を持たない。加重 / 自重 / 時間の区別は種目名から読めるので
+  //   選ばせる意味が無かった（指標は core::set_volume の単一式に統一されている）
+  await expect(menuSheet.getByTestId('kind-option')).toHaveCount(0);
+  await expect(menuSheet).not.toContainText('種類');
 
   await page.getByTestId('menu-sheet-close').click();
 
@@ -322,9 +381,17 @@ test('11. 種目タブでの改名・部位変更・Kind変更・新規追加が
   await expect(addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('サイドレイズ改') })).toBeVisible();
   await expect(addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('サイドレイズ') })).toHaveCount(0);
   await expect(addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('テスト種目') })).toBeVisible();
-  // sheet-backdrop はビューポート全体を覆うが、クリック位置の中心はシート本体の
-  // 裏に隠れて弾かれる。「閉じる」ボタンには testid が無いので role+text で取る
-  await page.getByRole('button', { name: '閉じる' }).click();
+
+  // ★ 推移の候補は「記録がある種目」だけなので、アーカイブ後も参照できることを
+  //   確かめるには先に 1 件記録しておく必要がある
+  await addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('テスト種目') }).click();
+  const testCard = page
+    .getByTestId('exercise-card')
+    .filter({ has: page.getByTestId('card-name').filter({ hasText: exactText('テスト種目') }) });
+  await testCard.getByTestId('set-reps').first().fill('10');
+  // 入力欄にフォーカスが残ると .kb-open でタブバーごと消える（iOS のキーボード対策）。
+  // blur しないと次のタブ切り替えがヒットターゲット判定で落ちる
+  await blurActive(page);
 
   // アーカイブ: 今日タブの追加シートには出なくなるが、推移タブのセレクタでは
   // 末尾の「アーカイブ済み」セクションから参照できる（過去ログの exercise_id 参照を
@@ -372,7 +439,7 @@ test('12. 重量入力の中間状態("6.")でクラッシュせず、"6.5"ま�
   await expect(weight).toHaveValue('6.5');
 
   // 6.5 × 2 = 13。"6." で止まっていた/クラッシュしていれば 12 のままか反映されない
-  await expect(card.getByTestId('today-metric')).toHaveText('13 kg·回');
+  await expect(card.getByTestId('today-metric')).toHaveText('13');
 });
 
 // 以下2件は計画の12ケースには無い追加の退行テスト。worker-d が実機相当の検証で見つけた

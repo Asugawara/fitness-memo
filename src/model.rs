@@ -8,7 +8,14 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 /// `Db::schema` の現在値。
-pub const SCHEMA: u32 = 1;
+///
+/// 2 で `Exercise.kind`（加重 / 自重 / 時間）を廃止した。指標は「重量 × 回数、
+/// 重量が空なら重量 1」の単一式になり、どの軸で見るかは画面側の設定
+/// （[`crate::core::Metric`]）が持つ。
+///
+/// ★ フィールドを消す変更は前方互換を壊す（旧版の serde が `missing field` で
+/// 拒否する）。schema を上げるときは `storage::KEY` も必ず切ること。
+pub const SCHEMA: u32 = 2;
 
 pub type GroupId = u32;
 pub type ExerciseId = u32;
@@ -22,27 +29,20 @@ pub struct Group {
     pub order: u32,
 }
 
-/// 指標の種類。**種目作成時にユーザーが選ぶ**（データからの推論はしない）。
+/// 種目。
 ///
-/// 推論が破綻する例: 自重ディップスを 12 週記録した後にベルトで +10kg 付けると
-/// 「全て weight == 0」が偽になり、系列全体が volume 指標へ切り替わって過去 12 週が
-/// 0 の直線に潰れる。
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Kind {
-    /// 指標 = Σ(weight × reps)、単位 "kg·回"
-    Weighted,
-    /// 指標 = Σ(reps)、単位 "回"。`weight` は「追加重量」として表示のみ
-    Bodyweight,
-    /// `reps` を秒として扱う。指標 = Σ(reps)、単位 "秒"
-    Duration,
-}
-
+/// ★ 指標の種類（旧 `Kind`: 加重 / 自重 / 時間）は**持たない**。種目名を見れば
+/// 懸垂が自重でプランクが時間だと分かるので、ユーザーに選ばせる意味が無かった。
+/// 指標は [`crate::core::set_volume`] の単一式に統一され、どの軸で見るかは
+/// [`crate::core::Metric`]（画面の表示設定）が決める。
+///
+/// schema 1 の JSON に残っている `"kind"` は serde が未知フィールドとして無視する
+/// （`deny_unknown_fields` を付けていないのはこのため）。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Exercise {
     pub id: ExerciseId,
     pub name: String,
     pub group_id: GroupId,
-    pub kind: Kind,
     pub order: u32,
     #[serde(default)]
     pub archived: bool,

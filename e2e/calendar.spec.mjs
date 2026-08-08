@@ -166,7 +166,7 @@ test('★ UI から過去日に記録すると ExerciseLog.at が null になり
 
   const card = await addExercise(page, 'ベンチプレス');
   await fillSet(card, 0, { weight: 60, reps: 10 });
-  await expect(card.getByTestId('today-metric')).toHaveText('600 kg·回');
+  await expect(card.getByTestId('today-metric')).toHaveText('600');
 
   await flushToStorage(page);
 
@@ -235,7 +235,7 @@ test('★ 記録が無い日をタップして「この日に記録する」か�
 
   const card = await addExercise(page, 'スクワット');
   await fillSet(card, 0, { weight: 80, reps: 5 });
-  await expect(card.getByTestId('today-metric')).toHaveText('400 kg·回');
+  await expect(card.getByTestId('today-metric')).toHaveText('400');
 
   // カレンダーに戻るとその日が実施日になり、サマリと「この日を編集」に変わる
   await openCalendarOn(page, target);
@@ -247,7 +247,7 @@ test('★ 記録が無い日をタップして「この日に記録する」か�
   await expect(log).toHaveCount(1);
   await expect(log).toContainText('スクワット');
   await expect(log).toContainText('80×5');
-  await expect(log).toContainText('400 kg·回');
+  await expect(log).toContainText('400');
   await expect(page.getByTestId('cal-empty')).toHaveCount(0);
   await expect(page.getByTestId('cal-open-day')).toHaveAttribute('data-mode', 'edit');
 });
@@ -271,7 +271,7 @@ test('記録がある日は「この日を編集」で開き直せ、既存の�
   await expect(restored).toHaveCount(1);
   await expect(restored.getByTestId('set-weight').first()).toHaveValue('55');
   await expect(restored.getByTestId('set-reps').first()).toHaveValue('12');
-  await expect(restored.getByTestId('today-metric')).toHaveText('660 kg·回');
+  await expect(restored.getByTestId('today-metric')).toHaveText('660');
 });
 
 // ── 月ナビ・グリッド ────────────────────────────────────────────────────────
@@ -351,14 +351,16 @@ test('月フッタが実施日数・合計・セット数を正しく出す', as
   await bench.getByTestId('add-set').click();
   await fillSet(bench, 1, { weight: 60, reps: 8 });
 
-  // 懸垂は Kind::Bodyweight。セット数には入るが kg·回 の合計には folding しない
-  // （単位の違う指標を足すと意味を失うため）
+  // ★ 懸垂は重量を入れない。旧実装は Kind ごとに単位が違って足せなかったので
+  //   合計から落としていたが、指標が「重量が空なら重量 1」の単一式になったので
+  //   12 回 = 12 として合計に入る
   const pullup = await addExercise(page, '懸垂');
   await fillSet(pullup, 0, { reps: 12 });
 
   await openCalendarOn(page, today);
   await expect(page.getByTestId('cal-trained-days')).toHaveText('1 日');
-  await expect(page.getByTestId('cal-volume')).toHaveText('1,080 kg·回');
+  // ベンチ 60×10 + 60×8 = 1,080、懸垂 12 → 1,092
+  await expect(page.getByTestId('cal-volume')).toHaveText('1,092');
   await expect(page.getByTestId('cal-sets')).toHaveText('3');
 });
 
@@ -381,7 +383,7 @@ test('記録がある日のサマリに種目・セット・指標・体重・�
   await expect(log).toContainText('ベンチプレス');
   await expect(log).toContainText('胸');
   await expect(log).toContainText('60×10');
-  await expect(log).toContainText('600 kg·回');
+  await expect(log).toContainText('600');
   await expect(page.getByTestId('cal-body-weight')).toHaveText('体重 62.5 kg');
   await expect(page.getByTestId('cal-note')).toHaveText('絶好調');
 });

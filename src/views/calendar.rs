@@ -15,7 +15,8 @@ use chrono::{Datelike, NaiveDate, TimeDelta};
 use leptos::prelude::*;
 
 use crate::core;
-use crate::model::{Db, Group, GroupId, Kind, Session};
+use crate::core::Metric;
+use crate::model::{Db, Group, GroupId, Session};
 
 use super::{Tab, fmt_date, fmt_metric, fmt_set, fmt_weight, use_dates, use_db, use_tab};
 
@@ -66,7 +67,7 @@ struct MonthData {
     cells: Vec<Option<DayCell>>,
     trained_days: usize,
     sets: usize,
-    /// `Kind::Weighted` の種目だけの合計。単位の違う指標を足しても意味を持たないため。
+    /// 全種目の合計ボリューム。指標の式が 1 本になったので絞り込みは要らない。
     volume: f64,
 }
 
@@ -112,13 +113,7 @@ fn month_data(db: &Db, first: NaiveDate) -> MonthData {
         if let Some(s) = session {
             for log in &s.logs {
                 out.sets += log.sets.len();
-                // 単位が違う指標を足すと意味を失うので、合計は Weighted のみ
-                if db
-                    .exercise(log.exercise_id)
-                    .is_some_and(|e| e.kind == Kind::Weighted)
-                {
-                    out.volume += core::log_metric(Kind::Weighted, log);
-                }
+                out.volume += core::log_value(Metric::Volume, log);
             }
         }
         out.cells.push(Some(DayCell {
@@ -163,24 +158,14 @@ fn day_detail(db: &Db, date: NaiveDate) -> DayDetail {
         .filter(|l| !l.sets.is_empty())
         .map(|l| {
             let exercise = db.exercise(l.exercise_id);
-            let kind = exercise.map_or(Kind::Weighted, |e| e.kind);
             LogLine {
                 name: exercise.map_or_else(|| "(削除された種目)".to_string(), |e| e.name.clone()),
                 group: exercise
                     .and_then(|e| db.group(e.group_id))
                     .map(|g| g.name.clone())
                     .unwrap_or_default(),
-                sets: l
-                    .sets
-                    .iter()
-                    .map(|s| fmt_set(kind, s))
-                    .collect::<Vec<_>>()
-                    .join("  "),
-                metric: format!(
-                    "{} {}",
-                    fmt_metric(core::log_metric(kind, l)),
-                    core::unit_of(kind)
-                ),
+                sets: l.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  "),
+                metric: fmt_metric(core::log_value(Metric::Volume, l)),
             }
         })
         .collect();
@@ -296,8 +281,8 @@ pub fn Calendar() -> impl IntoView {
                 }}
             </div>
 
-            // 月フッタ。合計は Kind::Weighted のみ（単位の違う指標を足さない）。
-            // 部位が混ざっても数えられるセット数を並べて、落ちた分を見えなくしない
+            // 月フッタ。合計は全種目のボリューム（指標の式が 1 本なので絞り込み不要）。
+            // 重量の大小に引きずられないセット数も並べる
             <dl class="stats" data-testid="cal-stats">
                 <div>
                     <dt>"実施"</dt>
@@ -308,13 +293,7 @@ pub fn Calendar() -> impl IntoView {
                 <div>
                     <dt>"合計"</dt>
                     <dd data-testid="cal-volume">
-                        {move || {
-                            format!(
-                                "{} {}",
-                                fmt_metric(data.with(|m| m.volume)),
-                                core::unit_of(Kind::Weighted),
-                            )
-                        }}
+                        {move || fmt_metric(data.with(|m| m.volume))}
                     </dd>
                 </div>
                 <div>

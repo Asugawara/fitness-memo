@@ -6,11 +6,11 @@
 //!   アーカイブ済み種目の `group_id` が宙に浮き、カレンダーのドット色・部位別グラフ・
 //!   今日タブの部位チップが**過去分だけ**壊れる。画面に出ていない種目が理由で削除できない
 //!   のは分からないので、文言に件数を出す（「アーカイブ済み種目が 2 件あります」）
-//! - **`Kind` はデータから推論せず種目の明示属性。** 変更時は必ず「グラフの単位が
-//!   変わります」を挟み、ユーザーの明示操作であることを可視化する（自重ディップスを加重へ
-//!   移したときに過去データが遡及的に壊れるのを防ぐための設計）
+//! - **種目は「指標の種類」を持たない。** 加重 / 自重 / 時間の区別は種目名から読めるので、
+//!   選ばせる意味が無かった。指標は `core::set_volume` の単一式に統一され、どの軸で
+//!   見るかは推移タブの `Metric` が決める
 //! - **アーカイブは論理削除。** 過去ログの `exercise_id` 参照を保つのが目的。アーカイブ済み
-//!   種目は今日タブの「種目を追加」シートには出ないが、推移タブの種目セレクタからは参照
+//!   種目は「種目を追加」シートには出ないが、推移タブの種目セレクタからは参照
 //!   できる（過去データが参照不能になるのを防ぐ）
 //! - 並び替えは iPhone のタッチ操作を優先して**上下の矢印ボタン**にする（ドラッグ&ドロップは
 //!   実装も E2E も難しい）
@@ -19,30 +19,14 @@
 
 use leptos::prelude::*;
 
-use crate::core;
-use crate::model::{Db, Exercise, ExerciseId, Group, GroupId, Kind};
+use crate::model::{Db, Exercise, ExerciseId, Group, GroupId};
 
 use super::{kb_blur, kb_focus, use_db, use_kb};
-
-const KINDS: [Kind; 3] = [Kind::Weighted, Kind::Bodyweight, Kind::Duration];
 
 /// 部位を追加するときの既定色。プリセットの 6 色を順に回す。
 const COLOR_CHOICES: [&str; 6] = [
     "#e0524a", "#2f7fd1", "#e0912a", "#7a56c9", "#2fa06a", "#6b7280",
 ];
-
-fn kind_label(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Weighted => "加重",
-        Kind::Bodyweight => "自重",
-        Kind::Duration => "時間",
-    }
-}
-
-/// "加重（kg·回）"。単位を併記して、`Kind` = グラフの単位であることを見せる。
-fn kind_text(kind: Kind) -> String {
-    format!("{}（{}）", kind_label(kind), core::unit_of(kind))
-}
 
 // ── Db の更新（純粋な操作だけをここに集める） ───────────────────────────────
 
@@ -191,7 +175,7 @@ fn rename_exercise(db: &mut Db, id: ExerciseId, name: &str) {
     }
 }
 
-fn add_exercise(db: &mut Db, group: GroupId, name: String, kind: Kind) {
+fn add_exercise(db: &mut Db, group: GroupId, name: String) {
     let id = db.alloc_id();
     // 末尾に付ける（renumber が非アーカイブを先頭へ詰め直す）
     let order = db.exercises.iter().filter(|e| e.group_id == group).count() as u32;
@@ -199,7 +183,6 @@ fn add_exercise(db: &mut Db, group: GroupId, name: String, kind: Kind) {
         id,
         name,
         group_id: group,
-        kind,
         order,
         archived: false,
     });
@@ -220,12 +203,6 @@ fn set_exercise_group(db: &mut Db, id: ExerciseId, group: GroupId) {
     }
     renumber_exercises(db, from);
     renumber_exercises(db, group);
-}
-
-fn set_exercise_kind(db: &mut Db, id: ExerciseId, kind: Kind) {
-    if let Some(e) = db.exercises.iter_mut().find(|e| e.id == id) {
-        e.kind = kind;
-    }
 }
 
 /// アーカイブ = 論理削除。過去ログの `exercise_id` 参照を保つ。
@@ -257,7 +234,7 @@ enum Editor {
     NewExercise(GroupId),
 }
 
-/// 選択肢ボタン 1 個。`Kind` と部位のどちらにも使う。
+/// 選択肢ボタン 1 個。今は部位の選択にだけ使う。
 fn opt_button(
     label: String,
     testid: &'static str,
@@ -453,10 +430,6 @@ fn ExerciseRow(ex: ExerciseId, editor: RwSignal<Option<Editor>>) -> impl IntoVie
         db.with(|d| d.exercise(ex).map(|e| e.name.clone()))
             .unwrap_or_default()
     });
-    let kind = Memo::new(move |_| {
-        db.with(|d| d.exercise(ex).map(|e| e.kind))
-            .unwrap_or(Kind::Weighted)
-    });
 
     view! {
         <div class="ex-row" data-testid="exercise-item">
@@ -467,9 +440,6 @@ fn ExerciseRow(ex: ExerciseId, editor: RwSignal<Option<Editor>>) -> impl IntoVie
             >
                 {move || name.get()}
             </button>
-            <span class="ex-kind muted" data-testid="exercise-kind">
-                {move || kind_label(kind.get())}
-            </span>
             <button
                 class="icon-btn"
                 aria-label="この種目を上へ"
@@ -513,7 +483,7 @@ fn ArchivedSection(ids: Vec<ExerciseId>) -> impl IntoView {
                                         .group(e.group_id)
                                         .map(|g| g.name.clone())
                                         .unwrap_or_else(|| "(部位なし)".to_string());
-                                    format!("{} · {} · {}", e.name, group, kind_label(e.kind))
+                                    format!("{} · {}", e.name, group)
                                 })
                         })
                         .unwrap_or_default();
@@ -755,12 +725,7 @@ fn ExerciseEditor(id: ExerciseId, editor: RwSignal<Option<Editor>>) -> impl Into
             .collect()
     });
     let name = RwSignal::new(name0.clone());
-    let pending: RwSignal<Option<Kind>> = RwSignal::new(None);
 
-    let kind = Memo::new(move |_| {
-        db.with(|d| d.exercise(id).map(|e| e.kind))
-            .unwrap_or(Kind::Weighted)
-    });
     let group = Memo::new(move |_| {
         db.with(|d| d.exercise(id).map(|e| e.group_id))
             .unwrap_or_default()
@@ -770,17 +735,6 @@ fn ExerciseEditor(id: ExerciseId, editor: RwSignal<Option<Editor>>) -> impl Into
         let value = name.get_untracked().trim().to_string();
         if !value.is_empty() {
             db.update(move |d| rename_exercise(d, id, &value));
-        }
-    };
-
-    // ★ Kind はデータから推論せず種目の明示属性なので、変更は必ずユーザーの明示操作にする。
-    //   タップした時点では確定せず「グラフの単位が変わります」を挟む。
-    let shown_kind = move || pending.get().unwrap_or_else(|| kind.get());
-    let pick_kind = move |picked: Kind| {
-        if picked == kind.get_untracked() {
-            pending.set(None);
-        } else {
-            pending.set(Some(picked));
         }
     };
 
@@ -818,60 +772,6 @@ fn ExerciseEditor(id: ExerciseId, editor: RwSignal<Option<Editor>>) -> impl Into
             </div>
         </div>
 
-        <div class="field">
-            <span>"種類"</span>
-            <div class="opts" data-testid="exercise-kinds">
-                {KINDS
-                    .map(|k| {
-                        opt_button(
-                            kind_text(k),
-                            "kind-option",
-                            move || shown_kind() == k,
-                            move || pick_kind(k),
-                        )
-                    })
-                    .into_iter()
-                    .collect::<Vec<_>>()}
-            </div>
-        </div>
-
-        {move || {
-            pending
-                .get()
-                .map(|picked| {
-                    let from = core::unit_of(kind.get());
-                    let to = core::unit_of(picked);
-                    view! {
-                        <div class="warn-box">
-                            <p data-testid="kind-warning">
-                                {format!(
-                                    "グラフの単位が変わります（{from} → {to}）。過去の記録も新しい単位で計算し直されます",
-                                )}
-                            </p>
-                            <div class="sheet-actions">
-                                <button
-                                    class="primary"
-                                    data-testid="kind-confirm"
-                                    on:click=move |_| {
-                                        db.update(move |d| set_exercise_kind(d, id, picked));
-                                        pending.set(None);
-                                    }
-                                >
-                                    {format!("{} に変更する", kind_label(picked))}
-                                </button>
-                                <button
-                                    class="link-btn"
-                                    data-testid="kind-cancel"
-                                    on:click=move |_| pending.set(None)
-                                >
-                                    "やめる"
-                                </button>
-                            </div>
-                        </div>
-                    }
-                })
-        }}
-
         <div class="sheet-actions">
             <button
                 class="secondary"
@@ -899,7 +799,6 @@ fn NewExerciseEditor(group: GroupId, editor: RwSignal<Option<Editor>>) -> impl I
         .with_untracked(|d| d.group(group).map(|g| g.name.clone()))
         .unwrap_or_default();
     let name = RwSignal::new(String::new());
-    let kind = RwSignal::new(Kind::Weighted);
     let duplicate = RwSignal::new(false);
 
     let submit = move |_| {
@@ -912,8 +811,7 @@ fn NewExerciseEditor(group: GroupId, editor: RwSignal<Option<Editor>>) -> impl I
             duplicate.set(true);
             return;
         }
-        let picked = kind.get_untracked();
-        db.update(move |d| add_exercise(d, group, value, picked));
+        db.update(move |d| add_exercise(d, group, value));
         editor.set(None);
     };
 
@@ -934,23 +832,6 @@ fn NewExerciseEditor(group: GroupId, editor: RwSignal<Option<Editor>>) -> impl I
                 }
             />
         </label>
-
-        <div class="field">
-            <span>"種類"</span>
-            <div class="opts" data-testid="exercise-kinds">
-                {KINDS
-                    .map(|k| {
-                        opt_button(
-                            kind_text(k),
-                            "kind-option",
-                            move || kind.get() == k,
-                            move || kind.set(k),
-                        )
-                    })
-                    .into_iter()
-                    .collect::<Vec<_>>()}
-            </div>
-        </div>
 
         {move || {
             duplicate

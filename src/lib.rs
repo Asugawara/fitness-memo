@@ -11,4 +11,6 @@ pub mod presets;
 #[cfg(target_arch = "wasm32")]
 pub mod storage;
 #[cfg(target_arch = "wasm32")]
+pub mod transfer;
+#[cfg(target_arch = "wasm32")]
 pub mod views;

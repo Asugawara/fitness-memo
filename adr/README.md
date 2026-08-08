@@ -30,18 +30,21 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0007](data-model/0007-exercise-kind-explicit.md) | 指標の種類を種目の明示属性にする（推論しない） | 置換済み → [0033](data-model/0033-metric-is-a-view-setting.md) |
 | [0008](data-model/0008-one-log-per-exercise-per-day.md) | 「1日1種目1ログ」を不変条件にする | 採用 |
 | [0009](data-model/0009-group-metric-is-set-count.md) | 部位別の指標を volume ではなくセット数にする | 置換済み → [0033](data-model/0033-metric-is-a-view-setting.md) |
-| [0010](data-model/0010-sequential-ids-no-uuid.md) | ID を `next_id` の連番にし uuid を使わない | 採用 |
+| [0010](data-model/0010-sequential-ids-no-uuid.md) | ID を `next_id` の連番にし uuid を使わない | 置換済み → [0037](data-model/0037-random-ids-for-safe-merge.md) |
+| [0037](data-model/0037-random-ids-for-safe-merge.md) | ID を 60 bit 乱数にし、プリセットには固定 ID を与える | 採用 |
 | [0033](data-model/0033-metric-is-a-view-setting.md) | 指標を種目の属性ではなくグラフの表示設定にする | 採用 |
 
 ### storage — 永続化
 
 | # | タイトル | 状態 |
 |---|---|---|
-| [0011](storage/0011-localstorage-single-key-json.md) | localStorage の単一キーに JSON 全体を持つ | 採用 |
+| [0011](storage/0011-localstorage-single-key-json.md) | localStorage の単一キーに JSON 全体を持つ | 採用（容量超過の握りつぶしは撤回） |
 | [0012](storage/0012-quarantine-on-parse-failure.md) | パース失敗時は上書きせず退避する | 採用 |
 | [0013](storage/0013-flush-on-visibilitychange.md) | `visibilitychange` の hidden で debounce を flush する | 採用 |
-| [0014](storage/0014-defer-export-import.md) | JSON エクスポート/インポートを v1 に入れない | 採用（リスク受容） |
+| [0014](storage/0014-defer-export-import.md) | JSON エクスポート/インポートを v1 に入れない | 履行済み → [0038](storage/0038-share-sheet-over-download.md) |
 | [0034](storage/0034-storage-key-per-schema-generation.md) | 保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す | 採用 |
+| [0038](storage/0038-share-sheet-over-download.md) | 書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない | 採用 |
+| [0039](storage/0039-no-same-origin-redundancy.md) | 同一オリジン内の多層バックアップを採用しない | 採用 |
 
 ### pwa — オフライン動作と iOS 実機
 

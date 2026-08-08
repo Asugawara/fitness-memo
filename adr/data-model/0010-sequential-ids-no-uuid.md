@@ -1,9 +1,16 @@
 # ADR-0010: ID を `next_id` の連番にし uuid を使わない
 
-- **状態**: 採用
+- **状態**: 置換済み → [ADR-0037](0037-random-ids-for-safe-merge.md)
 - **日付**: 2026-08-08
 - **カテゴリ**: data-model
-- **関連**: [ADR-0003](../architecture/0003-wasm-target-scoped-dependencies.md), [ADR-0011](../storage/0011-localstorage-single-key-json.md)
+- **関連**: [ADR-0003](../architecture/0003-wasm-target-scoped-dependencies.md), [ADR-0011](../storage/0011-localstorage-single-key-json.md), [ADR-0037](0037-random-ids-for-safe-merge.md)
+
+> **この決定は [ADR-0037](0037-random-ids-for-safe-merge.md) が置き換えた。**
+> 連番 ID は「単一デバイスなので ID が衝突する経路がない」という前提に立っていたが、
+> エクスポート / インポートを入れた時点でその前提が消えた（2 台のデータを突き合わせると
+> 別々の種目の履歴が無警告で入れ替わる）。
+> なお本文が uuid を避ける理由として挙げている `getrandom` の `RUSTFLAGS` 要件は、
+> 現在の getrandom 0.4 では成立しない（cargo feature だけで足りる）。
 
 ## 背景
 

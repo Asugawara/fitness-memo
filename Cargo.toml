@@ -13,6 +13,10 @@ chrono = "0.4"     # ★ default features を絶対に削らない（下記）
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 leptos = { version = "0.8.20", features = ["csr"] }
 console_error_panic_hook = "0.1"
+# 書き出し / 読み込みの JS interop（src/transfer.rs）で使う。
+# leptos の再輸出（leptos::wasm_bindgen）は #[doc(hidden)] なので直接宣言する
+wasm-bindgen = "0.2"
+js-sys = "0.3"
 # ★ 使う API は全て自前で宣言する。tachys 経由で「偶然」有効になっている feature に
 #   寄りかかると leptos のパッチ更新で無言に壊れる（Element は現状 tachys が有効化して
 #   いるが、Storage / MediaQueryList は有効化していない）
@@ -25,6 +29,21 @@ web-sys = { version = "0.3", features = [
     "Element",         # Document::get_element_by_id / Element::scroll_into_view
     "HtmlElement",     # HtmlElement::focus（セット追加時に回数欄へフォーカスする）
     "MediaQueryList",  # Window::match_media("(display-mode: standalone)")
+    "Crypto",          # Window::crypto → getRandomValues（ID の種）
+    "Performance",     # Window::performance（crypto が使えない環境の種の足し）
+    # ── 書き出し / 読み込み（src/transfer.rs）──
+    "Navigator",           # Window::navigator
+    "ShareData",           # Navigator::share_with_data / can_share_with_data
+    "File",                # 共有シートに渡す File（File = ["Blob"]）
+    "FilePropertyBag",
+    "Blob",                # <a download> 用の Blob
+    "BlobPropertyBag",
+    "Url",                 # createObjectURL / revokeObjectURL
+    "HtmlAnchorElement",   # <a download>（★ iOS では使わない）
+    "HtmlInputElement",    # <input type="file">
+    "FileList",
+    "FileReader",          # 選んだファイルの読み出し
+    "Clipboard",           # Navigator::clipboard → writeText（unstable フラグ不要）
 ] }
 
 [profile.release]

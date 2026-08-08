@@ -20,14 +20,14 @@
 <link rel="apple-touch-icon" href="./icons/icon-192.png">
 <link rel="manifest" href="./manifest.webmanifest">
 
-<link rel="stylesheet" href="/fitness-memo/styles-e9d992a77e31bf6a.css" integrity="sha384-CDfZzaSm6fWlGUHxUfotz8TP/aplkIHN8/ktCgcvr2gsfQsBbiWIViAgYM0TGN5j"/>
+<link rel="stylesheet" href="/fitness-memo/styles-47b24eff1f4c145e.css" integrity="sha384-f2D0ZE+oUnN/Fb8Ys2xkI0fwL1xCveZNfT9lEK+9zwwJ7lkt+hWzcY47PnKoANR3"/>
 
 
 
 
 <script type="module">
-import init, * as bindings from '/fitness-memo/fitness-memo-84a7fa9ee4b66b47.js';
-const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-84a7fa9ee4b66b47_bg.wasm' });
+import init, * as bindings from '/fitness-memo/fitness-memo-981c2fd8c14e0db1.js';
+const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-981c2fd8c14e0db1_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -36,7 +36,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-<link rel="modulepreload" href="/fitness-memo/fitness-memo-84a7fa9ee4b66b47.js" crossorigin="anonymous" integrity="sha384-puxfFHwD9vqZq6hSuNuqlXNxN8205MAfLFxwcas95jVPEnWAarAl+zVLlPCD4l9m"><link rel="preload" href="/fitness-memo/fitness-memo-84a7fa9ee4b66b47_bg.wasm" crossorigin="anonymous" integrity="sha384-8t52yL/xZeFZwXRw7Row7kSlmyEVj1Kp22mSoUia1YVTb6OkF9HJNOS2ALgL/2Dz" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/fitness-memo/fitness-memo-981c2fd8c14e0db1.js" crossorigin="anonymous" integrity="sha384-/RlFzXYhtGulpZZVH/08D+fAUQLChijNqRZHAG4DLVFEi+aKkKjclqe1zrBnaYPS"><link rel="preload" href="/fitness-memo/fitness-memo-981c2fd8c14e0db1_bg.wasm" crossorigin="anonymous" integrity="sha384-XjtmQOE9uB02OezqY6Tsr6kRx+CxeGqp37VrbGtnO4fSRFVVx01xeFY2J2mT22Zq" as="fetch" type="application/wasm"></head>
 <body>
 <script>
 if ('serviceWorker' in navigator) {

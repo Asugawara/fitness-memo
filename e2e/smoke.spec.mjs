@@ -574,3 +574,88 @@ test('「種目を追加」シート表示中はバックドロップがタブ�
   await expect(page.getByTestId('add-sheet')).toBeVisible();
   await expect(page.getByTestId('screen-progress')).toHaveCount(0);
 });
+
+// ── 1 日丸ごとのメニューコピー ──────────────────────────────────────────────
+
+test('空の日にだけ過去メニューの候補が出て、1 タップで種目とセットが丸ごと入る', async ({ page }) => {
+  await seedPastLogs(page, [
+    {
+      daysAgo: 2,
+      exerciseName: 'ベンチプレス',
+      sets: [
+        { weight: 60, reps: 10 },
+        { weight: 60, reps: 8 },
+      ],
+    },
+    { daysAgo: 2, exerciseName: 'チェストフライ', sets: [{ weight: 15, reps: 12 }] },
+  ]);
+
+  const list = page.getByTestId('menu-copy');
+  const candidates = page.getByTestId('menu-candidate');
+  await expect(list).toBeVisible();
+  await expect(candidates).toHaveCount(1);
+  // 部位だけでなく種目名まで出す（胸の日が 2 つ並んだとき部位名では選び分けられない）
+  await expect(candidates.first()).toContainText('胸');
+  await expect(candidates.first()).toContainText('ベンチプレス');
+
+  await candidates.first().click();
+
+  const cards = page.getByTestId('exercise-card');
+  await expect(cards).toHaveCount(2);
+
+  // ★ today-metric ではなく入力欄の値を検証する。Db は正しいのに <For> がカードを
+  //   使い回して入力欄が前の値のまま、という状態を today-metric は素通ししてしまう
+  const rows = cards.nth(0).getByTestId('set-row');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).getByTestId('set-weight')).toHaveValue('60');
+  await expect(rows.nth(0).getByTestId('set-reps')).toHaveValue('10');
+  await expect(rows.nth(1).getByTestId('set-reps')).toHaveValue('8');
+  await expect(cards.nth(1).getByTestId('set-row').nth(0).getByTestId('set-reps')).toHaveValue('12');
+
+  // 1 種目でも入ったら候補は消える（ADR-0021 と同じ「空のときだけ」の考え方）
+  await expect(list).toHaveCount(0);
+
+  // signal に載っただけでなく Db にコミットされている
+  await flushToStorage(page);
+  await page.reload();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(2);
+  await expect(page.getByTestId('menu-copy')).toHaveCount(0);
+});
+
+test('部位が同じでも種目構成が違えば別々の候補として並ぶ', async ({ page }) => {
+  await seedPastLogs(page, [
+    // 3 日前と 5 日前はどちらも「胸」だが種目が違う（A/B 法）。
+    // 重複排除を部位集合でやると 1 件に潰れ、「直前の日をコピー」に退化する
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 5, exerciseName: 'ダンベルプレス', sets: [{ weight: 22.5, reps: 10 }] },
+    // 7 日前は 3 日前と同じ構成なので畳まれる
+    { daysAgo: 7, exerciseName: 'ベンチプレス', sets: [{ weight: 55, reps: 10 }] },
+  ]);
+
+  const candidates = page.getByTestId('menu-candidate');
+  await expect(candidates).toHaveCount(2);
+  await expect(candidates.nth(0)).toContainText('ベンチプレス');
+  await expect(candidates.nth(1)).toContainText('ダンベルプレス');
+});
+
+test('コピーできる種目が残っていない日は候補に出ない（押せない行を作らない）', async ({ page }) => {
+  // ★ 空セットの日はここでは作れない。seedPastLogs は最後に reload するので
+  //   core::migrate が「空セットのログしか無いセッション」を丸ごと捨てる。
+  //   その状態を仕込んでも検証しているのは migrate であって候補判定ではない
+  //   （空セットの除外は core の recent_menus_skips_days_with_nothing_copyable で見る）
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'スクワット', sets: [{ weight: 80, reps: 5 }] },
+  ]);
+  await expect(page.getByTestId('menu-candidate')).toHaveCount(1);
+
+  // アーカイブするとコピー対象から外れる。件数だけ数えて行を出していると、
+  // 「1種目」と表示されるのに押しても何も起きない死んだボタンになる
+  await blurActive(page);
+  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('exercise-name').filter({ hasText: exactText('スクワット') }).click();
+  await page.getByTestId('archive-exercise').click();
+  await expect(page.getByTestId('menu-sheet')).toHaveCount(0);
+
+  await page.getByTestId('tab-record').click();
+  await expect(page.getByTestId('menu-copy')).toHaveCount(0);
+});

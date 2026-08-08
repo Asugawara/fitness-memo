@@ -13,7 +13,7 @@ use leptos::prelude::*;
 
 use crate::core;
 use crate::core::Metric;
-use crate::model::{Db, ExerciseId, ExerciseLog, SetEntry};
+use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, SetEntry};
 
 use super::{
     fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms, parse_reps, parse_weight,
@@ -53,6 +53,89 @@ impl Row {
 
 fn card_dom_id(ex: ExerciseId) -> String {
     format!("card-{ex}")
+}
+
+/// 候補リストに並べる上限。
+///
+/// ★ 増やさない。上にカレンダーが載っているぶん候補は最初から画面外に始まるので、
+/// 行が増えるほどスクロール量が伸びる。実測（393×760・4 件）では 1 回スクロールすれば
+/// 4 件と「種目を追加」が同時に収まる。4 日サイクルの分割法まではこれで足りる。
+const MENU_CANDIDATES: usize = 4;
+/// 1 行に出す部位名の数。溢れたら「他」を付ける。
+const MENU_GROUP_CAP: usize = 3;
+/// 1 行に出す種目名の数。溢れたら「他N種目」を付ける。
+const MENU_NAME_CAP: usize = 2;
+
+/// 「前回のメニューから始める」の候補 1 行。
+///
+/// **種目名まで出すのが肝。** 「8/5 胸 5種目」だけでは胸の日が 2 つ並んだときに
+/// 区別できず、候補をリストにした意味が消える。誤タップは事後の取り消しではなく
+/// 選び間違いを起こさせないことで防ぐ。
+#[derive(Clone, PartialEq)]
+struct MenuRow {
+    date: NaiveDate,
+    /// "胸・腕"
+    groups: String,
+    /// "ベンチプレス, インクラインダンベルプレス 他3種目"
+    names: String,
+}
+
+impl MenuRow {
+    fn build(db: &Db, c: &core::MenuCandidate) -> Self {
+        let mut seen: Vec<GroupId> = Vec::new();
+        let mut ordered: Vec<(u32, String)> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+        for id in &c.exercises {
+            // core 側で存在を確認済みだが、ここでも落とさず素通しできるようにしておく
+            let Some(e) = db.exercise(*id) else { continue };
+            names.push(e.name.clone());
+            if seen.contains(&e.group_id) {
+                continue;
+            }
+            seen.push(e.group_id);
+            if let Some(g) = db.group(e.group_id) {
+                ordered.push((g.order, g.name.clone()));
+            }
+        }
+        // 部位は Group::order 順に直す。種目の入力順で並べると、同じ部位構成の日でも
+        // 行ごとに並びが変わって読み比べられない
+        ordered.sort_by_key(|(order, _)| *order);
+
+        let groups = join_capped(
+            ordered.iter().map(|(_, n)| n.as_str()),
+            ordered.len(),
+            MENU_GROUP_CAP,
+            "・",
+            |_| " 他".to_string(),
+        );
+        let names = join_capped(
+            names.iter().map(String::as_str),
+            names.len(),
+            MENU_NAME_CAP,
+            ", ",
+            |rest| format!(" 他{rest}種目"),
+        );
+        Self {
+            date: c.date,
+            groups,
+            names,
+        }
+    }
+}
+
+/// 先頭 `cap` 件だけ連結し、溢れた分は `overflow` の文言で畳む。
+fn join_capped<'a>(
+    items: impl Iterator<Item = &'a str>,
+    total: usize,
+    cap: usize,
+    sep: &str,
+    overflow: impl Fn(usize) -> String,
+) -> String {
+    let mut out = items.take(cap).collect::<Vec<_>>().join(sep);
+    if total > cap {
+        out.push_str(&overflow(total - cap));
+    }
+    out
 }
 
 fn confirm_dom_id(ex: ExerciseId) -> String {
@@ -99,10 +182,11 @@ pub fn DayEditor() -> impl IntoView {
     let cards: RwSignal<Vec<CardRef>> = RwSignal::new(Vec::new());
     let sheet = RwSignal::new(false);
 
-    // 日付が変わったらカードを Db から引き直す。
-    // db は untracked で読む（1 文字打つたびにカードが作り直されるのを防ぐ）
-    Effect::new(move |_| {
-        let key = core::date_key(dates.selected.get());
+    // カードを Db から引き直す。
+    // db は untracked で読む（1 文字打つたびにカードが作り直されるのを防ぐ）。
+    // メニューを丸ごとコピーした直後にも呼ぶので、Effect の外から使える形にしてある
+    let load_cards = move |date: NaiveDate| {
+        let key = core::date_key(date);
         let ids = db.with_untracked(|d| {
             d.sessions
                 .get(&key)
@@ -117,7 +201,10 @@ pub fn DayEditor() -> impl IntoView {
                 })
                 .collect(),
         );
-    });
+    };
+
+    // 日付が変わったら引き直す。追跡するのは selected だけ
+    Effect::new(move |_| load_cards(dates.selected.get()));
 
     // ★ ヒーローと部位チップは「今日を始める前」の間隔を出す。
     //   今日のセッションを外した snapshot に core の関数をそのまま当てることで、
@@ -165,6 +252,49 @@ pub fn DayEditor() -> impl IntoView {
         }
         // 既にあるなら新規カードを作らず既存カードへスクロールする
         scroll_to_id(card_dom_id(ex));
+    };
+
+    // 「前回のメニューから始める」の候補。
+    //
+    // カードがある日は候補を出さないので、履歴を走査せず即座に抜ける。セットの数値は
+    // 1 文字ごとに commit するため、ここを通さないと打鍵のたびに `recent_menus` が走る。
+    //
+    // ★ 逆に**空の日では短絡しない**（`cards` が空なので下へ素通りする）。空の日の
+    //   体重・メモ入力では毎文字 db を読み直すままで、そこは守っていない。候補は数件・
+    //   走査も 180 日で打ち切られるので実測では問題にならないが、取り違えないこと。
+    let menus = Memo::new(move |_| {
+        if !cards.get().is_empty() {
+            return Vec::new();
+        }
+        let before = dates.selected.get();
+        // ★ 未来日には出さない。まだやっていないトレーニングが「実施済み」として
+        //   カレンダーのドット・月フッタ・グラフに乗ってしまう
+        if before > dates.today.get() {
+            return Vec::new();
+        }
+        db.with(|d| {
+            core::recent_menus(d, before, MENU_CANDIDATES)
+                .into_iter()
+                .map(|c| MenuRow::build(d, &c))
+                .collect::<Vec<_>>()
+        })
+    });
+
+    let copy_menu = move |from: NaiveDate| {
+        let to = dates.selected.get_untracked();
+        // ★ commit() と同じ式にする。is_past_edit() は tracked な signal を読むので
+        //   クリックハンドラの中では使わない
+        let is_today = to == dates.today.get_untracked();
+        let at = is_today.then(now_ms);
+        let mut copied = Vec::new();
+        db.update(|d| copied = core::copy_day(d, from, to, at));
+        // 二重タップや別候補の連打で何も起きなかったときは画面も動かさない
+        if copied.is_empty() {
+            return;
+        }
+        load_cards(to);
+        // pick() と同じ。トレ中の視点を先頭種目に合わせる
+        scroll_to_id(card_dom_id(copied[0]));
     };
 
     view! {
@@ -249,6 +379,40 @@ pub fn DayEditor() -> impl IntoView {
                     children=move |c| view! { <ExerciseCard ex=c.ex cards=cards /> }
                 />
             </div>
+
+            // ★ 空の日にしか出さない。カードが 1 枚でもある状態でコピーすると
+            //   <For> がカードを使い回して入力欄が古いまま残り、次の 1 打鍵の
+            //   commit() がコピー結果を上書きして消す。表示条件は見た目の話ではない
+            {move || {
+                let rows = menus.get();
+                (!rows.is_empty())
+                    .then(|| {
+                        view! {
+                            <section class="menu-copy" data-testid="menu-copy">
+                                <h2 class="menu-copy-label">"前回のメニューから始める"</h2>
+                                {rows
+                                    .into_iter()
+                                    .map(|r| {
+                                        let from = r.date;
+                                        view! {
+                                            <button
+                                                class="menu-cand"
+                                                data-testid="menu-candidate"
+                                                on:click=move |_| copy_menu(from)
+                                            >
+                                                <span class="cand-head">
+                                                    <b>{fmt_date(r.date)}</b>
+                                                    <i>{r.groups}</i>
+                                                </span>
+                                                <span class="cand-names">{r.names}</span>
+                                            </button>
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()}
+                            </section>
+                        }
+                    })
+            }}
 
             <div class="add-wrap">
                 <button

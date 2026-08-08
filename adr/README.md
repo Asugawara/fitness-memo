@@ -4,7 +4,7 @@
 
 ## なぜ `docs/` ではなく `adr/` なのか
 
-GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` の2択しかなく、本プロジェクトは `release` ブランチの `/docs` をビルド成果物の配信元にしている。`scripts/release.sh` は毎回 `rm -rf docs` で作り直し、`.githooks/pre-commit` は `main` への `docs/` コミットを拒否する（これが無いと2回目以降のマージが modify/delete で停止する）。したがって `docs/` に文書を置くとデプロイ機構と衝突する。詳細は [ADR-0020](deploy/0020-github-pages-branch-deploy.md)。
+GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` の2択しかなく、本プロジェクトは `release` ブランチの `/docs` をビルド成果物の配信元にしている。`scripts/release.sh` は毎回 `rm -rf docs` で作り直し、`.githooks/pre-commit` は `main` への `docs/` コミットを拒否する（これが無いと2回目以降のマージが modify/delete で停止する）。したがって `docs/` に文書を置くとデプロイ機構と衝突する。詳細は [ADR-0025](deploy/0025-github-pages-branch-deploy.md) と [ADR-0032](process/0032-adr-in-adr-directory.md)。
 
 ## フォーマット
 

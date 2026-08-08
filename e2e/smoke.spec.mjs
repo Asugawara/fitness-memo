@@ -333,3 +333,35 @@ test('12. 重量入力の中間状態("6.")でクラッシュせず、"6.5"ま�
   // 6.5 × 2 = 13。"6." で止まっていた/クラッシュしていれば 12 のままか反映されない
   await expect(card.getByTestId('today-metric')).toHaveText('13 kg·回');
 });
+
+// 以下2件は計画の12ケースには無い追加の退行テスト。worker-d が実機相当の検証で見つけた
+// バグ（.bottom-tabs / .sheet-backdrop / .sheet が全て position:fixed なのに z-index を
+// 省いていたため、DOM順で <nav class="bottom-tabs"> が前面に出ていた）の固定用。
+// 目視でしか気づけない類の退行なので、force を付けないクリックで機械的に検出する。
+
+test('「種目を追加」シート最下部（体幹の最後の種目）がタブバーに隠れずクリックできる', async ({ page }) => {
+  await page.getByTestId('add-exercise').click();
+  const sheet = page.getByTestId('add-sheet');
+  await expect(sheet).toBeVisible();
+
+  // force を付けない: z-index が外れてタブバーに覆われた瞬間、ヒットターゲット判定で
+  // 落ちてこの click がタイムアウトする。プリセット順で体幹の最後（レッグレイズ）が
+  // 対象になるが、対象が何であれ「シートの一番下」を踏むことが重要
+  const lastPick = sheet.getByTestId('pick-exercise').last();
+  await lastPick.scrollIntoViewIfNeeded();
+  await lastPick.click();
+
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
+});
+
+test('「種目を追加」シート表示中はバックドロップがタブバーを覆い、誤タップで別タブへ遷移しない', async ({ page }) => {
+  await page.getByTestId('add-exercise').click();
+  await expect(page.getByTestId('add-sheet')).toBeVisible();
+
+  // z-index が外れてバックドロップがタブバーを覆えなくなると、この click が素通りして
+  // 推移タブへ遷移してしまう（隠れた種目を狙ったタップが誤タブ遷移になり入力を見失う）
+  await expect(page.getByTestId('tab-progress').click({ timeout: 1000 })).rejects.toThrow();
+
+  await expect(page.getByTestId('add-sheet')).toBeVisible();
+  await expect(page.getByTestId('screen-progress')).toHaveCount(0);
+});

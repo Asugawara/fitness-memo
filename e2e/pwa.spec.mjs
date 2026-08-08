@@ -145,7 +145,10 @@ test('オフラインでも起動し記録が読める（SW の navigate 分岐�
   // ★ precache のキーは "./index.html" であって "./"（ディレクトリURL）ではない。
   // ここでディレクトリURLへナビゲートするのが最重要: sw.js の navigate 分岐が
   // 無いとオフライン起動だけが例外経路頼みになり、オンラインでは気づけない
-  const port = 4200 + testInfo.parallelIndex;
+  //
+  // ポートは 4600 起点（e2e/harness.spec.mjs は 4180 起点で workerInfo.parallelIndex
+  // ごとに2つ使うので、ワーカー数が増えても重ならないよう十分離す）
+  const port = 4600 + testInfo.parallelIndex;
   const base = normalizeBase(BASE);
   const url = `http://localhost:${port}${base}`;
   const server = await startDedicatedServer(port);

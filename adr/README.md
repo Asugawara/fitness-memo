@@ -64,6 +64,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0024](ux/0024-calendar-add-from-empty-day.md) | カレンダーの空日からも記録を追加できるようにする | 採用（導線は [0035](ux/0035-record-tab-calendar-with-day-editor.md) で改訂） |
 | [0035](ux/0035-record-tab-calendar-with-day-editor.md) | 記録タブをカレンダー + 選択日エディタの単一画面にする | 採用 |
 | [0036](ux/0036-set-entry-prefill-and-focus.md) | セット追加は直前行の重量をコピーして回数欄へフォーカスする | 採用 |
+| [0037](ux/0037-copy-whole-day-menu.md) | 1 日分のメニューは候補リストから 1 タップで丸ごとコピーする | 採用 |
 
 ### deploy — 配信とブランチ運用
 

@@ -1,6 +1,16 @@
 /* 筋トレメモ — 素の CSS 1 ファイル + CSS 変数。ライブラリなし。 */
 
 :root {
+  /* ★ UA が描くものをテーマに追従させる（[ADR-0047]）。下の
+     `button, input { color: inherit }` は UA の ButtonText を上書きするが、
+     UA が描く**背景**（ButtonFace ≈ #efefef）はこの宣言が無いとライトのまま
+     取り残される。ダークでは文字が --text = #eceef1 になり、コントラストが
+     1.01:1 になって消える。効く先は自前で色を持たないもの全部 —
+     input[type=file] の「ファイルを選択」、select のネイティブピッカー、
+     スクロールバー。自前で background を持つ入力欄（.text-input /
+     .cond-fields input / .target-select / .json-box）は見た目が変わらない。 */
+  color-scheme: light dark;
+
   --bg: #f7f7f8;
   --surface: #ffffff;
   --text: #16171a;

@@ -75,6 +75,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0043](ux/0043-destructive-affordance-quiet-at-rest.md) | 破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む） | 採用 |
 | [0044](ux/0044-body-weight-second-axis-always-on.md) | 体重を推移グラフの第2軸に常時重ねる | 採用 |
 | [0046](ux/0046-set-delete-without-confirmation.md) | セット削除は確認を挟まない（カード削除の確認は残す） | 採用 |
+| [0047](ux/0047-declare-color-scheme-for-ua-widgets.md) | `color-scheme` を宣言し、クラスなしの `<button>` を作らない | 採用 |
 
 ### deploy — 配信とブランチ運用
 

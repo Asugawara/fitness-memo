@@ -12,7 +12,10 @@ import { test, expect } from '@playwright/test';
 // バックフィル済み（at: null）のデータを直接注入し、読み込み〜表示側だけを検証する。
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/');
+  // ★ baseURL がサブパス（例 /fitness-memo/）を持つとき、先頭 "/" は絶対パス参照として
+  // ベースのパスを丸ごと破棄してしまう（new URL('/', 'http://h/sub/') === 'http://h/'）。
+  // 相対参照の "./" でなければ E2E_BASE=/fitness-memo/ の重い側実行が壊れる
+  await page.goto('./');
 });
 
 // hasText は部分一致なので "ベンチプレス" が "インクラインベンチプレス" にも

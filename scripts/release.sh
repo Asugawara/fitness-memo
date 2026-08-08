@@ -16,6 +16,21 @@
 #   - main への docs/ 混入   → .githooks/pre-commit と本スクリプトの両方でガード
 #
 # ─────────────────────────────────────────────────────────────────────────────
+# ビルド成果物を dist/ ではなく dist-release/ に出す理由
+#
+# 同じチェックアウトで複数人（複数エージェント）が並行作業すると、dist/ はポート 4173 と
+# 同じく共有資源になる。static-server はリクエストごとに dist/ を読み直すので、他の作業者が
+# `trunk build`（debug・public_url=/）を走らせた瞬間に、リリース検証中の release 成果物が
+# 足元から差し替わる。厄介なのは、この事故が「なぜか落ちる」という極めて分かりにくい形で
+# 出ることだ。trunk は index.html に SRI の integrity（sha384）を埋めるため、参照先の実体
+# だけが debug ビルドに入れ替わると **ハッシュ不一致でブラウザが wasm の取得だけを静かに
+# 拒否する**。HTML も CSS も manifest も Service Worker も 200 で返り続けるので、manifest の
+# 検証や SW 登録のテストは何事もなく通り、**wasm が要る（= 画面が描画される）テストだけが
+# タイムアウトする**。症状が E2E コード側のバグにしか見えず、延々と追う羽目になる。
+# そこで出力先自体を分けて根本から断つ。E2E も DIST_DIR=<同じディレクトリ> を渡して、
+# ビルドしたのと同一の成果物を見るようにする。
+#
+# ─────────────────────────────────────────────────────────────────────────────
 # `set -o pipefail` は POSIX sh に無いので shebang は bash。
 
 set -euo pipefail
@@ -25,6 +40,10 @@ MAIN_BRANCH="main"
 RELEASE_BRANCH="release"
 PUBLIC_URL="/fitness-memo/"
 SITE_URL="https://asugawara.github.io/fitness-memo/"
+
+# リリース専用の出力先。debug ビルドの dist/ と混ざらないよう必ず分ける
+# （.gitignore に /dist-release が必要。preflight で確認する）
+DIST_DIR="dist-release"
 
 STAGE="起動"
 WORK_BRANCH=""
@@ -80,6 +99,28 @@ require_cmd cargo 'export PATH="$HOME/.cargo/bin:$PATH" を試してください
 
 gh auth status >/dev/null 2>&1 || die "gh が未認証です。gh auth login を実行してください"
 
+# ★ core.hooksPath が .githooks を指していないと pre-commit は一度も発火しない。
+#   ワークフローファイルを書かない構成では pre-commit が唯一の防波堤なので、設定が
+#   抜けたまま積み上がったコミットは「誰も検証していないコード」になる。実際に一度
+#   見落として 23 コミットが素通りしたので、リリース前に必ず確認する
+HOOKS_PATH="$(git config --get core.hooksPath || true)"
+[ -n "$HOOKS_PATH" ] \
+  || die "core.hooksPath が未設定です。pre-commit が発火していません。sh scripts/setup.sh を実行してください"
+[ "$(cd "$HOOKS_PATH" 2>/dev/null && pwd || echo '')" = "${ROOT}/.githooks" ] \
+  || die "core.hooksPath が '${HOOKS_PATH}' を指しています（想定: .githooks）。sh scripts/setup.sh を実行してください"
+[ -x "${ROOT}/.githooks/pre-commit" ] \
+  || die ".githooks/pre-commit に実行権限がありません。sh scripts/setup.sh を実行してください"
+
+# dist-release/ が ignore されていないと、生成物が untracked として現れ、
+# 次回以降の「作業ツリーがクリーンか」の確認が必ず落ちる。
+# 追跡対象になっている場合は .gitignore を足しても効かない（ignore は追跡済みファイルに
+# 作用しない）ので、原因を分けて案内する
+if git ls-files --error-unmatch "$DIST_DIR" >/dev/null 2>&1; then
+  die "${DIST_DIR}/ が git の追跡対象になっています。git rm -r --cached ${DIST_DIR} で外してから /${DIST_DIR} を .gitignore に追加してください"
+fi
+git check-ignore -q "$DIST_DIR" \
+  || die "${DIST_DIR}/ が .gitignore に入っていません。/${DIST_DIR} を追加してください"
+
 CURRENT="$(git rev-parse --abbrev-ref HEAD)"
 [ "$CURRENT" = "$MAIN_BRANCH" ] \
   || die "${MAIN_BRANCH} で実行してください（現在: ${CURRENT}）"
@@ -113,23 +154,24 @@ echo "OK: ${MAIN_BRANCH} = $(git rev-parse --short HEAD) / origin と同期 / �
 
 # ── 2. 本番と同じパス構成でビルド ───────────────────────────────────────────
 
-step "trunk build --release --public-url ${PUBLIC_URL}"
-trunk build --release --public-url "$PUBLIC_URL"
+step "trunk build --release --public-url ${PUBLIC_URL} --dist ${DIST_DIR}"
+trunk build --release --public-url "$PUBLIC_URL" --dist "$DIST_DIR"
 
-[ -f dist/index.html ] || die "dist/index.html が生成されていません"
+[ -f "${DIST_DIR}/index.html" ] || die "${DIST_DIR}/index.html が生成されていません"
 # --public-url が効いていないビルドを公開すると全アセットが 404 になる
-grep -q "$PUBLIC_URL" dist/index.html \
-  || die "dist/index.html に ${PUBLIC_URL} が出てきません。--public-url が効いていない可能性があります"
+grep -q "$PUBLIC_URL" "${DIST_DIR}/index.html" \
+  || die "${DIST_DIR}/index.html に ${PUBLIC_URL} が出てきません。--public-url が効いていない可能性があります"
 
 # ── 3. 重い E2E（WebKit / iPhone エミュを含む全 project） ───────────────────
 
-step "重い E2E（E2E_BASE=${PUBLIC_URL}）"
+step "重い E2E（DIST_DIR=${DIST_DIR} / E2E_BASE=${PUBLIC_URL}）"
 require_cmd npx "Node.js を入れてください"
 [ -d node_modules ] || die "node_modules がありません。scripts/setup.sh を実行してください"
 
-# ここで落ちたら公開しない。dist は本番と同じ public_url でビルド済みなので、
-# サブパス配信そのものを検証できる
-E2E_BASE="$PUBLIC_URL" npx playwright test \
+# ここで落ちたら公開しない。DIST_DIR で「いま build したもの」を名指しするので、
+# 他の作業者が並行して debug ビルドを回していても検証が汚染されない（冒頭の注記を参照）。
+# 本番と同じ public_url でビルド済みなのでサブパス配信そのものを検証できる
+DIST_DIR="$DIST_DIR" E2E_BASE="$PUBLIC_URL" npx playwright test \
   || die "E2E が失敗しました。リリースを中断します"
 
 # ── 4. origin/release 起点で作業ブランチを作る ──────────────────────────────
@@ -159,7 +201,8 @@ git merge --no-ff -m "merge ${MAIN_BRANCH}" "$MAIN_BRANCH" \
 
 step "docs/ の作り直し"
 rm -rf docs
-cp -R dist docs
+# ★ コピー元は dist/ ではなく DIST_DIR。E2E で検証したのと同一の成果物を公開する
+cp -R "$DIST_DIR" docs
 touch docs/.nojekyll
 
 # ★ git add -A / git add . は使わない。docs のみを明示的に stage する

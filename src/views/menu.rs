@@ -21,7 +21,6 @@ use leptos::prelude::*;
 
 use crate::core;
 use crate::model::{Db, Exercise, ExerciseId, Group, GroupId, Kind};
-use crate::presets;
 
 use super::{kb_blur, kb_focus, use_db, use_kb};
 
@@ -283,54 +282,17 @@ fn opt_button(
 pub fn Menu() -> impl IntoView {
     let db = use_db();
     let editor: RwSignal<Option<Editor>> = RwSignal::new(None);
-    let preset_note: RwSignal<Option<String>> = RwSignal::new(None);
 
     let group_ids = Memo::new(move |_| db.with(ordered_group_ids));
     let archived = Memo::new(move |_| db.with(archived_ids));
 
-    // 「プリセットを追加」。同名スキップと `Db::alloc_id` 経由の採番は presets::seed が持つ
-    // （presets.rs は固定 ID を持たない設計）。改名済みプリセットが別種目として復活する
-    // 限界は既知の挙動として受け入れる。
-    let add_presets = move |_| {
-        let before = db.with_untracked(|d| (d.groups.len(), d.exercises.len()));
-        db.update(|d| {
-            presets::seed(d);
-            for group in ordered_group_ids(d) {
-                renumber_exercises(d, group);
-            }
-        });
-        let after = db.with_untracked(|d| (d.groups.len(), d.exercises.len()));
-        preset_note.set(Some(if after == before {
-            "不足しているプリセットはありませんでした".to_string()
-        } else {
-            format!(
-                "部位 {} 件・種目 {} 件を追加しました",
-                after.0 - before.0,
-                after.1 - before.1,
-            )
-        }));
-    };
-
     view! {
         <section class="menu" data-testid="screen-menu">
+            // プリセットの投入は初回起動時に storage::load が済ませる。再投入の導線は持たない
+            // （改名済みプリセットが別種目として復活する挙動があり、得より害が大きかった）
             <header class="menu-head">
                 <h1>"種目"</h1>
-                <button class="secondary" data-testid="add-presets" on:click=add_presets>
-                    "プリセットを追加"
-                </button>
             </header>
-
-            {move || {
-                preset_note
-                    .get()
-                    .map(|msg| {
-                        view! {
-                            <p class="menu-note" role="status" data-testid="preset-result">
-                                {msg}
-                            </p>
-                        }
-                    })
-            }}
 
             <p class="menu-note muted">
                 "アーカイブした種目は「種目を追加」に出なくなりますが、過去の記録は残り推移タブから参照できます"

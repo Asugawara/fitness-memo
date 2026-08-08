@@ -1,8 +1,20 @@
 //! `localStorage` への永続化。**wasm32 専用。**
 //!
-//! バックアップ手段が v1 に無いので、**パース失敗時は絶対に上書きしない**。
-//! `core::migrate` が `Err` なら raw を `fitness-memo/v1.bak-<epoch>` へ退避してから
+//! エクスポート手段がまだ無いので、**パース失敗時は絶対に上書きしない**。
+//! `core::migrate` が `Err` なら raw を `<キー>.bak-<epoch>` へ退避してから
 //! プリセット入りの `Db` を返し、起動時に一度だけ通知を出す。
+//!
+//! ## キーは schema 非互換の変更のたびに切る
+//!
+//! `Db` のフィールドを**消す**変更は前方互換を壊す。`Exercise.kind` を消したときの例:
+//! 新版が書いた JSON に `kind` が無いので、旧版の serde は `missing field` で `Err` を
+//! 返し、上の退避パスに落ちて**プリセット入りの空 Db が表示される**。退避キーから
+//! 読み戻す UI は無いので、ユーザーには全記録が消えたようにしか見えない。
+//!
+//! GitHub Pages のロールバック・SW の更新失敗・`?sw=off` 後に古いキャッシュを掴む、の
+//! いずれでも旧版は動きうる。だから**キーを共有せず世代ごとに分ける**。
+//! 旧キーは消さずに読み取り専用で残すので、旧版へ戻ってもその世代の時点まで
+//! 巻き戻るだけで済む（新版で追記した分は旧版から見えないが、全損よりはるかに軽い）。
 
 use std::cell::RefCell;
 use std::time::Duration;
@@ -13,7 +25,13 @@ use leptos::prelude::*;
 use crate::model::Db;
 use crate::{core, presets};
 
-const KEY: &str = "fitness-memo/v1";
+/// 現行の保存キー。書き込みは常にここだけ。
+const KEY: &str = "fitness-memo/v2";
+
+/// 旧世代のキー。**読むだけで、書き戻さない。**
+///
+/// 新しいほうから順に並べる。世代が増えたらここに足す。
+const LEGACY_KEYS: &[&str] = &["fitness-memo/v1"];
 
 /// 入力のたびに書かないための debounce 幅。
 const DEBOUNCE: Duration = Duration::from_millis(400);
@@ -43,23 +61,38 @@ pub fn load() -> (Db, Option<String>) {
         );
     };
 
-    let raw = store
-        .get_item(KEY)
-        .ok()
-        .flatten()
-        .filter(|raw| !raw.trim().is_empty());
+    // 現行キー → 旧世代キーの順に探す。最初に中身が入っていたものを採用する
+    let found = std::iter::once(KEY)
+        .chain(LEGACY_KEYS.iter().copied())
+        .find_map(|key| {
+            let raw = store
+                .get_item(key)
+                .ok()
+                .flatten()
+                .filter(|raw| !raw.trim().is_empty())?;
+            Some((key, raw))
+        });
 
-    let Some(raw) = raw else {
+    let Some((key, raw)) = found else {
         // 初回起動。プリセットを投入する
         return (presets::seeded_db(), None);
     };
 
     match core::migrate(&raw) {
-        Ok(db) => (db, None),
+        Ok(db) => {
+            // 旧世代から読んだときは現行キーへ写しておく。App 側の Effect が 400ms 後に
+            // 保存するので必須ではないが、その前にプロセスを kill されると次回も
+            // 旧キーから読み直すことになるため、ここで確定させる。
+            // **旧キーは消さない**（旧版へ戻ったときの退路）
+            if key != KEY {
+                save(&db);
+            }
+            (db, None)
+        }
         Err(_) => {
             // ★ 破損データをプリセットで黙って上書きするのは全損を確定させる動作。
-            //   必ず退避してから差し替える
-            let backup_key = format!("{KEY}.bak-{}", Local::now().timestamp_millis());
+            //   必ず退避してから差し替える。退避先は読んだキー側に付ける
+            let backup_key = format!("{key}.bak-{}", Local::now().timestamp_millis());
             let saved = store.set_item(&backup_key, &raw).is_ok();
             let msg = if saved {
                 "以前のデータを復元できませんでした（退避済み）"

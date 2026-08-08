@@ -927,10 +927,11 @@ h3 {
   margin: 0 0 12px;
 }
 
+/* 見出しだけの 1 行。space-between だった名残の justify-content は落としてある
+   （右側に置いていた「プリセットを追加」ボタンを外したため） */
 .menu-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   margin-bottom: 10px;
 }

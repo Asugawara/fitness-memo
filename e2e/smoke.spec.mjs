@@ -59,7 +59,7 @@ async function flushToStorage(page) {
 async function seedPastLogs(page, entries) {
   await flushToStorage(page);
   await page.evaluate((entries) => {
-    const KEY = 'fitness-memo/v1';
+    const KEY = 'fitness-memo/v2';
     const db = JSON.parse(localStorage.getItem(KEY));
 
     // Local::now().date_naive() と揃えるため UTC (toISOString) ではなく

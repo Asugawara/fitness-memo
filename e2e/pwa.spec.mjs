@@ -123,7 +123,7 @@ test('SW が activated になる', async ({ page, browserName }) => {
 
 test('破損した JSON を注入すると退避キーが作られ、復元失敗の通知が出る', async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem('fitness-memo/v1', '{not valid json');
+    localStorage.setItem('fitness-memo/v2', '{not valid json');
   });
   await page.goto('./');
 
@@ -131,9 +131,53 @@ test('破損した JSON を注入すると退避キーが作られ、復元失�
   await expect(page.getByTestId('screen-today')).toBeVisible();
 
   const backupKeys = await page.evaluate(() =>
-    Object.keys(localStorage).filter((k) => k.startsWith('fitness-memo/v1.bak-')),
+    Object.keys(localStorage).filter((k) => k.startsWith('fitness-memo/v2.bak-')),
   );
   expect(backupKeys.length).toBeGreaterThan(0);
+});
+
+// ★ 保存キーは schema 非互換の変更のたびに切る（storage.rs のモジュールコメント参照）。
+//   旧版は新 JSON を読めない（消したフィールドが必須のまま）ので、キーを共有したまま
+//   出すとロールバック時に「記録が全消し」に見える。ここで検証するのは 2 点:
+//   1. v1 しか無い端末で起動すると、その記録がそのまま見えること（引き継ぎ）
+//   2. 引き継いだ後も **v1 が消えていないこと**（旧版へ戻ったときの退路）
+test('旧キー v1 の記録を引き継いで v2 に書き、v1 は消さない', async ({ page }) => {
+  // kind 付き（schema 1）の旧形式。新モデルには kind フィールドが無いが、
+  // serde は未知フィールドを無視するので読める
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'fitness-memo/v1',
+      JSON.stringify({
+        schema: 1,
+        next_id: 100,
+        groups: [{ id: 1, name: '胸', color: '#e0524a', order: 0 }],
+        exercises: [
+          { id: 10, name: 'レガシーベンチ', group_id: 1, kind: 'Weighted', order: 0 },
+        ],
+        sessions: {
+          '2020-01-02': { logs: [{ exercise_id: 10, sets: [{ weight: 60, reps: 10 }], at: null }] },
+        },
+      }),
+    );
+  });
+  await page.goto('./');
+  await expect(page.getByTestId('screen-today')).toBeVisible();
+  // 破損扱いになっていない（プリセットへのフォールバックが起きていない）
+  await expect(page.getByTestId('restore-notice')).toHaveCount(0);
+
+  const keys = await page.evaluate(() => ({
+    v1: localStorage.getItem('fitness-memo/v1'),
+    v2: localStorage.getItem('fitness-memo/v2'),
+  }));
+
+  expect(keys.v1, 'v1 は読み取り専用で残す（旧版へ戻ったときの退路）').not.toBeNull();
+  expect(keys.v2, 'v2 へ書き写されている').not.toBeNull();
+
+  const migrated = JSON.parse(keys.v2);
+  expect(migrated.exercises.map((e) => e.name)).toContain('レガシーベンチ');
+  expect(migrated.sessions['2020-01-02'].logs[0].sets).toEqual([{ weight: 60, reps: 10 }]);
+  // 旧形式のプリセットで上書きされていない（引き継ぎであって初期化ではない）
+  expect(migrated.groups.map((g) => g.name)).toEqual(['胸']);
 });
 
 test('オフラインでも起動し記録が読める（SW の navigate 分岐の検証）', async (

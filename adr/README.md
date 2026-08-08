@@ -19,7 +19,8 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0001](architecture/0001-rust-leptos-csr-trunk.md) | Rust + Leptos (CSR) + trunk を採用する | 採用 |
 | [0002](architecture/0002-no-router-tab-enum-signal.md) | ルーターを使わずタブを enum signal で切り替える | 採用 |
 | [0003](architecture/0003-wasm-target-scoped-dependencies.md) | UI 依存を wasm32 の target 別 dependencies に置く | 採用 |
-| [0004](architecture/0004-no-chart-library-hand-rolled-svg.md) | グラフライブラリを使わず SVG を自前で描く | 採用 |
+| [0004](architecture/0004-no-chart-library-hand-rolled-svg.md) | グラフライブラリを使わず SVG を自前で描く | 採用（`layout()` の置き場所は [0045](architecture/0045-chart-layout-in-core.md) で修正） |
+| [0045](architecture/0045-chart-layout-in-core.md) | グラフの座標計算を `chart_layout` に切り出してテスト可能にする | 採用 |
 
 ### data-model — データ構造と不変条件
 
@@ -68,6 +69,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0035](ux/0035-record-tab-calendar-with-day-editor.md) | 記録タブをカレンダー + 選択日エディタの単一画面にする | 採用 |
 | [0036](ux/0036-set-entry-prefill-and-focus.md) | セット追加は直前行の重量をコピーして回数欄へフォーカスする | 採用 |
 | [0037](ux/0037-copy-whole-day-menu.md) | 1 日分のメニューは候補リストから 1 タップで丸ごとコピーする | 採用 |
+| [0044](ux/0044-body-weight-second-axis-always-on.md) | 体重を推移グラフの第2軸に常時重ねる | 採用 |
 
 ### deploy — 配信とブランチ運用
 

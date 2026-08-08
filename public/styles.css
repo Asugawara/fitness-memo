@@ -796,6 +796,37 @@ h3 {
   font-size: 10px;
 }
 
+/* ── 体重（第2軸）─────────────────────────────────────────────────────────
+   ★ 控えめさは色では作れない。--muted と --accent のコントラスト比は実測で
+     ほぼ同じ（ライト 4.83 vs 4.88、ダーク 6.75 vs 6.93）なので、「muted だから
+     目立たない」は成立しない。従属性は線の細さ・破線・ドットを描かないこと・
+     メイン線の背面に置くことで作る。
+   ★ opacity は使わない。非テキストの 3:1 基準を割るうえ、ダークモードで消える。
+   ★ .chart-label-weight は .chart-label と詳細度が同じ(0,1,0)なので、必ず後ろに置く
+     （ソース順で font-size が決まる）。fill は .chart-label から効かせる */
+.chart-label-weight {
+  font-size: 9px;
+}
+
+.chart-line-weight {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.25; /* メインの chart-line は 2 */
+  /* .chart-cursor の `3 3` と周期を変えて、縦のカーソル線と読み違えないようにする */
+  stroke-dasharray: 6 4;
+  stroke-linejoin: round;
+}
+
+.chart-dot-weight {
+  fill: var(--muted);
+}
+
+.chart-dot-weight.selected {
+  fill: var(--surface);
+  stroke: var(--muted);
+  stroke-width: 1.5;
+}
+
 .chart-empty {
   color: var(--muted);
   text-align: center;
@@ -813,6 +844,19 @@ h3 {
 }
 
 .chart-readout strong {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 指標と体重を右側に寄せて並べる（左は日付） */
+.rd-values {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.rd-weight {
+  color: var(--muted);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 

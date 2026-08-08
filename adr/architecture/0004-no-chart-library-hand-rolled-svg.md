@@ -3,7 +3,12 @@
 - **状態**: 採用
 - **日付**: 2026-08-08
 - **カテゴリ**: architecture
-- **関連**: [ADR-0001](0001-rust-leptos-csr-trunk.md), [ADR-0009](../data-model/0009-group-metric-is-set-count.md)
+- **関連**: [ADR-0001](0001-rust-leptos-csr-trunk.md), [ADR-0009](../data-model/0009-group-metric-is-set-count.md), [ADR-0045](0045-chart-layout-in-core.md)（下の弱点を解消）, [ADR-0044](../ux/0044-body-weight-second-axis-always-on.md)（第2軸を追加）
+
+> **一部改訂。** 下の「結果」に書いた `layout()` のテストが無いという弱点は
+> [ADR-0045](0045-chart-layout-in-core.md) で解消した（`src/chart_layout.rs` へ移設）。
+> 描画の規則には [ADR-0044](../ux/0044-body-weight-second-axis-always-on.md) が
+> 「体重を第2軸に常時重ねる」を足している。ライブラリを使わない決定そのものは有効。
 
 ## 背景
 
@@ -51,6 +56,7 @@ const Y1: f64 = VIEW_H - 22.0;     // 下は X ラベルのぶん
 - **点数が多いときの表示は妥協である。** 40 点超で `<circle>` を省くと、タップは効くが「どこに点があるか」が見えなくなる。1 年分を週集約すれば 52 点なので、この閾値では「全期間」以外は円が出る。
 - **軸のラベル数を 3 個に固定した。** 期間が長いと粗く、短いと物足りない。自動調整は入れていない。
 - グラフの見た目は E2E で検証しにくい。`chart.rs` のロジックは `layout()` に集めてあるが、wasm32 専用モジュールなので `cargo test` の対象外である。**`layout()` のテストが無いのは弱点で**、`core.rs` に移せばホストでテストできた（座標計算は純粋な関数である）。
+  → [ADR-0045](0045-chart-layout-in-core.md) で `src/chart_layout.rs` へ移設し解消した。`core.rs` ではなく別ファイルにしたのは、SVG の viewport 定数を「`Db` を読む純ロジック」に混ぜないため。
 
 ## 検討した代替案
 

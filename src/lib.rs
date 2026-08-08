@@ -1,9 +1,10 @@
 //! 筋トレメモ — iPhone のホーム画面から完全オフラインで動く記録アプリ。
 //!
-//! ロジック層（`model` / `core` / `presets`）はターゲット非依存で、`cargo test` が
-//! ホストで検証する。UI 層（`storage` / `views`）は wasm32 専用に cfg gate してあり、
-//! ホストビルドが leptos の巨大な依存グラフを引かないようにしている。
+//! ロジック層（`model` / `core` / `presets` / `chart_layout`）はターゲット非依存で、
+//! `cargo test` がホストで検証する。UI 層（`storage` / `views`）は wasm32 専用に
+//! cfg gate してあり、ホストビルドが leptos の巨大な依存グラフを引かないようにしている。
 
+pub mod chart_layout;
 pub mod core;
 pub mod model;
 pub mod presets;

@@ -429,25 +429,60 @@ test('グラフをタップすると読み取り欄に日付・指標・体重�
   await expect(page.getByTestId('readout-weight')).toHaveText('70.5 kg');
 });
 
-// ★ aggregate_weekly（合計）に通すと 141 kg になる。体重は平均でなければ意味を持たない
+// ★ aggregate_weekly（合計）に通すと週内の体重が足し上がる。体重は平均でなければ意味を持たない。
+//   ★ 特定の 2 日が同じ週に入ることに賭けない（週境界は今日の曜日で動く）。
+//     8 日連続で入れれば、どこで切れても必ずどれかの週に 2 日以上入る
 test('全期間の体重は合計ではなく週平均で集計される', async ({ page }) => {
-  // 同じ週に 2 回、離れた週にもう 1 回置く（全期間の週集約が効く状態にする）
-  await seedPastLogs(page, [
-    { daysAgo: 30, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }], bodyWeight: 72 },
-    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }], bodyWeight: 70 },
-    { daysAgo: 2, bodyWeight: 71 },
-  ]);
+  const entries = [
+    { daysAgo: 30, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ];
+  // 全部同じ 70.0 にしておくと、平均は必ず 70.0、合計なら 140 以上の週ができる
+  for (let daysAgo = 0; daysAgo <= 7; daysAgo++) entries.push({ daysAgo, bodyWeight: 70 });
+  await seedPastLogs(page, entries);
 
   await page.getByTestId('tab-progress').click();
   await page.getByTestId('period-select').getByTestId('period-btn')
     .filter({ hasText: '全期間' }).click();
   await expect(page.getByTestId('weekly-note')).toContainText('体重は週平均');
 
-  // 直近の週は 70 と 71 → 平均 70.5（合計なら 141）
+  // 平均なら全週 70.0 なので、帯は 70 を中央にした 69.5〜70.5 に落ち着く。
+  // 合計だと 140 以上の週ができるので、この 3 つのラベルにはならない
   const labels = await page.getByTestId('chart').evaluate((svg) =>
-    Array.from(svg.querySelectorAll('text.chart-label-weight')).map((t) => Number(t.textContent)),
+    Array.from(svg.querySelectorAll('text.chart-label-weight')).map((t) => t.textContent),
   );
-  expect(Math.max(...labels)).toBeLessThan(100);
+  expect(labels).toEqual(['70.5', '70', '69.5']);
+});
+
+// ★ 週平均に落とす経路（体重 45 点超）はブラウザでも一度は通しておく。
+//   単体テストで座標は固めてあるが、SVG 属性の綴りは実行時に黙って無視されるため
+test('毎日の記録が続いても体重の破線がプロット領域からはみ出さない', async ({ page }) => {
+  const entries = [
+    { daysAgo: 50, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 62.5, reps: 10 }] },
+  ];
+  for (let daysAgo = 0; daysAgo <= 55; daysAgo++) {
+    entries.push({ daysAgo, bodyWeight: 70 + (daysAgo % 5) * 0.2 });
+  }
+  await seedPastLogs(page, entries);
+
+  await page.getByTestId('tab-progress').click();
+  const chart = page.getByTestId('chart');
+  // 56 点 > WEIGHT_DENSE_POINTS(45) なので描画は週平均に落ちている
+  await expect(chart).toHaveAttribute('data-weight-smoothed', 'true');
+
+  const outside = await chart.evaluate((svg) => {
+    const line = svg.querySelector('polyline.chart-line-weight');
+    // グリッド線の x1/x2 がプロット領域そのもの
+    const grid = svg.querySelector('line.chart-grid');
+    const [x0, x1] = [Number(grid.getAttribute('x1')), Number(grid.getAttribute('x2'))];
+    return line
+      .getAttribute('points')
+      .split(' ')
+      .map((p) => Number(p.split(',')[0]))
+      .filter((x) => !(x >= x0 - 0.05 && x <= x1 + 0.05));
+  });
+  expect(outside).toEqual([]);
 });
 
 // ★ 体重が f32 の上限まで素通りするため、1 点でも極端な値が混じると帯が潰れて

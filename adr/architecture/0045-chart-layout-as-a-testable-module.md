@@ -49,8 +49,9 @@ x_labels: Vec<(f64, NaiveDate, &'static str)>
 **データの関数（`body_weight_series` / `aggregate_weekly_avg` / `weight_band`）は `core.rs` に置く。**
 `sessions_in` が private なこともあるが、区別は「`Db` を読むのが `core`、画面座標を出すのが `chart_layout`」。
 
-移設は**振る舞いを変えない単独のステップ**として行い、既存の 88 個の `cargo test` と
-193 個の Playwright テストが全部通ることを確認してから第2軸を足した。
+移設は**振る舞いを変えない単独のステップ**として行い、その時点の全テスト
+（`cargo test` 88 本 / Playwright 61 本）が通ることを確認してから第2軸を足した。
+本数は移設時点の値で、第2軸とその後の修正でどちらも増えている。
 
 ## 理由
 

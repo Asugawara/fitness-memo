@@ -152,10 +152,23 @@ pub fn layout(series: &[(NaiveDate, f64)], weight: &[(NaiveDate, f64)]) -> Layou
 
     let x1 = if weight.is_empty() { X1 } else { X1_DUAL };
 
+    // ★ 描画用の体重は**ドメインより先に**作る。週平均に落とすとキーが週開始日（日曜）へ
+    //   丸まるので、先頭が生データの初日より最大 6 日前に出る。ドメインを生データから
+    //   作ってしまうと、その先頭が `X0` の左（実測で x=7.2 まで）へはみ出し、
+    //   左の軸ラベルの上を破線が横切る。しかも左端の X ラベルは実測初日を指したままになる
+    let drawn: Vec<(NaiveDate, f64)> = if weight.len() > WEIGHT_DENSE_POINTS {
+        core::aggregate_weekly_avg(weight)
+    } else {
+        weight.to_vec()
+    };
+
     // ── X は両系列の合併ドメイン ──
     // 体重は毎日あるので、実質「最初の記録 〜 今日」になる。最後にトレした日から
-    // 今日までが右の空白として見えるのは、休んだ期間を空白で示す既存の方針と同じ
-    let first = [series.first(), weight.first()]
+    // 今日までが右の空白として見えるのは、休んだ期間を空白で示す既存の方針と同じ。
+    //
+    // 左端は**描画する系列**（集約後）で取る。右端は**生データ**で取る
+    // （集約後の最終点は週開始日なので今日より手前に落ち、「今日の体重まで見える」が消える）。
+    let first = [series.first(), drawn.first()]
         .into_iter()
         .flatten()
         .map(|(d, _)| *d)
@@ -199,19 +212,16 @@ pub fn layout(series: &[(NaiveDate, f64)], weight: &[(NaiveDate, f64)]) -> Layou
     let polyline = polyline_of(pts.iter().map(|p| (p.x, p.y)));
 
     // ── 右軸（体重）。min/max ベースの帯 ──
-    // 描画用は密なら週平均に落とす。帯も描画用系列から作るので、描いた線は必ず帯に収まる
-    let drawn: Vec<(NaiveDate, f64)> = if weight.len() > WEIGHT_DENSE_POINTS {
-        core::aggregate_weekly_avg(weight)
-    } else {
-        weight.to_vec()
-    };
-    // 契約により hi > lo かつ有限。ここでゼロ除算 / NaN 座標が出ないことが担保される
+    // ★ 帯は**生データ**の min/max から作る。描画用（週平均）から作ると帯が狭くなり、
+    //   タップで出る実測値が右軸の範囲外の数字になる（「69.5〜70.5」と書いてある軸で
+    //   70.9 kg と読める）。週平均は必ず生の min/max の内側なので、描いた線は帯に収まる
     let band = (!drawn.is_empty()).then(|| {
-        let lo_v = drawn.iter().map(|(_, v)| *v).fold(f64::INFINITY, f64::min);
-        let hi_v = drawn
+        let lo_v = weight.iter().map(|(_, v)| *v).fold(f64::INFINITY, f64::min);
+        let hi_v = weight
             .iter()
             .map(|(_, v)| *v)
             .fold(f64::NEG_INFINITY, f64::max);
+        // 契約により hi > lo かつ有限。ここでゼロ除算 / NaN 座標が出ないことが担保される
         core::weight_band(lo_v, hi_v)
     });
     // 選択カーソルが体重の線の上に丸を打つための座標。日付で引けるように持つ
@@ -264,6 +274,14 @@ pub fn layout(series: &[(NaiveDate, f64)], weight: &[(NaiveDate, f64)]) -> Layou
                 x.midpoint(seeds[i + 1].1)
             };
             let pt = pts.iter().find(|p| p.date == *date);
+            // 読み取り欄は集約前の実測値。メインが空で体重を軸にしている間は
+            // 軸そのものが描画用系列なので、そちらの値を出す（線と数字を一致させる）
+            let drawn_v = value_at(&drawn, *date);
+            let readout = if metric_anchored {
+                value_at(weight, *date)
+            } else {
+                drawn_v
+            };
             Band {
                 idx: i,
                 x: *x,
@@ -272,14 +290,14 @@ pub fn layout(series: &[(NaiveDate, f64)], weight: &[(NaiveDate, f64)]) -> Layou
                 date: *date,
                 value: pt.map(|p| p.value),
                 y: pt.map(|p| p.y),
-                // 読み取り欄は集約前の実測値。メインが空で体重を軸にしている間は
-                // 軸そのものが描画用系列なので、そちらの値を出す（線と数字を一致させる）
-                weight: if metric_anchored {
-                    value_at(weight, *date)
-                } else {
-                    value_at(&drawn, *date)
-                },
-                w_y: value_at(&drawn_y, *date),
+                weight: readout,
+                // ★ 読み取り欄の数字と線上の点が一致するときだけ丸を打つ。
+                //   単に「その日付が描画系列にあるか」で決めると、週平均に落としている間に
+                //   **たまたま日曜（週開始日）にトレした日**だけ座標が週平均になり、
+                //   数字は実測なのに丸だけ別の高さ、という取り違えが起きる
+                w_y: (readout == drawn_v)
+                    .then(|| value_at(&drawn_y, *date))
+                    .flatten(),
             }
         })
         .collect();
@@ -477,6 +495,85 @@ mod tests {
         // 週キーと一致しない日なので、線の上には丸を打たない
         assert_eq!(b.w_y, None);
         assert_all_coords_finite(&l);
+    }
+
+    /// ★ 週平均に落とすとキーが週開始日（日曜）へ丸まるので、生データの初日より最大
+    /// 6 日前に点が出る。ドメインを生データから取っていると、その点が `X0` の左へ
+    /// はみ出して左の軸ラベルの上を破線が横切る（実測で x=7.2 まで出た）。
+    ///
+    /// 開始曜日を 1 週ぶん総当りして、描画点が必ずプロット領域に収まることを確かめる。
+    #[test]
+    fn every_drawn_point_stays_inside_the_plot_area() {
+        let values: Vec<f64> = (0..60).map(|i| 70.0 + f64::from(i % 7) * 0.2).collect();
+        for offset in 0..7 {
+            let start = d(2026, 5, 10) + TimeDelta::days(offset); // 5/10 は日曜
+            let weight = daily(start, &values);
+            assert!(weight.len() > WEIGHT_DENSE_POINTS, "集約経路に入ること");
+            let l = layout(&metric(), &weight);
+            let w = l.weight.as_ref().expect("体重レイヤがある");
+            assert!(w.aggregated);
+
+            for coord in w.polyline.split(' ') {
+                let x: f64 = coord.split(',').next().expect("x,y").parse().expect("数値");
+                assert!(
+                    (X0 - 1e-9..=l.x1 + 1e-9).contains(&x),
+                    "開始 {start}: x={x} が [{X0}, {}] の外",
+                    l.x1
+                );
+            }
+            // 左端の X ラベルは実際に線が始まる位置を指していること
+            assert_eq!(l.x_labels[0].0, X0);
+            assert_all_coords_finite(&l);
+        }
+    }
+
+    /// ★ 週平均に落としている間、**たまたま日曜（週開始日）にトレしていた日**だけ
+    /// 日付が描画系列と一致してしまう。素朴に「一致したら丸を打つ」にすると、
+    /// 読み取り欄は実測値なのに丸だけ週平均の高さ、という取り違えになる。
+    #[test]
+    fn the_cursor_never_marks_a_weekly_average_as_if_it_were_a_measurement() {
+        let start = d(2026, 5, 10); // 日曜
+        // 週内で 0.3kg 振れるので、週平均は必ずその日の実測と異なる
+        let values: Vec<f64> = (0..70).map(|i| 70.0 + f64::from(i % 7) * 0.3).collect();
+        let weight = daily(start, &values);
+        // メイン系列は日曜だけ = 週開始日と完全一致する日付
+        let m: Vec<(NaiveDate, f64)> = (0..10)
+            .map(|w| (start + TimeDelta::days(w * 7), 600.0))
+            .collect();
+
+        let l = layout(&m, &weight);
+        assert!(l.weight.as_ref().expect("ある").aggregated);
+        assert_eq!(l.bands.len(), 10);
+        for b in &l.bands {
+            assert!(b.weight.is_some(), "実測値は読める");
+            assert_eq!(b.w_y, None, "{}: 週平均の位置に丸を打たない", b.date);
+        }
+    }
+
+    /// タップで読める数字が右軸の範囲の外に出ないこと。
+    /// 帯を描画用（週平均）から作ると、軸に「69.5〜70.5」と書いてあるのに
+    /// 「70.9 kg」と読める状態になる。
+    #[test]
+    fn every_readout_value_falls_inside_the_right_axis() {
+        let start = d(2026, 5, 13);
+        // 週平均はほぼ一定だが、日々は ±0.9kg 振れる
+        let values: Vec<f64> = (0..70)
+            .map(|i| 70.0 + if i % 2 == 0 { 0.9 } else { -0.9 })
+            .collect();
+        let weight = daily(start, &values);
+        let m: Vec<(NaiveDate, f64)> = (0..23)
+            .map(|i| (start + TimeDelta::days(i * 3), 600.0))
+            .collect();
+
+        let l = layout(&m, &weight);
+        let w = l.weight.as_ref().expect("体重レイヤがある");
+        assert!(w.aggregated);
+        let (hi, lo) = (w.values[0], w.values[2]);
+        for b in &l.bands {
+            if let Some(v) = b.weight {
+                assert!(lo <= v && v <= hi, "{v} が右軸 [{lo}, {hi}] の外");
+            }
+        }
     }
 
     /// 集約していないときは、その日の体重が線の上にあるので丸を打てる。

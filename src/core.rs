@@ -394,6 +394,12 @@ pub fn weight_band(lo_v: f64, hi_v: f64) -> (f64, f64) {
     loop {
         let ticks = ((hi - lo) / WEIGHT_TICK).round() as i64;
         if ticks >= 2 && ticks % 2 == 0 {
+            // ★ 体重の軸に負の目盛りを出さない。0.1kg のような打ち間違いが 1 点でも
+            //   残っていると中央寄せで下端が -0.5 になる。幅（= 区間の偶数条件）を
+            //   保ったまま帯ごと持ち上げる。上へずらすだけなので含有は壊れない
+            if lo < 0.0 {
+                return (0.0, hi - lo);
+            }
             return (lo, hi);
         }
         if lo_v - lo <= hi - hi_v {

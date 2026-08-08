@@ -448,9 +448,15 @@ pub fn Progress() -> impl IntoView {
             {move || {
                 (period.get() == Period::All)
                     .then(|| {
+                        // 体重が 1 件も無い人に「体重は週平均」と言わない
+                        let note = if weight.get().is_empty() {
+                            "全期間は週単位で集計しています"
+                        } else {
+                            "全期間は週単位で集計しています（体重は週平均）"
+                        };
                         view! {
                             <p class="muted note" data-testid="weekly-note">
-                                "全期間は週単位で集計しています（体重は週平均）"
+                                {note}
                             </p>
                         }
                     })

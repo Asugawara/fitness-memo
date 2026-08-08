@@ -126,7 +126,15 @@ pub fn Chart(
                         )
                     })
                     .unwrap_or_default();
-                let label = format!("{span}{metric_part}{weight_part}");
+                // ★ 線が週平均に落ちていることは画面からは分からない（破線を静かに保つため
+                //   注記を出していない）。読み上げには事実として残す
+                let weight_smoothed = l.weight.as_ref().is_some_and(|w| w.aggregated);
+                let smoothed = if weight_smoothed {
+                    "。体重の線は週平均"
+                } else {
+                    ""
+                };
+                let label = format!("{span}{metric_part}{weight_part}{smoothed}");
                 let show_dots = !l.dense;
                 let last_idx = l.pts.len().saturating_sub(1);
                 let weight_points = l.weight.as_ref().map_or(0, |w| w.points);
@@ -139,6 +147,7 @@ pub fn Chart(
                         data-testid="chart"
                         data-points=l.pts.len().to_string()
                         data-weight-points=weight_points.to_string()
+                        data-weight-smoothed=weight_smoothed.to_string()
                         data-dense=l.dense.to_string()
                     >
                         // グリッドは 3 本のまま両軸で共用する。左ラベルがメイン指標、

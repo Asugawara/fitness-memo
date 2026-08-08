@@ -1,0 +1,1104 @@
+/* 筋トレメモ — 素の CSS 1 ファイル + CSS 変数。ライブラリなし。 */
+
+:root {
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --text: #16171a;
+  --muted: #6b7280;
+  --line: #e3e4e8;
+  --accent: #2f6fd0;
+  --accent-text: #ffffff;
+  --warn: #b4560c;
+  --hero: #101114;
+
+  /* 経過の濃淡。★ 部位カラー × 経過濃淡の二重符号化は色から意味が読めないので
+     チップは単色系に統一し、濃さだけで新しさを示す */
+  --chip-0: #dfe6f2;
+  --chip-1: #c6d4ea;
+  --chip-2: #aec2e2;
+  --chip-3: #93aed8;
+  --chip-none: #eceef1;
+
+  --tabbar: 56px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b0b0c;
+    --surface: #17181b;
+    --text: #eceef1;
+    --muted: #9aa0aa;
+    --line: #2a2c31;
+    --accent: #6fa4ec;
+    --accent-text: #0b0b0c;
+    --warn: #e2a06a;
+    --hero: #ffffff;
+
+    --chip-0: #23303f;
+    --chip-1: #2b3f57;
+    --chip-2: #34506f;
+    --chip-3: #3d6188;
+    --chip-none: #1e1f23;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior-y: contain;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  /* ボトムタブに本文が隠れないぶんの余白 */
+  padding-bottom: calc(var(--tabbar) + env(safe-area-inset-bottom));
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+  touch-action: manipulation;
+}
+
+/* ★ 16px 未満だとフォーカス時に iOS がページごとズームする */
+input {
+  font-size: 16px;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+/* ── 画面の外枠 ─────────────────────────────────────────────────────────── */
+
+.screen {
+  padding: 12px 14px 24px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+/* ── ボトムタブ ─────────────────────────────────────────────────────────── */
+
+/* ★ .bottom-tabs / .sheet-backdrop / .sheet は 3 つとも position: fixed。
+   z-index を省くと重なり順が **DOM 順** で決まり、後に来る <nav class="bottom-tabs">
+   がシートより前面に出る。実際にそれで 2 つ壊れていた:
+   1. シート下端がタブバーに隠れ、「種目を追加」の最後の種目（レッグレイズ）が
+      押せない。利用者には「体幹の種目は 3 つしかない」ように見える
+   2. inset:0 の .sheet-backdrop もタブバーを覆えず、シート表示中にタブが押せる。
+      隠れた種目を狙ったタップが別タブへの遷移になり、入力を見失う（こちらが重症）
+   タブバーにも明示的に値を置く。シート側だけ正の値にしても直るが、タブバーが auto
+   のままだと将来 fixed 要素を足したときに同じ事故が再発する。
+   （menu.rs のシートはインラインで z-index を持っていたため無事だった = 原因の裏付け） */
+.bottom-tabs {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.tab-btn {
+  flex: 1;
+  min-height: 44px;
+  height: var(--tabbar);
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tab-btn.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ★ iOS のキーボード表示中は position:fixed 要素が入力欄に被る（standalone では
+   interactive-widget=resizes-visual が無視される既知バグ）。最小で確実な対策として
+   入力フォーカス中はタブバーごと隠す。DevTools では再現しない項目。 */
+.kb-open .bottom-tabs {
+  display: none;
+}
+
+/* ── 通知・注意書き ─────────────────────────────────────────────────────── */
+
+.notice,
+.install-hint {
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 14px 0;
+  background: var(--warn);
+  /* ★ #fff 直書きだとダークで破綻する。--warn はライトが濃橙 #b4560c、ダークが
+     淡橙 #e2a06a と明度が反転するため、白固定では実測 light 4.91 / dark 2.22 になる。
+     --accent-text は「強い塗りの上に載せる文字色」でモード間で反転するトークンなので、
+     ここに使うと light 4.91（据え置き）/ dark 8.58 になる。 */
+  color: var(--accent-text);
+}
+
+.notice span {
+  flex: 1;
+}
+
+.install-hint {
+  background: var(--chip-0);
+  color: var(--text);
+  margin: 0 0 12px;
+}
+
+/* ── 今日タブ ───────────────────────────────────────────────────────────── */
+
+.day-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.day-head h1 {
+  font-size: 20px;
+}
+
+.day-head.past h1 {
+  color: var(--warn);
+}
+
+.badge {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.past-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  font-size: 13px;
+}
+
+.hero {
+  text-align: center;
+  padding: 20px 0 12px;
+}
+
+.hero-label {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.hero-value {
+  margin: 4px 0 16px;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--hero);
+}
+
+.hero.folded {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  text-align: left;
+  padding: 6px 0 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+
+.chips.inline {
+  justify-content: flex-start;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--chip-none);
+  /* ★ --muted ではなく --text。--muted は「--bg / --surface の上に置く」前提の色なので、
+     チップの塗り（--chip-0..3）の上では日数側のコントラストが足りない。
+     実測: --muted は chip-3 の上で dark 2.45 / light 2.14（いずれも 4.5 未満）。
+     --text にすると dark 5.54 / light 7.93 になり両モードとも基準を満たす。
+     「胸 3d」の 3d は眺めるための実データなので、ここは読めないと困る。
+     部位名との階層は .chip b の font-weight で保つ。 */
+  color: var(--text);
+}
+
+.chip b {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.chip[data-recency="fresh"] {
+  background: var(--chip-3);
+}
+.chip[data-recency="recent"] {
+  background: var(--chip-2);
+}
+.chip[data-recency="stale"] {
+  background: var(--chip-1);
+}
+.chip[data-recency="old"] {
+  background: var(--chip-0);
+}
+
+.chip i {
+  font-style: normal;
+}
+
+/* ── コンディション ─────────────────────────────────────────────────────── */
+
+.condition {
+  margin: 4px 0 12px;
+}
+
+.cond-fields {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.cond-fields label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.cond-fields .note {
+  flex: 1;
+}
+
+.cond-fields input {
+  min-height: 44px;
+  width: 5.5em;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.cond-fields .note input {
+  width: 100%;
+}
+
+/* ── 種目カード ─────────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+  scroll-margin-top: 12px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-head h2 {
+  flex: 1;
+  font-size: 16px;
+}
+
+.group-name {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.last-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.last-row .sets {
+  font-variant-numeric: tabular-nums;
+}
+
+.last-row .metric {
+  margin-left: auto;
+}
+
+.copy {
+  margin-top: 8px;
+}
+
+.sets-editor {
+  margin-top: 8px;
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 3px 0;
+}
+
+.set-no {
+  width: 1.4em;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.set-row .num {
+  width: 4.2em;
+  min-height: 44px;
+  padding: 4px 8px;
+  text-align: right;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  font-variant-numeric: tabular-nums;
+}
+
+.set-row .unit,
+.set-row .times {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.set-row .icon-btn {
+  margin-left: auto;
+}
+
+.warn {
+  flex-basis: 100%;
+  padding-left: 1.9em;
+  font-size: 11px;
+  color: var(--warn);
+}
+
+.add-set-wrap {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.card-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.card-foot strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── ボタン ─────────────────────────────────────────────────────────────── */
+
+.primary,
+.secondary {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.add-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 4px;
+}
+
+.icon-btn {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+
+.link-btn {
+  min-height: 44px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+}
+
+/* ── 種目を追加シート ───────────────────────────────────────────────────── */
+
+/* .bottom-tabs(10) より前面。シート表示中にタブを押せなくするのが役目 */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 19;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+/* backdrop(19) より前面。ここまで来ればシートがタブバーの上に完全に載るので、
+   padding-bottom は既存の env(safe-area-inset-bottom) だけで足りる */
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: 14px 14px 0 0;
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sheet-body {
+  overflow-y: auto;
+  padding: 8px 14px 16px;
+  overscroll-behavior: contain;
+}
+
+.sheet-group {
+  margin-bottom: 12px;
+}
+
+.sheet-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.sheet-group h3::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dot, var(--muted));
+}
+
+.pick-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pick {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.pick.added {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── 推移タブ ───────────────────────────────────────────────────────────── */
+
+.screen-title {
+  font-size: 20px;
+  margin-bottom: 10px;
+}
+
+.selectors {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.target-select {
+  width: 100%;
+  /* ★ WebKit（iOS Safari）のネイティブ menulist は UA テーマが min-height を 18px へ
+     上書きするため、min-height だけでは 44px に届かず実測 23px になる。
+     Chromium は min-height を尊重して 44px になるので、エンジン差で見逃しやすい。
+     height を明示すると WebKit でも 44px になり、appearance は auto のままなので
+     ネイティブの選択矢印と iOS のピッカー UI がそのまま残る。
+     appearance:none でも 44px にはなるが矢印が消えてただの入力欄に見えるため採らない
+     （代替の矢印を背景画像で描くと色をハードコードすることになり、ダークで破綻する）。
+     min-height はタップターゲット規約の意図を残すために併記する。 */
+  min-height: 44px;
+  height: 44px;
+  padding: 0 10px;
+  font-size: 16px; /* 16px 未満だと iOS がフォーカス時にズームする */
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.segmented {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.seg-btn {
+  flex: 1;
+  min-height: 44px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.seg-btn:first-child {
+  border-left: 0;
+}
+
+.seg-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+/* ── グラフ ─────────────────────────────────────────────────────────────── */
+
+.chart-wrap {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 8px 6px;
+}
+
+/* viewBox 320x160 + preserveAspectRatio 既定（meet）なので縦横比は保たれる */
+.chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.chart-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-dot {
+  fill: var(--accent);
+}
+
+.chart-dot.selected {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.chart-cursor {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+/* ★ タップのヒット領域。fill:none のままでも拾えるよう pointer-events:all を明示する
+   （既定の visiblePainted は塗りの有無に依存するので当てにしない） */
+.chart-hit {
+  fill: none;
+  pointer-events: all;
+  cursor: pointer;
+}
+
+.chart-label {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.chart-empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 40px 0;
+  margin: 0;
+}
+
+.chart-readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 4px 0;
+  font-size: 13px;
+}
+
+.chart-readout strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.progress .note {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+/* ── 統計 ───────────────────────────────────────────────────────────────── */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.stats > div {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.stats dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.stats dd {
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 記録テーブル ───────────────────────────────────────────────────────── */
+
+.records {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.records th,
+.records td {
+  padding: 7px 6px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.records th {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.records .rec-date {
+  white-space: nowrap;
+}
+
+.records .rec-detail {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.records .rec-metric {
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── カレンダータブ ─────────────────────────────────────────────────────── */
+
+/* ★ この節はレイアウトを持たない。
+   calendar.rs が S_NAV / S_WEEK / S_GRID / S_DOTS / S_ACTIONS などのインライン
+   style 定数で display・grid-template-columns・flex の各軸を持っているため、
+   ここで同じプロパティを書いてもインライン側が常に勝ち「効かない CSS」になる。
+   この節が担当するのは色・境界線・角丸・余白・文字サイズだけ。
+   calendar.rs 側のインライン定数を将来外すときは、あわせてレイアウトをここへ移すこと。 */
+
+.calendar .stats {
+  margin: 10px 0 12px;
+}
+
+.cal-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.cal-nav .screen-title {
+  margin: 0;
+}
+
+/* ★ 曜日見出しと日グリッドは同じ 7 列に揃える。日曜始まりなので
+   Weekday::num_days_from_sunday() の 0..=6 と列番号が一致する。 */
+.cal-week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  padding-bottom: 4px;
+  /* 曜日見出しと日グリッドの境。--line の 1px は .card-foot / .records と同じ区切り方 */
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+.cal-wd {
+  font-size: 11px;
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  padding-top: 2px;
+}
+
+/* min-height はタップターゲット規約（44px）。 */
+.cal-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 44px;
+  padding: 2px 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+/* 選択状態と当日。`class:is-today` / `class:is-picked` で伝わる */
+.cal-day.is-today {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.cal-day.is-picked {
+  border-color: var(--accent);
+  background: var(--chip-0);
+}
+
+.cal-num {
+  font-size: 14px;
+  line-height: 1.15;
+}
+
+/* 前月・翌月にはみ出す空きマス。列を保つためだけに置かれているので中身は無い */
+.cal-blank {
+  min-height: 44px;
+}
+
+/* ドットを子に持つ帯。高さを固定して、ドットの有無で日セルの高さが揺れないようにする。
+   pointer-events:none はクリックの target を常に .cal-day 側にするため */
+.cal-dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 6px;
+  pointer-events: none;
+}
+
+/* ★ background だけは calendar.rs がインラインで渡す。Group.color 由来のデータなので
+   CSS では表現できない（ユーザーがカラーピッカーで変更できる）。
+   形と大きさはここが持つ。flex:none は 6px が潰れないように */
+.cal-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+/* 選択日のパネル。画面末尾なので .card の下余白は落とす */
+.cal-detail {
+  margin-bottom: 0;
+}
+
+/* 右端の指標列を行またぎで揃える */
+.cal-logs {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-log {
+  padding: 1px 0;
+}
+
+.cal-log-name {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* 「この日を編集」/「この日に記録する」。区切り方は .card-foot に揃える */
+.cal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+/* 「記録なし」が無い（記録がある）日でもボタンを右端に寄せる */
+.cal-open {
+  min-height: 44px;
+  margin-left: auto;
+}
+
+/* ── 種目タブ ───────────────────────────────────────────────────────────── */
+
+.menu > .menu-note {
+  margin: 0 0 12px;
+}
+
+.menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* h1 の UA 既定は 2em なので、今日タブ（.day-head h1）と同じ 20px に揃える */
+.menu-head h1 {
+  font-size: 20px;
+}
+
+.menu-note {
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+/* 部位ブロック。.card の 12px より下を詰めて、種目行の区切り線を主役にする */
+.grp {
+  padding: 10px 12px 4px;
+}
+
+/* 部位カラーの丸。色は inline の --dot で受け取る（.sheet-group h3::before と同じ作り） */
+.dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--dot, var(--muted));
+}
+
+/* ★ 色は .link-btn の --accent のまま（上書きしない）。
+   「種目名は自由に編集・追加できる」が明示要件なので、名前がタップで開くことが
+   見て分かる必要がある。他タブの見出しと同じ --text にすると手掛かりが消える */
+.grp-name {
+  flex: 1;
+  text-align: left;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.grp-count {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.grp-foot {
+  display: flex;
+  border-top: 1px solid var(--line);
+}
+
+.ex-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  border-top: 1px solid var(--line);
+}
+
+.ex-name {
+  flex: 1;
+  min-height: 44px;
+  text-align: left;
+}
+
+.ex-kind {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* アーカイブ済みは末尾の副次セクション。.card の面を与えず軽く置く */
+.archived {
+  margin-top: 18px;
+}
+
+.archived-head {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.archived-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ── 編集シートのフォーム ───────────────────────────────────────────────── */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 14px;
+}
+
+.field > span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* シートの地は --surface なので、入力欄は --bg で沈める（.set-row .num と同じ考え方）。
+   font-size は全体規則の 16px（iOS のフォーカス時ズーム対策）に任せる */
+.text-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.field input[type="color"] {
+  width: 64px;
+  min-height: 44px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.opt {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+/* 選択中。推移タブの .seg-btn.active と同じ塗りに揃える */
+.opt.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.sheet-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+/* Kind 変更の「グラフの単位が変わります」など。枠の出し方は .past-banner に揃える */
+.warn-box {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--warn);
+}
+
+.warn-box p {
+  margin: 0 0 6px;
+}
+
+/* 削除系。--danger トークンは無いので警告色を使う。
+   .link-btn と同じ詳細度なので、色を上書きするにはこの位置（後方）である必要がある */
+.danger {
+  color: var(--warn);
+}

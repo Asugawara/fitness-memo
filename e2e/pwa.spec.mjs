@@ -133,7 +133,7 @@ test('SW が activated になる', async ({ page, browserName }) => {
 
 test('破損した JSON を注入すると退避キーが作られ、復元失敗の通知が出る', async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem('fitness-memo/v2', '{not valid json');
+    localStorage.setItem('fitness-memo/v3', '{not valid json');
   });
   await page.goto('./');
 
@@ -141,7 +141,7 @@ test('破損した JSON を注入すると退避キーが作られ、復元失�
   await expect(page.getByTestId('screen-record')).toBeVisible();
 
   const backupKeys = await page.evaluate(() =>
-    Object.keys(localStorage).filter((k) => k.startsWith('fitness-memo/v2.bak-')),
+    Object.keys(localStorage).filter((k) => k.startsWith('fitness-memo/v3.bak-')),
   );
   expect(backupKeys.length).toBeGreaterThan(0);
 });
@@ -151,7 +151,7 @@ test('破損した JSON を注入すると退避キーが作られ、復元失�
 //   出すとロールバック時に「記録が全消し」に見える。ここで検証するのは 2 点:
 //   1. v1 しか無い端末で起動すると、その記録がそのまま見えること（引き継ぎ）
 //   2. 引き継いだ後も **v1 が消えていないこと**（旧版へ戻ったときの退路）
-test('旧キー v1 の記録を引き継いで v2 に書き、v1 は消さない', async ({ page }) => {
+test('旧キー v1 の記録を引き継いで v3 に書き、v1 は消さない', async ({ page }) => {
   // kind 付き（schema 1）の旧形式。新モデルには kind フィールドが無いが、
   // serde は未知フィールドを無視するので読める
   await page.addInitScript(() => {
@@ -177,13 +177,13 @@ test('旧キー v1 の記録を引き継いで v2 に書き、v1 は消さない
 
   const keys = await page.evaluate(() => ({
     v1: localStorage.getItem('fitness-memo/v1'),
-    v2: localStorage.getItem('fitness-memo/v2'),
+    v3: localStorage.getItem('fitness-memo/v3'),
   }));
 
   expect(keys.v1, 'v1 は読み取り専用で残す（旧版へ戻ったときの退路）').not.toBeNull();
-  expect(keys.v2, 'v2 へ書き写されている').not.toBeNull();
+  expect(keys.v3, 'v3 へ書き写されている').not.toBeNull();
 
-  const migrated = JSON.parse(keys.v2);
+  const migrated = JSON.parse(keys.v3);
   expect(migrated.exercises.map((e) => e.name)).toContain('レガシーベンチ');
   expect(migrated.sessions['2020-01-02'].logs[0].sets).toEqual([{ weight: 60, reps: 10 }]);
   // 旧形式のプリセットで上書きされていない（引き継ぎであって初期化ではない）
@@ -192,18 +192,18 @@ test('旧キー v1 の記録を引き継いで v2 に書き、v1 は消さない
 
 // ★ 旧キーは「全損に対する唯一の退路」（ADR-0034）。現行キーが壊れたときに
 //   そこへ降りられなければ、退路を用意した意味が無い。
-//   「最初に中身があったキーで打ち切る」実装だと、健全な v1 が残っているのに
+//   「最初に中身があったキーで打ち切る」実装だと、健全な v2 が残っているのに
 //   プリセットが表示され、直後の保存でそれが確定してしまう。
-test('v2 が壊れていても健全な v1 があればそこから復元する', async ({ page }) => {
+test('v3 が壊れていても健全な v2 があればそこから復元する', async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem('fitness-memo/v2', '{壊れている');
+    localStorage.setItem('fitness-memo/v3', '{壊れている');
     localStorage.setItem(
-      'fitness-memo/v1',
+      'fitness-memo/v2',
       JSON.stringify({
-        schema: 1,
+        schema: 2,
         next_id: 100,
         groups: [{ id: 1, name: '胸', color: '#e0524a', order: 0 }],
-        exercises: [{ id: 10, name: '生き残りベンチ', group_id: 1, kind: 'Weighted', order: 0 }],
+        exercises: [{ id: 10, name: '生き残りベンチ', group_id: 1, order: 0 }],
         sessions: {
           '2020-01-02': { logs: [{ exercise_id: 10, sets: [{ weight: 60, reps: 10 }], at: null }] },
         },
@@ -213,14 +213,14 @@ test('v2 が壊れていても健全な v1 があればそこから復元する'
   await page.goto('./');
   await expect(page.getByTestId('screen-record')).toBeVisible();
 
-  // プリセットに落ちていない = v1 から復元できている
-  const db = await page.evaluate(() => JSON.parse(localStorage.getItem('fitness-memo/v2')));
+  // プリセットに落ちていない = v2 から復元できている
+  const db = await page.evaluate(() => JSON.parse(localStorage.getItem('fitness-memo/v3')));
   expect(db.exercises.map((e) => e.name)).toContain('生き残りベンチ');
   expect(db.groups.map((g) => g.name)).toEqual(['胸']);
 
-  // 壊れていた v2 は退避されている（黙って捨てない）
+  // 壊れていた v3 は退避されている（黙って捨てない）
   const backups = await page.evaluate(() =>
-    Object.keys(localStorage).filter((k) => k.startsWith('fitness-memo/v2.bak-')),
+    Object.keys(localStorage).filter((k) => k.startsWith('fitness-memo/v3.bak-')),
   );
   expect(backups.length).toBeGreaterThan(0);
 
@@ -228,31 +228,104 @@ test('v2 が壊れていても健全な v1 があればそこから復元する'
   await expect(page.getByTestId('restore-notice')).toContainText('バックアップから復元');
 });
 
-// ★ ロールバック中に旧版が v1 へ書いた記録は、新版へ戻ると現行キーが採用されるので
+// ★ ロールバック中に旧版が旧キーへ書いた記録は、新版へ戻ると現行キーが採用されるので
 //   画面から消える。自動マージはしない（同じ日を両方で編集していると正が決まらない）が、
 //   **消えていないことは伝える**。無言の欠落が一番たちが悪い。
-test('v1 のほうが新しい記録を持っていると通知が出る', async ({ page }) => {
-  const mkDb = (date) => ({
-    schema: 2,
-    next_id: 100,
-    groups: [{ id: 1, name: '胸', color: '#e0524a', order: 0 }],
-    exercises: [{ id: 10, name: 'ベンチ', group_id: 1, order: 0 }],
-    sessions: {
-      [date]: { logs: [{ exercise_id: 10, sets: [{ weight: 60, reps: 10 }], at: null }] },
-    },
+test('旧世代のほうが新しい記録を持っていると通知が出る', async ({ page }) => {
+  await page.addInitScript(() => {
+    // v3 は現行形式（ID は 12 文字の文字列）。胸 = 0x10 → "00000000000g"、
+    // ベンチプレス = 0x11 → "00000000000h"
+    localStorage.setItem(
+      'fitness-memo/v3',
+      JSON.stringify({
+        schema: 3,
+        groups: [{ id: '00000000000g', name: '胸', color: '#e0524a', order: 0 }],
+        exercises: [
+          { id: '00000000000h', name: 'ベンチプレス', group_id: '00000000000g', order: 0 },
+        ],
+        sessions: {
+          '2020-01-02': {
+            logs: [{ exercise_id: '00000000000h', sets: [{ weight: 60, reps: 10 }], at: null }],
+          },
+        },
+      }),
+    );
+    localStorage.setItem(
+      'fitness-memo/v2',
+      JSON.stringify({
+        schema: 2,
+        next_id: 100,
+        groups: [{ id: 1, name: '胸', color: '#e0524a', order: 0 }],
+        exercises: [{ id: 10, name: 'ベンチプレス', group_id: 1, order: 0 }],
+        sessions: {
+          '2020-03-09': { logs: [{ exercise_id: 10, sets: [{ weight: 60, reps: 10 }], at: null }] },
+        },
+      }),
+    );
   });
-  await page.addInitScript((dbs) => {
-    localStorage.setItem('fitness-memo/v2', JSON.stringify(dbs.v2));
-    localStorage.setItem('fitness-memo/v1', JSON.stringify(dbs.v1));
-  }, { v2: mkDb('2020-01-02'), v1: mkDb('2020-03-09') });
 
   await page.goto('./');
   await expect(page.getByTestId('restore-notice')).toContainText('2020-03-09');
 
-  // 採用しているのは v2 のまま（v1 で上書きしない）
-  await expect(page.getByTestId('elapsed')).toBeVisible();
-  const kept = await page.evaluate(() => JSON.parse(localStorage.getItem('fitness-memo/v2')));
+  // 採用しているのは v3 のまま（旧世代で上書きしない）
+  const kept = await page.evaluate(() => JSON.parse(localStorage.getItem('fitness-memo/v3')));
   expect(Object.keys(kept.sessions)).toEqual(['2020-01-02']);
+});
+
+// ★ v2 → v3 は ID を連番 u32 から乱数の文字列へ張り替える世代。ここで見るのは
+//   「ログが指す種目が入れ替わっていないこと」— 連番のままエクスポートを出すと
+//   起きる壊れ方（別種目の履歴が混ざる）を、移行そのものがやらないことの検証。
+test('旧キー v2 の連番 ID を張り替えて v3 に書き、参照が入れ替わらない', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'fitness-memo/v2',
+      JSON.stringify({
+        schema: 2,
+        next_id: 100,
+        groups: [{ id: 1, name: 'わたしの部位', color: '#e0524a', order: 0 }],
+        exercises: [
+          { id: 2, name: 'さきの種目', group_id: 1, order: 0 },
+          { id: 3, name: 'あとの種目', group_id: 1, order: 1 },
+        ],
+        sessions: {
+          '2020-01-02': {
+            logs: [
+              { exercise_id: 2, sets: [{ weight: 60, reps: 10 }], at: null },
+              { exercise_id: 3, sets: [{ weight: 30, reps: 12 }], at: null },
+            ],
+          },
+        },
+      }),
+    );
+  });
+  await page.goto('./');
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+  await expect(page.getByTestId('restore-notice')).toHaveCount(0);
+
+  const keys = await page.evaluate(() => ({
+    v2: localStorage.getItem('fitness-memo/v2'),
+    v3: localStorage.getItem('fitness-memo/v3'),
+  }));
+  expect(keys.v2, 'v2 は消さない（移行直前の状態が正常なまま凍結される）').not.toBeNull();
+  expect(keys.v3).not.toBeNull();
+
+  const migrated = JSON.parse(keys.v3);
+  expect(migrated.schema).toBe(3);
+  // ID は文字列になっている。数値のままだと JSON.parse/stringify の往復で
+  // 2^53 超えが丸められ、参照が静かに壊れる
+  for (const ex of migrated.exercises) {
+    expect(typeof ex.id, `${ex.name} の ID が文字列でない`).toBe('string');
+    expect(ex.id).toHaveLength(12);
+  }
+
+  // ★ ログが指す種目を**名前**で確かめる。張り替えが一貫していなければここで落ちる
+  const nameOf = (id) => migrated.exercises.find((e) => e.id === id)?.name;
+  const logs = migrated.sessions['2020-01-02'].logs;
+  expect(nameOf(logs[0].exercise_id)).toBe('さきの種目');
+  expect(nameOf(logs[1].exercise_id)).toBe('あとの種目');
+  // 種目 → 部位の参照も張り替わっている
+  const groupIds = new Set(migrated.groups.map((g) => g.id));
+  expect(migrated.exercises.every((e) => groupIds.has(e.group_id))).toBe(true);
 });
 
 test('オフラインでも起動し記録が読める（SW の navigate 分岐の検証）', async (

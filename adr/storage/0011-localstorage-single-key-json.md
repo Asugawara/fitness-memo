@@ -3,7 +3,16 @@
 - **状態**: 採用
 - **日付**: 2026-08-08
 - **カテゴリ**: storage
-- **関連**: [ADR-0012](0012-quarantine-on-parse-failure.md), [ADR-0013](0013-flush-on-visibilitychange.md), [ADR-0014](0014-defer-export-import.md)
+- **関連**: [ADR-0012](0012-quarantine-on-parse-failure.md), [ADR-0013](0013-flush-on-visibilitychange.md), [ADR-0014](0014-defer-export-import.md), [ADR-0039](0039-no-same-origin-redundancy.md)
+
+> **追記（ADR-0037 / ADR-0039 時点）**
+> - **`save()` の `QuotaExceededError` 握りつぶしを撤回した。** 「当たったときに気づけない」
+>   という本文の自認どおり、書けていないのにアプリが動き続けるのが最悪だったため。
+>   失敗を `save_failed()` に残し、`visibilitychange` の visible で警告を出す
+> - ID を乱数文字列にしたので、JSON は 10 年で約 1.10 MB → **約 1.24 MB** になる
+>   （実測した上限 約 5 MiB に対しては変わらず十分）
+> - 上限は**オリジン単位で全キー合計**（キー単位ではない）。世代スナップショットを
+>   持つと本体と食い合うので採らない（[ADR-0039](0039-no-same-origin-redundancy.md)）
 
 ## 背景
 

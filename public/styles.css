@@ -453,18 +453,6 @@ h3 {
   border-radius: 0;
 }
 
-/* 行内の削除確認。行を折り返して下に出す（幅の狭い端末で ✕ の隣に置けない） */
-.row-confirm {
-  flex-basis: 100%;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  padding: 4px 0 4px 1.9em;
-  font-size: 12px;
-  color: var(--warn);
-}
-
 .warn {
   flex-basis: 100%;
   padding-left: 1.9em;
@@ -501,8 +489,8 @@ h3 {
   gap: 8px;
 }
 
-/* ★ 破壊的操作でも「静止時は警告色を持たない」。--warn は確認 UI（.warn-box /
-   .row-confirm）だけの持ち物で、入口は常に --muted。以前ここは 15px の --warn で、
+/* ★ 破壊的操作でも「静止時は警告色を持たない」。--warn は確認 UI（.warn-box）
+   だけの持ち物で、入口は常に --muted。以前ここは 15px の --warn で、
    カード内で最も目立つ文字列だった（カードの枚数だけ橙の行が縦に並んでいた）。
 
    グリフまで行削除の ✕ にそろえるのは誤り。直上にある「行の ✕」と同じ列・同じ見た目に

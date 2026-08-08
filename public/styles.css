@@ -147,14 +147,13 @@ h3 {
 
 /* ── 通知・注意書き ─────────────────────────────────────────────────────── */
 
-.notice,
-.install-hint {
+/* ★ .notice と .install-hint で規則を共有しない。前者は「閉じられる一時通知」で
+   ベタ塗り、後者は「常駐する警告」で枠線と、役割もトーンも別物。まとめると
+   一方を触った次の人がもう一方の見た目を無言で変える */
+.notice {
   border-radius: 10px;
   padding: 10px 12px;
   font-size: 13px;
-}
-
-.notice {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -171,10 +170,53 @@ h3 {
   flex: 1;
 }
 
+/* 記録タブ末尾の警告バナー。押すと手順シートが開く。
+   ★ 本文を --warn にしない。ダークの --warn は淡橙 #e2a06a で、輝度比だけなら
+     #0b0b0c 上で約 8.9 あるが、13px の日本語を橙一色で 2 行流すと読みづらい。
+     警告であることは枠線と CTA の色で示し、文字は --text / --muted に任せる。
+   ★ .notice のようなベタ塗りにもしない。塗りは「閉じられる一時通知」の側に残す。 */
 .install-hint {
-  background: var(--chip-0);
+  /* 箱は <div>。中身のボタン（シートを開く）と ✕（今後表示しない）を横に並べる。
+     ✕ を上端に寄せるので align-items は flex-start */
+  display: flex;
+  align-items: flex-start;
+  margin: 16px 0 0;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+/* 押すと手順シートが開くほう。こちらが <button> なので UA 既定の枠・中央寄せ・
+   shrink-to-fit を打ち消す（枠は箱側が持つ）。appearance:none は付けない
+   （WebKit の UA テーマ問題は select の menulist 固有で、素の button +
+   background + border-radius は .primary / .pick などで通っている）。
+   ★ 横並びにしない。iPhone 幅では見出しと「追加のしかた ›」が横幅を取り合って
+     見出しが 2 行に折り返す。縦に積んで CTA だけ右寄せにすると 3 行で収まる
+     （320px 幅までいくと 4 行になるが実害は無いので許容する） */
+.install-hint-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-height: 44px;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  text-align: left;
+}
+
+/* 見出しだけ 1 行取って本文色にする。2 行目は理由なので --muted のまま流す */
+.install-hint-text strong {
+  display: block;
   color: var(--text);
-  margin: 0 0 12px;
+}
+
+.install-hint-cta {
+  align-self: flex-end;
+  color: var(--warn);
+  font-weight: 600;
 }
 
 /* ── 記録タブ（選択日の入力欄） ─────────────────────────────────────────── */
@@ -423,13 +465,6 @@ h3 {
   color: var(--warn);
 }
 
-/* カード末尾の「この種目を外す」。見出しの ✕ から移設した */
-.card-remove {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 2px;
-}
-
 .warn {
   flex-basis: 100%;
   padding-left: 1.9em;
@@ -457,6 +492,34 @@ h3 {
 .card-foot strong {
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+
+/* 「今日 1,080」を 1 かたまりにして、フッタ左端を外す導線に空ける */
+.foot-total {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+/* ★ 破壊的操作でも「静止時は警告色を持たない」。--warn は確認 UI（.warn-box /
+   .row-confirm）だけの持ち物で、入口は常に --muted。以前ここは 15px の --warn で、
+   カード内で最も目立つ文字列だった（カードの枚数だけ橙の行が縦に並んでいた）。
+
+   グリフまで行削除の ✕ にそろえるのは誤り。直上にある「行の ✕」と同じ列・同じ見た目に
+   なり、1 セットとカード全体のどちらが消えるのか読めなくなる。そろえるのは
+   「静かな入口 → 押したときだけ警告色の確認」という作法のほうで、見た目ではない。
+
+   左端に置くのは、カードの右端が「行の ✕ → + セット → sticky の種目を追加」という
+   動線の列だから。実測で + セットとは 41px しか離れておらず右端が完全一致、最後の
+   カードでは追加ボタンと縦に 9px 重なり、横は 390px 幅で約 7.5px しかなかった
+   （.add-wrap の帯は pointer-events:none なのでタップは下へ抜ける）。
+
+   .link-btn（0,1,0）と同詳細度だと色を上書きできないので子孫セレクタ（0,2,0）で書く。
+   ファイル末尾の .danger と同じ事情。min-height:44px はタップ標的なので縮めない。
+   詳細は ADR-0043 */
+.card-foot .card-remove {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 /* ── ボタン ─────────────────────────────────────────────────────────────── */
@@ -1213,6 +1276,114 @@ h3 {
 
 .warn-box p {
   margin: 0 0 6px;
+}
+
+/* ── ホーム画面に追加のヘルプ ───────────────────────────────────────────────── */
+
+/* 種目タブ冒頭の導線。.link-btn が 44px のタップ領域を自前で持つので、
+   ここで上下の余白を足すと種目タブの頭だけ間延びする */
+.menu-help {
+  margin: 0 0 4px;
+  font-size: 12px;
+}
+
+.hlp-why {
+  margin: 10px 0 4px;
+  font-size: 13px;
+}
+
+.hlp-step {
+  margin: 16px 0 0;
+}
+
+.hlp-step h3 {
+  font-size: 14px;
+}
+
+.hlp-note {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+
+.hlp-cap {
+  margin: 14px 0 0;
+  font-size: 12px;
+}
+
+/* ★ レスポンシブは <svg> 自身に効かせる。ラッパの max-width だけでは SVG の
+   ボックスが縮まない（.chart が <svg> 側に width:100%/height:auto を持つのと同じ）。
+   SVG ファイルは viewBox しか持たず width/height を書かないこと。 */
+.hlp-fig {
+  max-width: 200px;
+  margin: 8px auto 0;
+}
+
+.hlp-fig > svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* 図の色。SVG 側は座標と class だけを持ち、色は全部ここで与える
+   （fill="var(--accent)" は presentation attribute では解決されない）。
+
+   ★ 端末の面は --surface にしない。シート地（.sheet）が --surface なので、同じ色だと
+     面と背景が同一になり（light で 1.16:1）「下からシートが上がってきた」が絵として
+     伝わらない。端末を --bg、その上に載るもの（共有シート・入力欄）を --surface に
+     すると、ライトでもダークでも「上に載っているほうが明るい」向きで層が読める。 */
+.hlp-panel {
+  fill: var(--bg);
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+
+/* 端末の上に載るもの。面より一段手前に見せる */
+.hlp-raised {
+  fill: var(--surface);
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+
+.hlp-line {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.hlp-ghost {
+  fill: var(--line);
+}
+
+.hlp-glyph {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.hlp-mark {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.hlp-mark-fill {
+  fill: var(--accent);
+}
+
+.hlp-label {
+  fill: var(--text);
+  font-size: 8.5px;
+}
+
+/* ★ 塗りの上に載る文字。#fff 直書きはダークで破綻するので --accent-text を使う
+   （根拠は .notice のコメントにある実測値） */
+.hlp-label-on {
+  fill: var(--accent-text);
+  font-size: 8.5px;
+  font-weight: 600;
 }
 
 /* 削除系。--danger トークンは無いので警告色を使う。

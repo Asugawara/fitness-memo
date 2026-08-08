@@ -20,6 +20,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0002](architecture/0002-no-router-tab-enum-signal.md) | ルーターを使わずタブを enum signal で切り替える | 採用 |
 | [0003](architecture/0003-wasm-target-scoped-dependencies.md) | UI 依存を wasm32 の target 別 dependencies に置く | 採用 |
 | [0004](architecture/0004-no-chart-library-hand-rolled-svg.md) | グラフライブラリを使わず SVG を自前で描く | 採用（`layout()` の置き場所は [0045](architecture/0045-chart-layout-in-core.md) で修正） |
+| [0041](architecture/0041-help-figures-as-included-svg.md) | ヘルプの図を `assets/` の SVG に置き `include_str!` + `inner_html` で挿す | 採用 |
 | [0045](architecture/0045-chart-layout-in-core.md) | グラフの座標計算を `chart_layout` に切り出してテスト可能にする | 採用 |
 
 ### data-model — データ構造と不変条件
@@ -46,6 +47,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0034](storage/0034-storage-key-per-schema-generation.md) | 保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す | 採用 |
 | [0038](storage/0038-share-sheet-over-download.md) | 書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない | 採用 |
 | [0039](storage/0039-no-same-origin-redundancy.md) | 同一オリジン内の多層バックアップを採用しない | 採用 |
+| [0042](storage/0042-ui-state-in-separate-key.md) | UI の状態を `Db` に入れず別キーに置く | 採用 |
 
 ### pwa — オフライン動作と iOS 実機
 
@@ -69,6 +71,8 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0035](ux/0035-record-tab-calendar-with-day-editor.md) | 記録タブをカレンダー + 選択日エディタの単一画面にする | 採用 |
 | [0036](ux/0036-set-entry-prefill-and-focus.md) | セット追加は直前行の重量をコピーして回数欄へフォーカスする | 採用 |
 | [0037](ux/0037-copy-whole-day-menu.md) | 1 日分のメニューは候補リストから 1 タップで丸ごとコピーする | 採用 |
+| [0040](ux/0040-install-guide-banner-and-sheet.md) | ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする | 採用 |
+| [0043](ux/0043-destructive-affordance-quiet-at-rest.md) | 破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む） | 採用 |
 | [0044](ux/0044-body-weight-second-axis-always-on.md) | 体重を推移グラフの第2軸に常時重ねる | 採用 |
 
 ### deploy — 配信とブランチ運用

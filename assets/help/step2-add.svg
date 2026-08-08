@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 160" role="img" aria-label="下から出てきた共有シート。リストを下にたどったところにある「ホーム画面に追加」の行が枠で囲まれている">
+  <rect class="hlp-panel" x="8" y="6" width="112" height="148" rx="14" />
+
+  <rect class="hlp-ghost" x="18" y="18" width="92" height="4" rx="2" />
+  <rect class="hlp-ghost" x="18" y="27" width="70" height="4" rx="2" />
+
+  <rect class="hlp-raised" x="8" y="44" width="112" height="110" rx="12" />
+  <rect class="hlp-ghost" x="58" y="48" width="12" height="2.5" rx="1.25" />
+
+  <rect class="hlp-ghost" x="18" y="54" width="10" height="10" rx="2.5" />
+  <rect class="hlp-ghost" x="32" y="55" width="42" height="3.5" rx="1.75" />
+  <rect class="hlp-ghost" x="32" y="61" width="28" height="3" rx="1.5" />
+
+  <line class="hlp-line" x1="14" y1="70" x2="114" y2="70" />
+
+  <rect class="hlp-ghost" x="18" y="76" width="40" height="4" rx="2" />
+  <rect class="hlp-glyph" x="98" y="72" width="10" height="10" rx="2" />
+
+  <line class="hlp-line" x1="18" y1="88" x2="114" y2="88" />
+
+  <path class="hlp-mark" d="M59 92 L64 97 L69 92" />
+
+  <rect class="hlp-mark" x="12" y="102" width="104" height="22" rx="7" />
+  <text class="hlp-label" x="19" y="117">ホーム画面に追加</text>
+  <rect class="hlp-glyph" x="97" y="108" width="10" height="10" rx="2" />
+  <line class="hlp-glyph" x1="102" y1="110.5" x2="102" y2="115.5" />
+  <line class="hlp-glyph" x1="99.5" y1="113" x2="104.5" y2="113" />
+
+  <line class="hlp-line" x1="18" y1="130" x2="114" y2="130" />
+
+  <rect class="hlp-ghost" x="18" y="136" width="34" height="4" rx="2" />
+  <rect class="hlp-glyph" x="98" y="132" width="10" height="10" rx="2" />
+</svg>

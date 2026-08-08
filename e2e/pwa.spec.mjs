@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, devices } from '@playwright/test';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -372,4 +372,175 @@ test('オフラインでも起動し記録が読める（SW の navigate 分岐�
   } finally {
     server.kill();
   }
+});
+
+// ── ホーム画面に追加の案内 ───────────────────────────────────────────────────
+//
+// 表示条件は `views::storage_may_split()`（UA に "Android" を含まない）と
+// `views::is_standalone()` の AND。project ごとの UA に依存させると chromium
+// （= pre-commit が回す唯一のブラウザ）でどちらのケースを踏むかが暗黙になるので、
+// UA は test.use で明示して全 project で同じ分岐を通す。
+
+// ★ 以下の否定テストは `toHaveCount(0)` で「出ない」ことを見るので、testid を改名すると
+//   全部が無言で常に通るようになる。実在の担保は同ファイルの肯定テストが持っている:
+//   `install-hint` は「バナーは『種目を追加』より下に…」が boundingBox で、
+//   `install-hint-open` / `install-hint-dismiss` は各々をクリックするテストが握っている。
+//   testid を変えるときは、肯定側が落ちることを確認してから否定側を直すこと。
+
+const UA_IPHONE = devices['iPhone 15 Pro'].userAgent;
+const UA_ANDROID = devices['Pixel 7'].userAgent;
+
+// ★ iPadOS 13+ の Safari は既定でこの desktop-class UA を出す（"iPhone" も "iPad" も
+//   含まない）。「iOS を当てる」判定にするとストレージ分離が同じく起きる iPad が
+//   保護対象から落ちるため、この UA でもバナーが出ることを退行テストとして固定する。
+const UA_IPAD_DESKTOP =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+
+/**
+ * standalone 起動をエミュレートする。
+ *
+ * ★ Playwright に display-mode のエミュレーションは無い（`emulateMedia` は colorScheme /
+ *   contrast / forcedColors / media / reducedMotion だけ）。wasm-bindgen の生成コードは
+ *   `matchMedia` の戻り値を instanceof で検査せず `.matches` を読むだけなので、該当クエリに
+ *   限ってプレーンオブジェクトを返せば `is_standalone()` が true になる。全置換にすると
+ *   leptos が将来 matchMedia を使い始めたときに巻き込むので、クエリ一致で分岐する。
+ */
+async function fakeStandalone(page) {
+  await page.addInitScript(() => {
+    const orig = window.matchMedia.bind(window);
+    window.matchMedia = (q) =>
+      q === '(display-mode: standalone)'
+        ? {
+            matches: true,
+            media: q,
+            onchange: null,
+            addEventListener() {},
+            removeEventListener() {},
+            addListener() {},
+            removeListener() {},
+            dispatchEvent: () => false,
+          }
+        : orig(q);
+  });
+}
+
+test.describe('ストレージが分かれうる環境（iPhone の UA）', () => {
+  test.use({ userAgent: UA_IPHONE });
+
+  test('記録タブの警告バナーを押すと手順シートが開く', async ({ page }) => {
+    await page.goto('./');
+    await page.getByTestId('install-hint-open').click();
+
+    const sheet = page.getByTestId('install-sheet');
+    await expect(sheet).toBeVisible();
+
+    // include_str! + inner_html の経路が生きているかの検証。SVG に XML 宣言や DOCTYPE が
+    // 混ざると HTML フラグメントパーサが bogus comment にして図が 1 枚も出なくなる
+    await expect(sheet.locator('.hlp-fig > svg')).toHaveCount(3);
+  });
+
+  test('✕ を押すとバナーが消え、リロードしても復活しない', async ({ page }) => {
+    await page.goto('./');
+    await expect(page.getByTestId('install-hint')).toBeVisible();
+
+    await page.getByTestId('install-hint-dismiss').click();
+    await expect(page.getByTestId('install-hint')).toHaveCount(0);
+
+    await page.reload();
+    await expect(page.getByTestId('screen-record')).toBeVisible();
+    await expect(page.getByTestId('install-hint')).toHaveCount(0);
+  });
+
+  // ADR-0040 が「消しても手順自体は失われない」ことを ✕ を入れる条件にしているので固定する
+  test('✕ で消しても種目タブから手順シートを開ける', async ({ page }) => {
+    await page.goto('./');
+    await page.getByTestId('install-hint-dismiss').click();
+    await expect(page.getByTestId('install-hint')).toHaveCount(0);
+
+    await page.getByTestId('tab-menu').click();
+    await page.getByTestId('install-help-link').click();
+
+    await expect(page.getByTestId('install-sheet')).toBeVisible();
+  });
+
+  // UI のフラグを Db と混ぜないこと（ADR-0014 の「Db の JSON がそのままエクスポート
+  // 形式」という前提を守る）。混ぜると export に UI 状態が混入する
+  test('✕ の記録は Db のキーではなく UI 専用キーに入る', async ({ page }) => {
+    await page.goto('./');
+    await page.getByTestId('install-hint-dismiss').click();
+    await expect(page.getByTestId('install-hint')).toHaveCount(0);
+
+    // Db の保存は 400ms debounce なので、書かれた状態にしてから中身を見る
+    await flushToStorage(page);
+
+    const stored = await page.evaluate(() => ({
+      db: localStorage.getItem('fitness-memo/v3'),
+      ui: localStorage.getItem('fitness-memo/ui/v1'),
+    }));
+    expect(stored.ui).toContain('install_hint_dismissed');
+    // Db が書かれていること自体も確認する（null だと下の assert が空振りする）
+    expect(stored.db).toContain('"schema"');
+    expect(stored.db).not.toContain('install_hint');
+  });
+
+  test('バナーは「種目を追加」より下にあり、sticky な帯に覆われない', async ({ page }) => {
+    await page.goto('./');
+
+    const hint = await page.getByTestId('install-hint').boundingBox();
+    const add = await page.locator('.add-wrap').boundingBox();
+    expect(hint).not.toBeNull();
+    expect(add).not.toBeNull();
+    // 「種目を追加」の下端よりバナーの上端が下にある（= 重なっていない）
+    expect(hint.y).toBeGreaterThanOrEqual(add.y + add.height);
+  });
+
+  test('✕ と backdrop のどちらでもシートが閉じる', async ({ page }) => {
+    await page.goto('./');
+    const sheet = page.getByTestId('install-sheet');
+
+    await page.getByTestId('install-hint-open').click();
+    await page.getByTestId('install-sheet-close').click();
+    await expect(sheet).toBeHidden();
+
+    await page.getByTestId('install-hint-open').click();
+    // backdrop は inset:0 なので中央はシート本体に覆われている。左上を突く
+    await page.getByTestId('install-sheet-backdrop').click({ position: { x: 8, y: 8 } });
+    await expect(sheet).toBeHidden();
+  });
+
+  test('standalone で起動していればバナーは出ない', async ({ page }) => {
+    await fakeStandalone(page);
+    await page.goto('./');
+
+    await expect(page.getByTestId('screen-record')).toBeVisible();
+    await expect(page.getByTestId('install-hint')).toHaveCount(0);
+  });
+});
+
+test.describe('iPad の desktop-class UA', () => {
+  test.use({ userAgent: UA_IPAD_DESKTOP });
+
+  test('UA から OS を特定できなくてもバナーは出る', async ({ page }) => {
+    await page.goto('./');
+    await expect(page.getByTestId('install-hint')).toBeVisible();
+  });
+});
+
+test.describe('ストレージが分かれない環境（Android の UA）', () => {
+  test.use({ userAgent: UA_ANDROID });
+
+  test('バナーは出ない（Android はタブと PWA でストレージを共有する）', async ({ page }) => {
+    await page.goto('./');
+
+    await expect(page.getByTestId('screen-record')).toBeVisible();
+    await expect(page.getByTestId('install-hint')).toHaveCount(0);
+  });
+
+  test('種目タブの導線は残り、同じシートが開く', async ({ page }) => {
+    await page.goto('./');
+    await page.getByTestId('tab-menu').click();
+    await page.getByTestId('install-help-link').click();
+
+    await expect(page.getByTestId('install-sheet')).toBeVisible();
+  });
 });

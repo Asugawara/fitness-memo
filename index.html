@@ -20,13 +20,78 @@
 <link rel="apple-touch-icon" href="./icons/icon-192.png">
 <link rel="manifest" href="./manifest.webmanifest">
 
+<!-- ── クローラ向けメタデータ（ADR-0048）──────────────────────────────────
+     ★ canonical / og:url / og:image だけは本番 URL のハードコード。ここを読むのは
+       検索エンジンと SNS のスクレイパだけで、どちらも本番しか見に来ない。trunk の
+       --public-url が書き換えるのは trunk 自身が生成した行だけなので、置換機構
+       （stamp-sw.sh に続く 2 本目）を足すと「置換漏れで壊れる経路」が増える。
+       manifest を相対に統一した ADR-0020 とは対象が違う（あちらはブラウザが
+       ローカルでも本番でも読むので、相対でないと両方では成立しない）。
+       相対に書き戻すと X / Slack / LINE でカードが出なくなる。
+     ★ <title> は fitness-memo のまま。ホーム画面のアイコン下に出る名前を決める
+       4 点セット（title / apple-mobile-web-app-title / manifest の name と
+       short_name）を崩さない。日本語のキーワードは description / og:title /
+       JSON-LD が担う。
+     e2e/seo.spec.mjs がこのブロックの内容と「絶対 URL であること」を固定している -->
+<meta name="description" content="オフラインで動く筋トレ記録アプリ。種目ごとに前回のセット数・回数・重量を見返しながら記録できます。アカウント登録もサーバ送信もなく、データは端末内だけに保存。iPhone のホーム画面に追加して使える無料の PWA です。">
+<link rel="canonical" href="https://asugawara.github.io/fitness-memo/">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="fitness-memo">
+<meta property="og:locale" content="ja_JP">
+<!-- OGP 画像はアイコンだけで情報量が無いので、「何のアプリか」を伝えるのはこの見出し文
+     だけになる。アプリ名 4 点セットには含まれないタグなので日本語の説明を足せる -->
+<meta property="og:title" content="fitness-memo — オフラインで使える筋トレ記録アプリ">
+<meta property="og:description" content="種目ごとに前回のセット数・回数・重量を見返しながら、同じかそれ以上を積み上げる。アカウント登録もサーバ送信もなく、記録は端末内だけに保存。">
+<meta property="og:url" content="https://asugawara.github.io/fitness-memo/">
+<meta property="og:image" content="https://asugawara.github.io/fitness-memo/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="fitness-memo のアイコン">
+<!-- twitter:title / description / image は og:* にフォールバックするので書かない（二重管理を作らない） -->
+<meta name="twitter:card" content="summary_large_image">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebApplication",
+  "name": "fitness-memo",
+  "alternateName": "筋トレメモ",
+  "url": "https://asugawara.github.io/fitness-memo/",
+  "description": "オフラインで動く筋トレ記録アプリ。種目ごとの前回のセット数・回数・重量を見返しながら記録する。アカウント登録もサーバ送信もなく、データは端末内だけに保存する。",
+  "applicationCategory": "HealthApplication",
+  "operatingSystem": "iOS, Android, Web",
+  "browserRequirements": "Requires JavaScript and WebAssembly",
+  "inLanguage": "ja",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "JPY" },
+  "author": { "@type": "Person", "name": "Asugawara" }
+}
+</script>
+<!-- ──────────────────────────────────────────────────────────────────── -->
+
 <link data-trunk rel="css" href="public/styles.css">
 <link data-trunk rel="copy-file" href="public/sw.js">
 <link data-trunk rel="copy-file" href="public/manifest.webmanifest">
+<!-- og:image の実体。クローラ専用なので stamp-sw.sh が SW のシェルから除外している -->
+<link data-trunk rel="copy-file" href="public/og.png">
 <link data-trunk rel="copy-dir" href="public/icons">
 <link data-trunk rel="rust" data-wasm-opt="z" data-weak-refs>
 </head>
 <body>
+<!-- CSR なので配信される HTML の body にはテキストが 1 文字も無い。Googlebot は JS を
+     実行するので通常は問題にならないが、レンダリングが失敗・タイムアウトしたときに
+     素の HTML が完全な空になるのを避ける保険。
+     ★ scripting が有効な文書では noscript の中身は要素に parse されず、UA スタイルで
+       display:none になる。DOM にもレイアウトにも影響しないので、mount_to_body
+       （append）と競合しない。静的コンテンツを body に直接置いて JS で消す方式は、
+       wasm のロード完了まで実在してレイアウトシフトを起こすので採らない -->
+<noscript>
+  <h1>fitness-memo（筋トレメモ）</h1>
+  <p>オフラインで動く筋トレ記録 PWA です。表示には JavaScript と WebAssembly が必要です。</p>
+  <p><a href="https://github.com/Asugawara/fitness-memo">GitHub のリポジトリ</a></p>
+</noscript>
 <script>
 if ('serviceWorker' in navigator) {
   if (location.port === '8080') {                     // trunk serve では SW を使わない

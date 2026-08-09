@@ -94,6 +94,10 @@ test('manifest が取得でき display=standalone かつ id がある', async ({
   expect(manifest.display).toBe('standalone');
   expect(manifest.id).toBeTruthy();
 
+  // description は Chrome のインストールプロンプトに出る（ADR-0048）
+  expect(manifest.description).toBeTruthy();
+  expect(manifest.lang).toBe('ja');
+
   // ★ ホーム画面のアイコン下に出るのは short_name / apple-mobile-web-app-title であって
   //   <title> ではない。4 箇所揃っていないと DOM だけ英語で iPhone は日本語のまま残る
   expect(manifest.name).toBe('fitness-memo');

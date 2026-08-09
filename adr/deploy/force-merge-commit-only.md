@@ -1,0 +1,62 @@
+# マージ方式を merge コミットのみに固定する
+
+- **状態**: 採用
+- **日付**: 2026-08-08
+- **カテゴリ**: deploy
+- **関連**: [GitHub Pages の branch deploy（`release` / `docs`）を使う](github-pages-branch-deploy.md), [`release` を `main` から派生させ orphan 運用にしない](release-branch-from-main.md)
+
+## 背景
+
+`main` → `release` の PR をマージすると Pages がデプロイされる（[GitHub Pages の branch deploy（`release` / `docs`）を使う](github-pages-branch-deploy.md)）。`release` には `docs/`（ビルド成果物）があり、`main` には無い。
+
+この構成で `docs/` が消えない保証は 3-way マージの性質に依存している。
+
+> 2 回目以降の merge-base は「前回マージで取り込んだ `main` のコミット」で、そこに `docs/` は無い。base に無く ours（`release` 側）にのみ存在するパスは、3-way マージで「ours 側の追加」として保持される。
+
+この保証は **merge-base が前進し続けること**を前提にしている。ここで squash / rebase マージが問題になる。
+
+- **squash マージ**は `main` のコミット群を 1 つの新しいコミットに潰して `release` に載せる。元の `main` のコミットは `release` の祖先に**入らない**
+- **rebase マージ**も `main` のコミットを別 SHA で書き直して載せるので同様
+
+結果として **merge-base が古いまま固定される**。次のマージでは古い base（`docs/` が存在した時点かもしれない）との 3-way になり、コンフリクトが多発する。しかも一度ずれると以後ずっとずれる。
+
+## 決定
+
+**リポジトリ設定でマージ方式を merge コミットのみに固定する。** Phase 5 の手順に組み込む。
+
+```sh
+gh api -X PATCH repos/Asugawara/fitness-memo \
+  -F allow_squash_merge=false -F allow_rebase_merge=false -F allow_merge_commit=true
+```
+
+`scripts/release.sh` 側も `git merge --no-ff main` を使い、fast-forward を避ける。
+
+## 理由
+
+- **CLAUDE.md の規約だけでは担保されない。** このリポジトリには「Merge コミットを作成する / squash は避ける」という規約があるが、規約は**人間や将来のエージェントが GitHub の Web UI でボタンを押すこと**を止めない。実測した時点でリポジトリは merge / squash / rebase の 3 つすべてが有効だった。GitHub の PR 画面はマージボタンにドロップダウンが付き、最後に使った方式が記憶される。1 回押し間違えると壊れる。
+- **壊れ方が遅れて現れる。** squash でマージしても、その回のデプロイは成功する。壊れるのは**次のリリース**で、しかも症状は「`docs/` のコンフリクト」なので原因（前回のマージ方式）から遠い。デバッグしにくい失敗ほど、機構で防ぐ価値が高い。
+- **リポジトリ設定は 1 回の API 呼び出しで永続する。** 設定してしまえば Web UI からも squash / rebase を選べなくなり、ドロップダウン自体が消える。人間の注意力に依存しない。
+- **`--no-ff` を付けるのは、マージコミットを必ず作るため。** fast-forward すると `release` の HEAD が `main` のコミットに移動し、`docs/` を含むコミットが履歴上で分岐しなくなる。実際には `release` に `docs/` のコミットがあるので fast-forward できないが、明示しておくほうが意図が伝わる。
+- **`docs/` 保持の保証を壊す経路は 2 つしかなく、両方塞いだ。**
+  1. squash / rebase マージ → この ADR（リポジトリ設定）
+  2. `main` への `docs/` 誤コミット → `.githooks/pre-commit` のガード
+
+## 結果（トレードオフ）
+
+- **`main` の履歴が `release` にそのまま載るので、`release` の履歴が冗長になる。** squash なら 1 リリース 1 コミットに畳めた。しかし [`release` を `main` から派生させ orphan 運用にしない](release-branch-from-main.md) で決めたとおり、PR の diff がレビュー可能であることを優先している。
+- **squash マージが使えないので、`main` 自体の履歴も整理されない。** 実装中の細かいコミットがそのまま残る。個人プロジェクトなので許容するが、「PR は squash で綺麗に」という一般的な運用とは逆になる。**この制約は `main` → `release` の PR にしか本質的に必要ないのに、リポジトリ全体に効く**。GitHub の設定粒度がリポジトリ単位なので分けられない。将来 `main` へのフィーチャー PR を squash したくなったら、その時点でトレードオフを再検討することになる。
+- **設定を戻せば壊れる。** リポジトリ設定は誰でも変えられるので、絶対の保証ではない。ブランチ保護ルールを併用すればより硬くなるが、個人リポジトリでは過剰と判断した。
+- **`gh api` の呼び出しが Phase 5 の必須手順になる。** 忘れると防御が効かない。手順書に「必須」と明記した。
+- 副作用として、`release` ブランチで `git log --oneline` を見ると `main` のコミットとデプロイコミットが混ざる。デプロイコミットは `deploy 2026-08-08` という形式なので識別はできる。
+
+## 検討した代替案
+
+**規約（CLAUDE.md）だけで運用する**: 設定変更が不要。しかし規約は Web UI のボタンを止めないので、実質的に防御になっていない。実測時点で 3 方式すべてが有効だったことが、規約が自動的に反映されないことの証拠である。却下。
+
+**`release` を毎回作り直す（マージしない）**: `git switch -c release-new` して `docs/` だけ置き、force push する。merge-base の問題自体が消える。しかし PR フローが成立せず（force push は PR にならない）、要件の「PR 作成時に重い E2E」が満たせない。却下。
+
+**ブランチ保護ルールで `release` へのマージ方式を制限する**: より強い保証になる。しかし GitHub のブランチ保護は「必須ステータスチェック」や「レビュー必須」が中心で、**マージ方式の制限はリポジトリ設定側にしかない**。組み合わせても方式の制限はリポジトリ設定に依存する。追加で得るものが少ない。
+
+**`docs/` を `main` にも置いて差分を消す**: merge-base の問題が消える。しかし `main` に成果物が入り、ソースブランチが汚れる。しかも成果物のコンフリクトが日常的に発生する（バイナリの wasm がマージできない）。却下。
+
+**Pages の配信を `main` の `/docs` にして PR フローを諦める**: 最も単純。要件（PR で重い E2E）を捨てることになるので却下（[GitHub Pages の branch deploy（`release` / `docs`）を使う](github-pages-branch-deploy.md)）。

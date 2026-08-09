@@ -5,7 +5,7 @@ STAGE="$TRUNK_STAGING_DIR"
 # ハッシュ入力に sw.js テンプレと本スクリプト自身を含める（ロジック変更でキャッシュ名が変わるように）
 #
 # ★ og.png は SHELL と BUILD_ID の**両方**から外す。取りに来るのはクローラと SNS の
-#   スクレイパだけで、アプリは一度も参照しない（ADR-0048）。
+#   スクレイパだけで、アプリは一度も参照しない（adr/seo/crawler-metadata-and-hardcoded-origin.md）。
 #   - SHELL から外す: 参照しないものを約 1.0MB のオフラインシェルに恒久的に上乗せしない
 #   - BUILD_ID からも外す: SHELL だけ外して BUILD_ID に残すと、og.png を差し替えた
 #     ときに「中身が同一のシェル」に対して新しいキャッシュ世代が切られ、全クライアントが

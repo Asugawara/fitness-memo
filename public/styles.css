@@ -1,7 +1,7 @@
 /* 筋トレメモ — 素の CSS 1 ファイル + CSS 変数。ライブラリなし。 */
 
 :root {
-  /* ★ UA が描くものをテーマに追従させる（[ADR-0047]）。下の
+  /* ★ UA が描くものをテーマに追従させる（adr/ux/declare-color-scheme-for-ua-widgets.md）。下の
      `button, input { color: inherit }` は UA の ButtonText を上書きするが、
      UA が描く**背景**（ButtonFace ≈ #efefef）はこの宣言が無いとライトのまま
      取り残される。ダークでは文字が --text = #eceef1 になり、コントラストが
@@ -138,7 +138,7 @@ h3 {
    2. inset:0 の backdrop もタブバーを覆えず、シート表示中にタブが押せる。
       隠れた種目を狙ったタップが別タブへの遷移になり、入力を見失う（こちらが重症）
 
-   シートは ADR-0050 でネイティブ <dialog> + show_modal() に移したので、この綱渡りから
+   シートは adr/ux/native-dialog-for-sheets.md でネイティブ <dialog> + show_modal() に移したので、この綱渡りから
    降りている。top layer は z-index の外側にあって常に通常フローより前面に出るし、
    背景は UA が inert にするので 2 の「裏のタブが押せる」も構造的に起きない。
    残る fixed / sticky にだけ明示的に値を置く。将来また fixed 要素を足すときは、
@@ -190,7 +190,7 @@ h3 {
      `root` として撮られるので、付けないと**タブバーまで一緒に横へ流れる**。
      名前は前後で 1 個ずつでなければならない（同名が 2 個以上あると遷移が丸ごと
      無効化され、アニメーション無しで即座に差し替わる）。
-   詳細は ADR-0051 */
+   詳細は adr/ux/directional-tab-transitions.md */
 
 .bottom-tabs {
   view-transition-name: bottom-tabs;
@@ -349,7 +349,7 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
   gap: 8px;
 }
 
-/* h1 ではなく h2。1 画面に載るカレンダーの月見出しが h1 を持つ（ADR-0052） */
+/* h1 ではなく h2。1 画面に載るカレンダーの月見出しが h1 を持つ（adr/ux/focus-ring-and-heading-order.md） */
 .day-head h2 {
   font-size: 18px;
 }
@@ -618,7 +618,7 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
 
    .link-btn（0,1,0）と同詳細度だと色を上書きできないので子孫セレクタ（0,2,0）で書く。
    ファイル末尾の .danger と同じ事情。min-height:44px はタップ標的なので縮めない。
-   詳細は ADR-0043 */
+   詳細は adr/ux/destructive-affordance-quiet-at-rest.md */
 .card-foot .card-remove {
   color: var(--muted);
   font-size: 13px;
@@ -736,7 +736,7 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
    sticky の貼り付き先である「下端」はキーボードの裏になる。bottom:8px にしても
    ボタンはキーボードに隠れたままで、しかも DevTools では再現しないので
    E2E でも目視でも検出できない。打ち込み中に追加ボタンは要らないので、
-   タブバーと同じく消すのが ADR-0019 の思想とも一貫する */
+   タブバーと同じく消すのが adr/pwa/hide-tabs-when-keyboard-open.md の思想とも一貫する */
 .kb-open .add-wrap {
   display: none;
 }
@@ -759,7 +759,7 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
 
 /* ── ボトムシート ───────────────────────────────────────────────────────── */
 
-/* ★ ネイティブ <dialog> を show_modal() で開く（ADR-0050）。top layer に載るので
+/* ★ ネイティブ <dialog> を show_modal() で開く（adr/ux/native-dialog-for-sheets.md）。top layer に載るので
    z-index は持たない。黒幕は ::backdrop が UA 側で生えるため、かつての
    <div class="sheet-backdrop"> は不要になった。
 

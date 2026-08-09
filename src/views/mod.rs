@@ -281,7 +281,7 @@ pub fn scroll_to_id(element_id: String) {
 /// ★ `<div role="dialog">` ではなく**ネイティブ `<dialog>` を `show_modal()` で開く**。
 ///   top layer に載るので z-index を持つ必要が無くなり、背景は UA が `inert` にする。
 ///   以前この 3 つを手で両立させようとして 2 件壊している（styles.css 冒頭のコメント）。
-///   Esc（close request）も UA 側の仕事になる。経緯は ADR-0050。
+///   Esc（close request）も UA 側の仕事になる。経緯は adr/ux/native-dialog-for-sheets.md。
 ///
 /// ★ **常時マウントする。** 開いている間だけ DOM に置く形にすると、閉じる際に
 ///   「top layer に載ったままの要素を DOM から消す」ことになり `close` イベントが
@@ -359,7 +359,7 @@ pub fn Sheet(
             }
             on:click=move |ev| {
                 // ★ 背景タップで閉じる。`closedby="any"` は Safari 未対応なので使えない
-                //   （ADR-0049）。backdrop へのクリックは **dialog 自身**が target に
+                //   （adr/architecture/browser-support-policy.md）。backdrop へのクリックは **dialog 自身**が target に
                 //   なるのでまずそこで絞り、さらに座標が箱の外かを見る。target だけで
                 //   判定するとシート内の余白を突いたときにも閉じてしまう
                 let Some(d) = dialog.get_untracked() else { return };

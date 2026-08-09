@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-// 検索エンジンと SNS のスクレイパだけが読む head のメタデータを固定する（ADR-0048）。
+// 検索エンジンと SNS のスクレイパだけが読む head のメタデータを固定する（adr/seo/crawler-metadata-and-hardcoded-origin.md）。
 //
 // ★ canonical / og:url / og:image は**本番 URL のハードコード**なので、期待値は
 //   環境非依存の定数になる。dist（E2E_BASE=/）でも dist-release（E2E_BASE=/fitness-memo/）

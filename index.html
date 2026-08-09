@@ -20,12 +20,12 @@
 <link rel="apple-touch-icon" href="./icons/icon-192.png">
 <link rel="manifest" href="./manifest.webmanifest">
 
-<!-- ── クローラ向けメタデータ（ADR-0048）──────────────────────────────────
+<!-- ── クローラ向けメタデータ（adr/seo/crawler-metadata-and-hardcoded-origin.md）──
      ★ canonical / og:url / og:image だけは本番 URL のハードコード。ここを読むのは
        検索エンジンと SNS のスクレイパだけで、どちらも本番しか見に来ない。trunk の
        --public-url が書き換えるのは trunk 自身が生成した行だけなので、置換機構
        （stamp-sw.sh に続く 2 本目）を足すと「置換漏れで壊れる経路」が増える。
-       manifest を相対に統一した ADR-0020 とは対象が違う（あちらはブラウザが
+       manifest を相対に統一した adr/pwa/manifest-relative-urls.md とは対象が違う（あちらはブラウザが
        ローカルでも本番でも読むので、相対でないと両方では成立しない）。
        相対に書き戻すと X / Slack / LINE でカードが出なくなる。
      ★ <title> は fitness-memo のまま。ホーム画面のアイコン下に出る名前を決める

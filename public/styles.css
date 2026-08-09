@@ -182,81 +182,9 @@ h3 {
   display: none;
 }
 
-/* ── タブ切替のトランジション ───────────────────────────────────────────────
-   方向（forward / backward）は `src/view_transition.rs` が `types` で渡し、CSS は
-   `:active-view-transition-type()` で受ける。並びは 記録 → 推移 → 種目。
-
-   ★ タブバーと通知は root のスナップショットから外す。既定では画面全体が 1 枚の
-     `root` として撮られるので、付けないと**タブバーまで一緒に横へ流れる**。
-     名前は前後で 1 個ずつでなければならない（同名が 2 個以上あると遷移が丸ごと
-     無効化され、アニメーション無しで即座に差し替わる）。
-   詳細は adr/ux/directional-tab-transitions.md */
-
-.bottom-tabs {
-  view-transition-name: bottom-tabs;
-}
-
-.notice {
-  view-transition-name: notice;
-}
-
-/* ★ animation-* は継承しないので、old / new にも明示する。
-   group だけに置くと中身が UA 既定のクロスフェード時間で動く */
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation-duration: 0.2s;
-  animation-timing-function: ease-out;
-  animation-fill-mode: both;
-}
-
-/* ★ inset ではなく translate を動かす（レイアウトを起こさない） */
-@keyframes tab-slide-out-left {
-  to {
-    translate: -100% 0;
-  }
-}
-
-@keyframes tab-slide-in-right {
-  from {
-    translate: 100% 0;
-  }
-}
-
-@keyframes tab-slide-out-right {
-  to {
-    translate: 100% 0;
-  }
-}
-
-@keyframes tab-slide-in-left {
-  from {
-    translate: -100% 0;
-  }
-}
-
-html:active-view-transition-type(forward)::view-transition-old(root) {
-  animation-name: tab-slide-out-left;
-}
-
-html:active-view-transition-type(forward)::view-transition-new(root) {
-  animation-name: tab-slide-in-right;
-}
-
-html:active-view-transition-type(backward)::view-transition-old(root) {
-  animation-name: tab-slide-out-right;
-}
-
-html:active-view-transition-type(backward)::view-transition-new(root) {
-  animation-name: tab-slide-in-left;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  ::view-transition-group(*),
-  ::view-transition-old(*),
-  ::view-transition-new(*) {
-    animation: none !important;
-  }
-}
+/* ★ タブ切替に演出は置かない。トレ中に毎回 0.2s の横スライドを見るのが煩わしく、
+   方向つき View Transition は入れた当日に撤去した。切替は即時が最速で最良。
+   経緯は adr/ux/directional-tab-transitions.md（破棄）*/
 
 /* ── 通知・注意書き ─────────────────────────────────────────────────────── */
 

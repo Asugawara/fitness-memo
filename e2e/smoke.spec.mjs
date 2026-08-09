@@ -1046,56 +1046,30 @@ test('フォーカスリングが出て、塗りボタンでは地色側で抜�
   expect(ring.color).not.toBe(asRgb);
 });
 
-// ── タブ切替の View Transition（adr/ux/directional-tab-transitions.md）───
+// ── タブ切替 ────────────────────────────────────────────────────────────────
 
-// `document.startViewTransition` を包んで、渡された types を記録する。
-// 向きの決定は今回入れたロジックそのものなので、そこだけを直接見る。
-async function recordViewTransitions(page) {
-  await page.addInitScript(() => {
-    window.__vt = [];
-    const orig = document.startViewTransition?.bind(document);
-    if (!orig) return;
-    document.startViewTransition = (opts) => {
-      window.__vt.push(opts?.types?.[0] ?? null);
-      return orig(opts);
-    };
-  });
-  await page.reload();
-  // 実装と同じ判定。types 形が無いブラウザでは遷移そのものを走らせない
-  return page.evaluate(() =>
-    CSS.supports('selector(:active-view-transition-type(forward))'),
-  );
-}
+// タブ切替に演出は無く、押した瞬間に入れ替わる（adr/ux/directional-tab-transitions.md は破棄）。
+// ここで守るのは `TabCtx::switch` の同値ガード。`RwSignal::set` は同値でも購読者へ通知するので、
+// ガードを外すと <main class="screen"> の中身が丸ごと作り直される。
+//
+// ★ 「画面のルート要素が同一か」では見ない。leptos は同じ型の view を rebuild するとき
+//   ルートのノードを使い回すので、ガードを外しても screen-* 要素そのものは残る（実測）。
+//   壊れるのは中身のほうで、確定前の入力が消える。だから入力の生存で見る。
+test('同じタブをもう一度押しても、確定前の入力が消えない', async ({ page }) => {
+  await addExercise(page, 'ベンチプレス');
 
-test('タブ切替は並び順どおりの向きで遷移する', async ({ page }) => {
-  const supported = await recordViewTransitions(page);
-  test.skip(!supported, 'このブラウザは View Transition の types 形に未対応');
+  // 保存は 400ms debounce なので、打った直後の "62." はまだ signal の上にだけ在る
+  await page.getByTestId('set-weight').first().fill('62.');
+  await blurActive(page);
 
-  // 記録(0) → 種目(2) は前進
-  await page.getByTestId('tab-menu').click();
-  await expect(page.getByTestId('screen-menu')).toBeVisible();
-  // 種目(2) → 推移(1) は後退
-  await page.getByTestId('tab-progress').click();
-  await expect(page.getByTestId('screen-progress')).toBeVisible();
+  await page.getByTestId('tab-record').click();
 
-  expect(await page.evaluate(() => window.__vt)).toEqual(['forward', 'backward']);
+  await expect(page.getByTestId('set-weight').first()).toHaveValue('62.');
 });
 
-test('同じタブをもう一度押しても遷移は走らない', async ({ page }) => {
-  const supported = await recordViewTransitions(page);
-  test.skip(!supported, 'このブラウザは View Transition の types 形に未対応');
-
-  await page.getByTestId('tab-menu').click();
-  await expect(page.getByTestId('screen-menu')).toBeVisible();
-  await page.getByTestId('tab-menu').click();
-
-  // 素で set すると同値でも購読者へ通知が飛び、押すたびに画面が丸ごと動く
-  expect(await page.evaluate(() => window.__vt)).toEqual(['forward']);
-});
-
-test('タブバーと通知は root のスナップショットから外れている', async ({ page }) => {
-  // 付け忘れると画面全体と一緒にタブバーまで横へ流れる
-  await expect(page.getByTestId('bottom-tabs')).toHaveCSS('view-transition-name', 'bottom-tabs');
+test('タブ切替に View Transition の痕跡が残っていない', async ({ page }) => {
+  // 撤去し損ねると 0.2s の横スライドが戻る
+  await expect(page.getByTestId('bottom-tabs')).toHaveCSS('view-transition-name', 'none');
 });
 
 // ── 1 日丸ごとのメニューコピー ──────────────────────────────────────────────

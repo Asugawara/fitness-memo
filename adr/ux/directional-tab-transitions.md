@@ -1,6 +1,6 @@
 # タブ切替に方向つき View Transition を掛ける
 
-- **状態**: 採用
+- **状態**: 破棄（採用の当日に撤去。[破棄](#破棄) を参照）
 - **日付**: 2026-08-09
 - **カテゴリ**: ux
 - **関連**: [ルーターを使わずタブを enum signal で切り替える](../architecture/no-router-tab-enum-signal.md), [UI 依存を wasm32 の target 別 dependencies に置く](../architecture/wasm-target-scoped-dependencies.md), [ブラウザサポートは Safari を基準にし、polyfill を入れない](../architecture/browser-support-policy.md)
@@ -57,3 +57,22 @@
 **CSS のアニメーションだけで表現する（View Transition を使わない）。** 新画面に `@keyframes` で入場アニメーションを付ける形。旧画面が消える様子を描けないので、方向が半分しか伝わらない。また leptos がタブごとにノードを作り直すため、退場側を残す仕組みを自前で持つことになる。
 
 **`cross-document-transitions` を使う。** ルーターが無く 1 ドキュメントで完結しているので前提が成立しない（[ルーターを使わずタブを enum signal で切り替える](../architecture/no-router-tab-enum-signal.md)）。
+
+## 破棄
+
+**入れた当日に実機で使い、撤去した。** 上の「結果（トレードオフ）」に書いた撤去条件（「トレ中に毎回 0.2s の横スライドを見る」ことが煩わしいと分かったら **この ADR ごと戻す**）に、実使用が一発で当たった。
+
+**採用時の 2 つの弁護は、どちらも的を外していた。**
+
+- 「操作をブロックしない」は**手**の話で、問題は**目**だった。セット間の短い休憩でタブを行き来する場面では、横に流れる画面が視線を連れていく。次のタップが通ることと、視点を取られないことは別物
+- 「`prefers-reduced-motion` で消える」は、**演出が邪魔だと感じる利用者に OS 設定を変えさせる**話だった。他のアプリのアニメーションまで一括で止める設定であって、このアプリのタブ切替 1 個のための逃げ道ではない
+
+得られたはずの「3 枚が横に並んでいる」という手がかりは、実際にはタブバーの並びで足りていた。トレ中に毎回払う 0.2s に見合わない。
+
+**撤去したもの。** `src/view_transition.rs`（ファイルごと）、`TabCtx::switch` の差し込みと `Tab::order()`、`public/styles.css` のタブ切替ブロック（`view-transition-name` 2 つ、`tab-slide-*` の `@keyframes` 4 本、`:active-view-transition-type()` の 4 規則、View Transition 用の `prefers-reduced-motion`）、`Cargo.toml` の `wasm-bindgen-futures` と web-sys の `css` feature、E2E の向き検証 3 本。**宣言どおり差し込み口が 1 箇所だったので、撤去は機械的に済んだ。**
+
+**`TabCtx::switch` の同値ガードだけは残す。** これは View Transition と無関係に要る。`RwSignal::set` は同値でも購読者へ通知し、`{move || match tab.get() { ... }}` が `<main class="screen">` の中身を作り直すので、同じタブを再タップしただけで確定前の入力が飛ぶ（[記録タブをカレンダー + 選択日エディタの単一画面にする](record-tab-calendar-with-day-editor.md) が `DateCtx::open` について書いているのと同じ罠）。
+
+E2E は「遷移の types が飛ばない」を見ていたので、これも置き換えが要る。**最初に書いた「画面のルート要素が作り直されない」（`screen-menu` に印を付けて再タップ後も残るか）は、ガードを外しても通ってしまった。** leptos は同じ型の view を rebuild するときルートのノードを使い回すので、そこは壊れない。壊れるのは中身で、セット入力欄に打った「62.」が消える。ガードを外して実測すると `set-weight` 自体が見つからなくなる。退行を実際に捕まえる形はこちらなので、**確定前の入力が生き残るか**を見るテストに差し替えた。
+
+**残る教訓。** 「操作をブロックしないから邪魔ではない」は、このアプリでは通らない。演出の当否は**視線を取るかどうか**で判断する。

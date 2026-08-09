@@ -83,7 +83,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [セット削除は確認を挟まない（カード削除の確認は残す）](ux/set-delete-without-confirmation.md) | 採用 |
 | [`color-scheme` を宣言し、クラスなしの `<button>` を作らない](ux/declare-color-scheme-for-ua-widgets.md) | 採用 |
 | [シートをネイティブ `<dialog>` にし、手動の重なり順から降りる](ux/native-dialog-for-sheets.md) | 採用 |
-| [タブ切替に方向つき View Transition を掛ける](ux/directional-tab-transitions.md) | 採用 |
+| [タブ切替に方向つき View Transition を掛ける](ux/directional-tab-transitions.md) | 破棄（0.2s の演出が視線を取るので当日撤去。切替は即時） |
 | [フォーカスリングを明示し、記録タブの見出しを 1 本の階層にする](ux/focus-ring-and-heading-order.md) | 採用 |
 | [他アプリからの移行はスクショの文字起こしを貼り付けて受ける](ux/migrate-by-ocr-paste.md) | 採用 |
 

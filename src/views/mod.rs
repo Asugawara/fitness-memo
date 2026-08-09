@@ -18,7 +18,6 @@ use wasm_bindgen::JsCast;
 
 use crate::model::{Db, SetEntry};
 use crate::storage;
-use crate::view_transition;
 
 use calendar::Calendar;
 use menu::Menu;
@@ -413,17 +412,6 @@ pub enum Tab {
     Menu,
 }
 
-impl Tab {
-    /// タブバーでの並び順。遷移の向きはこれの大小で決める。
-    fn order(self) -> u8 {
-        match self {
-            Tab::Record => 0,
-            Tab::Progress => 1,
-            Tab::Menu => 2,
-        }
-    }
-}
-
 /// 現在のタブ。
 #[derive(Clone, Copy)]
 pub struct TabCtx(pub RwSignal<Tab>);
@@ -438,19 +426,11 @@ impl TabCtx {
         dates.resync();
 
         // 同じタブなら何もしない。set は同値でも購読者へ通知するので、素で書くと
-        // 押すたびに画面が丸ごとクロスフェードする
-        let from = self.0.get_untracked();
-        if from == to {
+        // 押すたびに <main class="screen"> の中身が丸ごと作り直され、入力中の値が飛ぶ
+        if self.0.get_untracked() == to {
             return;
         }
-
-        let direction = if to.order() > from.order() {
-            view_transition::Direction::Forward
-        } else {
-            view_transition::Direction::Backward
-        };
-        let tab = self.0;
-        view_transition::run(direction, move || tab.set(to));
+        self.0.set(to);
     }
 }
 

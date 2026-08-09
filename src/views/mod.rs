@@ -5,6 +5,7 @@ pub mod calendar;
 pub mod chart;
 pub mod day;
 pub mod help;
+pub mod icon;
 pub mod menu;
 pub mod progress;
 
@@ -16,11 +17,12 @@ use leptos::prelude::*;
 // シートを閉じたときのフォーカス復帰で Element → HtmlElement に落とすのに使う
 use wasm_bindgen::JsCast;
 
-use crate::model::{Db, SetEntry};
+use crate::model::{Db, GroupId, SetEntry};
 use crate::storage;
 use crate::view_transition;
 
 use calendar::Calendar;
+use icon::icon;
 use menu::Menu;
 use progress::Progress;
 
@@ -98,6 +100,19 @@ impl DateCtx {
 #[derive(Clone, Copy)]
 pub struct KbCtx(pub RwSignal<bool>);
 
+/// 種目タブで開いている部位。**同時に開くのは 1 つ**
+/// （adr/ux/menu-groups-as-single-open-accordion.md）。
+///
+/// ★ `Menu` の中ではなくここに置くのが要点。`match tab.get()` はタブを切り替えるたびに
+///   `Menu` を作り直すので、コンポーネント内のシグナルにすると記録⇄種目を往復するたびに
+///   全部閉じる。筋トレ中はその往復が常なので、戻るたびに部位を探して押し直すことになる。
+/// ★ それでも**永続化はしない**。`Db` 由来の ID を UI 状態のキーに入れると `Db` から
+///   部位が消えたときに宙に浮く（adr/storage/ui-state-in-separate-key.md が
+///   前提の崩れる例として名指ししている形）。
+///   ここはプロセス内の寿命に留める。
+#[derive(Clone, Copy)]
+pub struct OpenGroupCtx(pub RwSignal<Option<GroupId>>);
+
 pub fn use_db() -> RwSignal<Db> {
     use_context::<DbCtx>()
         .expect("DbCtx が provide されていない")
@@ -110,6 +125,12 @@ pub fn use_dates() -> DateCtx {
 
 pub fn use_kb() -> KbCtx {
     use_context::<KbCtx>().expect("KbCtx が provide されていない")
+}
+
+pub fn use_open_group() -> RwSignal<Option<GroupId>> {
+    use_context::<OpenGroupCtx>()
+        .expect("OpenGroupCtx が provide されていない")
+        .0
 }
 
 // ── キーボード対策 ──────────────────────────────────────────────────────────
@@ -264,11 +285,27 @@ pub fn storage_may_split() -> bool {
         .unwrap_or(true)
 }
 
-/// 次のフレームで指定 id の要素までスクロールする。
+/// 次のフレームで指定 id の要素までスクロールする（要素の上端を画面の上端に合わせる）。
 pub fn scroll_to_id(element_id: String) {
     request_animation_frame(move || {
         if let Some(el) = document().get_element_by_id(&element_id) {
             el.scroll_into_view();
+        }
+    });
+}
+
+/// 次のフレームで指定 id の要素を、**画面に入っていなければ**入るところまで動かす。
+///
+/// ★ [`scroll_to_id`] との違いは `block: nearest`。既に見えている要素は 1px も動かさず、
+/// はみ出しているときだけ最小限スクロールする。「開いた部位を必ず画面に入れる」ように
+/// 使うのが目的で、`scroll_to_id` を使うと**タップして開いただけの部位まで**画面上端へ
+/// 飛ぶ（アコーディオンを開くたびに視界がジャンプする）。
+pub fn scroll_into_view_if_needed(element_id: String) {
+    request_animation_frame(move || {
+        if let Some(el) = document().get_element_by_id(&element_id) {
+            let opts = web_sys::ScrollIntoViewOptions::new();
+            opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
+            el.scroll_into_view_with_scroll_into_view_options(&opts);
         }
     });
 }
@@ -281,7 +318,7 @@ pub fn scroll_to_id(element_id: String) {
 /// ★ `<div role="dialog">` ではなく**ネイティブ `<dialog>` を `show_modal()` で開く**。
 ///   top layer に載るので z-index を持つ必要が無くなり、背景は UA が `inert` にする。
 ///   以前この 3 つを手で両立させようとして 2 件壊している（styles.css 冒頭のコメント）。
-///   Esc（close request）も UA 側の仕事になる。経緯は ADR-0050。
+///   Esc（close request）も UA 側の仕事になる。経緯は adr/ux/native-dialog-for-sheets.md。
 ///
 /// ★ **常時マウントする。** 開いている間だけ DOM に置く形にすると、閉じる際に
 ///   「top layer に載ったままの要素を DOM から消す」ことになり `close` イベントが
@@ -359,7 +396,7 @@ pub fn Sheet(
             }
             on:click=move |ev| {
                 // ★ 背景タップで閉じる。`closedby="any"` は Safari 未対応なので使えない
-                //   （ADR-0049）。backdrop へのクリックは **dialog 自身**が target に
+                //   （adr/architecture/browser-support-policy.md）。backdrop へのクリックは **dialog 自身**が target に
                 //   なるのでまずそこで絞り、さらに座標が箱の外かを見る。target だけで
                 //   判定するとシート内の余白を突いたときにも閉じてしまう
                 let Some(d) = dialog.get_untracked() else { return };
@@ -392,7 +429,7 @@ pub fn Sheet(
                     data-testid=close_testid
                     on:click=move |_| on_close.run(())
                 >
-                    "✕"
+                    {icon(icon::X)}
                 </button>
             </header>
             <div class="sheet-body">{children()}</div>
@@ -470,6 +507,9 @@ pub fn App() -> impl IntoView {
     let kb = KbCtx(RwSignal::new(false));
     provide_context(kb);
 
+    // ★ 種目タブの外に置く（タブ往復で閉じないため）。理由は OpenGroupCtx を参照
+    provide_context(OpenGroupCtx(RwSignal::new(None)));
+
     let tab = RwSignal::new(Tab::Record);
     let tabs = TabCtx(tab);
     provide_context(tabs);
@@ -532,7 +572,7 @@ pub fn App() -> impl IntoView {
                                     aria-label="通知を閉じる"
                                     on:click=move |_| notice.set(None)
                                 >
-                                    "✕"
+                                    {icon(icon::X)}
                                 </button>
                             </div>
                         }

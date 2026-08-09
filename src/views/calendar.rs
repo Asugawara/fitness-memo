@@ -22,6 +22,7 @@ use crate::model::{Db, Group, GroupId, Session};
 
 use super::day::DayEditor;
 use super::help::InstallBanner;
+use super::icon::{self, icon};
 use super::{fmt_metric, use_dates, use_db};
 
 /// 日曜始まり。`Weekday::num_days_from_sunday()` の 0..=6 とインデックスが一致する。
@@ -166,7 +167,7 @@ pub fn Calendar() -> impl IntoView {
                     data-testid="cal-prev"
                     on:click=move |_| month.update(|m| *m = shift_month(*m, -1))
                 >
-                    "‹"
+                    {icon(icon::CHEVRON_LEFT)}
                 </button>
                 <h1 class="screen-title" data-testid="cal-title">
                     {move || fmt_month(month.get())}
@@ -177,7 +178,7 @@ pub fn Calendar() -> impl IntoView {
                     data-testid="cal-next"
                     on:click=move |_| month.update(|m| *m = shift_month(*m, 1))
                 >
-                    "›"
+                    {icon(icon::CHEVRON_RIGHT)}
                 </button>
             </header>
 

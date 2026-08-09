@@ -15,6 +15,7 @@ use crate::core;
 use crate::core::Metric;
 use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, SetEntry};
 
+use super::icon::{self, icon};
 use super::{
     Sheet, fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms, parse_reps,
     parse_weight, scroll_to_id, use_dates, use_db, use_kb,
@@ -213,7 +214,7 @@ pub fn DayEditor() -> impl IntoView {
     //
     //   この snapshot は今日のキーを持たないので、見つかるセッションは必ず昨日以前になる。
     //   つまり `Elapsed::days()` は常に 1 以上で、ヒーローもチップもローカル暦の日数で
-    //   表示される（`humanize` の時刻粒度の分岐はここからは踏まない）。ADR-0054 参照。
+    //   表示される（`humanize` の時刻粒度の分岐はここからは踏まない）。adr/data-model/elapsed-in-local-calendar-days.md 参照。
     let before_today = Memo::new(move |_| {
         let today = dates.today.get();
         db.with(|d| {
@@ -341,7 +342,7 @@ pub fn DayEditor() -> impl IntoView {
 
                 <header class="day-head" class:past=move || dates.is_past_edit()>
     // ★ h1 ではなく h2。記録タブは 1 画面にカレンダーと選択日の入力欄が縦に並ぶので
-    // （ADR-0035）、h1 は上のカレンダーの月見出しが持つ。両方を h1 にすると
+    // （adr/ux/record-tab-calendar-with-day-editor.md）、h1 は上のカレンダーの月見出しが持つ。両方を h1 にすると
     // 見出しの階層が 1 画面に 2 本立ち、支援技術のアウトラインで前後関係が読めなくなる
     <h2 data-testid="today-date">{move || fmt_date(dates.selected.get())}</h2>
                     {move || {
@@ -721,7 +722,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
         // 重量だけの行は parse_reps が None を返して保存されないので commit は要らない
     };
 
-    // ★ 確認を挟まない（[ADR-0046]）。消えるのは 1 行で打ち直しは数秒、対してトレ中は
+    // ★ 確認を挟まない（adr/ux/set-delete-without-confirmation.md）。消えるのは 1 行で打ち直しは数秒、対してトレ中は
     //   1 種目に 3〜5 行あり打ち間違いの消し直しも含めれば何度も踏む。確認のコストのほうが
     //   失うものより高い。**カード削除（confirm_close）の確認は残す** — スコープが違う。
     let remove_row = move |key: u32| {
@@ -757,7 +758,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
     };
 
     // ★ 保存済みセットが 1 つも無いカードは、消えるものが無いので確認を挟まない。
-    //   行削除の「空行は確認しない」（ADR-0036）をカードへ広げたもの。空カードに
+    //   行削除の「空行は確認しない」（adr/ux/set-entry-prefill-and-focus.md）をカードへ広げたもの。空カードに
     //   「この日の記録が消えます」と出すのは嘘だし、シートで種目を押し間違えた直後の
     //   取り消しが最も多い用途なので、そこに確認を挟むと邪魔でしかない。
     //   重量だけ打って回数が空の行は保存されない（parse_reps が None）ので「空」に入る。
@@ -804,7 +805,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
             //   「種目を追加」を探して下スクロールする指が最初に触る位置で、
             //   追加しようとして種目ごと消す事故が起きていた。導線はフッタの左端へ
             //   （カードの右端は「行の ✕ → + セット → sticky の種目を追加」が並ぶ列なので、
-            //   そこには置かない。詳細は ADR-0043）
+            //   そこには置かない。詳細は adr/ux/destructive-affordance-quiet-at-rest.md）
             <header class="card-head">
                 // 選択日（h2）の下にぶら下がる種目なので h3
                 <h3 data-testid="card-name">{move || name.get()}</h3>
@@ -941,7 +942,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                     data-testid="remove-set"
                                     on:click=move |_| remove_row(key)
                                 >
-                                    "✕"
+                                    {icon(icon::X)}
                                 </button>
                                 {move || {
                                     weight_missing()

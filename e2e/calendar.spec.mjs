@@ -13,7 +13,7 @@ import { test, expect } from '@playwright/test';
 //    作っていた（calendar.rs が入るまで、today タブ単体に過去日へ移動する導線が
 //    無かったため）。つまり「UI から過去日に書き込んだときに at が入らない」という
 //    書き込み側の不変条件は、これまで一度も検証されていない。
-//    経過日数は日付キーから出すので日付が嘘になることはないが（ADR-0054）、ここに now が
+//    経過日数は日付キーから出すので日付が嘘になることはないが（adr/data-model/elapsed-in-local-calendar-days.md）、ここに now が
 //    入ると「その日に実施した時刻」として存在しない値が記録に残る。記録の正直さを守る。
 //
 // 既知の制約: 日付は実行時刻の「今日」を基準にする。テストが日を跨いだ瞬間に走ると
@@ -187,7 +187,7 @@ test('★ UI から過去日に記録すると ExerciseLog.at が null になり
   expect(session.logs).toHaveLength(1);
   expect(session.logs[0].sets).toEqual([{ weight: 60, reps: 10 }]);
 
-  // ★ 過去日バックフィルは at を埋めない。表示の日数は日付キーから出るので（ADR-0054）
+  // ★ 過去日バックフィルは at を埋めない。表示の日数は日付キーから出るので（adr/data-model/elapsed-in-local-calendar-days.md）
   //   ここが漏れても画面は正しいままで、この JSON 直接検証が唯一の防壁になる
   expect(
     session.logs[0].at,
@@ -254,7 +254,7 @@ test('★ 過去日にメニューを丸ごとコピーしても at は null の
 
   // ★ コピー元の at をわざと埋める。copy_day が ExerciseLog を clone すると
   //   この epoch がコピー先に付いてきて、「最後のトレーニングから」が
-  //   「たった今」寄りの時刻粒度に化ける（ADR-0006）
+  //   「たった今」寄りの時刻粒度に化ける（adr/data-model/at-optional-same-day-only.md）
   await flushToStorage(page);
   await page.evaluate(
     ({ key, dateKey, at }) => {

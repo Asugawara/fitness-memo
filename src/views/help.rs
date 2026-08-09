@@ -30,6 +30,7 @@ use leptos::prelude::*;
 
 use crate::storage;
 
+use super::icon::{self, icon};
 use super::{Sheet, is_standalone, storage_may_split};
 
 const STEP1_SVG: &str = include_str!("../../assets/help/step1-share.svg");
@@ -89,7 +90,7 @@ pub fn InstallBanner() -> impl IntoView {
                                     dismissed.set(true);
                                 }
                             >
-                                "✕"
+                                {icon(icon::X)}
                             </button>
                         </div>
                         // シートも条件の中に置く。バナーが出ない状態では `open` を

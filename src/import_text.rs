@@ -3,10 +3,10 @@
 //! 移行元にエクスポートが無いアプリからデータを移す唯一の汎用手段が、iOS の
 //! テキスト認識表示（Live Text）でスクリーンショットから起こした文字列を貼り付けて
 //! もらうこと。iOS のサンドボックスは他アプリのコンテナを一切見せないので、
-//! こちらから自動で読む道は無い（[ADR-0055]）。
+//! こちらから自動で読む道は無い（adr/ux/migrate-by-ocr-paste.md）。
 //!
 //! `web-sys` に触れないので、ホストの `cargo test` がそのまま検証できる
-//! （`chart_layout` と同じ立て付け / ADR-0045）。OCR の出力は端末とアプリで
+//! （`chart_layout` と同じ立て付け / adr/architecture/chart-layout-as-a-testable-module.md）。OCR の出力は端末とアプリで
 //! いくらでも揺れる。**書式の判定はテストで固めて、実機で外した分だけ足す。**
 //!
 //! ## 設計上の要点
@@ -15,7 +15,7 @@
 //!   移行できたつもりで前のアプリを消される。何を捨てたかは画面に全文で出す
 //! - **未来の日付を作らない。** 年の無い `8/7` は「今日以前で最も近い年」に寄せる。
 //!   ここを間違えると、カレンダーの先の方に幽霊の記録が湧く
-//! - **`ExerciseLog.at` は常に `None`。** 過去日のバックフィル扱い（ADR-0006）。
+//! - **`ExerciseLog.at` は常に `None`。** 過去日のバックフィル扱い（adr/data-model/at-optional-same-day-only.md）。
 //!   `now` を書くと「最後のトレーニングから」が嘘になる
 //! - **新しい部位は作らない。** 新規種目の置き場所は利用者が既存の部位から選ぶ
 
@@ -1022,7 +1022,7 @@ pub fn to_db(
                 None => session.logs.push(ExerciseLog {
                     exercise_id: id,
                     sets: log.sets.clone(),
-                    // ★ 過去日のバックフィル扱い（ADR-0006）
+                    // ★ 過去日のバックフィル扱い（adr/data-model/at-optional-same-day-only.md）
                     at: None,
                 }),
             }
@@ -1253,7 +1253,7 @@ Total Volume 12,000 kg";
 
     #[test]
     fn imported_logs_have_no_timestamp() {
-        // `at` に now を書くと「最後のトレーニングから」が嘘になる（ADR-0006）
+        // `at` に now を書くと「最後のトレーニングから」が嘘になる（adr/data-model/at-optional-same-day-only.md）
         let draft = parse("8/7\nベンチプレス\n60kg x 10", &db(), today());
         let built = to_db(&draft, &BTreeMap::new(), today(), &db(), &mut ids());
         for session in built.sessions.values() {

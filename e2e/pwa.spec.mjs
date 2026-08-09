@@ -94,7 +94,7 @@ test('manifest が取得でき display=standalone かつ id がある', async ({
   expect(manifest.display).toBe('standalone');
   expect(manifest.id).toBeTruthy();
 
-  // description は Chrome のインストールプロンプトに出る（ADR-0048）
+  // description は Chrome のインストールプロンプトに出る（adr/seo/crawler-metadata-and-hardcoded-origin.md）
   expect(manifest.description).toBeTruthy();
   expect(manifest.lang).toBe('ja');
 
@@ -194,7 +194,7 @@ test('旧キー v1 の記録を引き継いで v3 に書き、v1 は消さない
   expect(migrated.groups.map((g) => g.name)).toEqual(['胸']);
 });
 
-// ★ 旧キーは「全損に対する唯一の退路」（ADR-0034）。現行キーが壊れたときに
+// ★ 旧キーは「全損に対する唯一の退路」（adr/storage/storage-key-per-schema-generation.md）。現行キーが壊れたときに
 //   そこへ降りられなければ、退路を用意した意味が無い。
 //   「最初に中身があったキーで打ち切る」実装だと、健全な v2 が残っているのに
 //   プリセットが表示され、直後の保存でそれが確定してしまう。
@@ -455,7 +455,7 @@ test.describe('ストレージが分かれうる環境（iPhone の UA）', () =
     await expect(page.getByTestId('install-hint')).toHaveCount(0);
   });
 
-  // ADR-0040 が「消しても手順自体は失われない」ことを ✕ を入れる条件にしているので固定する
+  // adr/ux/install-guide-banner-and-sheet.md が「消しても手順自体は失われない」ことを ✕ を入れる条件にしているので固定する
   test('✕ で消しても種目タブから手順シートを開ける', async ({ page }) => {
     await page.goto('./');
     await page.getByTestId('install-hint-dismiss').click();
@@ -467,7 +467,7 @@ test.describe('ストレージが分かれうる環境（iPhone の UA）', () =
     await expect(page.getByTestId('install-sheet')).toBeVisible();
   });
 
-  // UI のフラグを Db と混ぜないこと（ADR-0014 の「Db の JSON がそのままエクスポート
+  // UI のフラグを Db と混ぜないこと（adr/storage/defer-export-import.md の「Db の JSON がそのままエクスポート
   // 形式」という前提を守る）。混ぜると export に UI 状態が混入する
   test('✕ の記録は Db のキーではなく UI 専用キーに入る', async ({ page }) => {
     await page.goto('./');

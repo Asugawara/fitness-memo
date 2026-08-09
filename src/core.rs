@@ -206,9 +206,9 @@ pub fn copy_day(db: &mut Db, from: NaiveDate, to: NaiveDate, at: Option<i64>) ->
         copied.push(exercise_id);
         // ★ ExerciseLog を clone してはいけない。clone すると元の日の `at` を
         //   引き継ぎ、`at = None` にしたい過去日バックフィルに古い epoch が入る。
-        //   日数表示は日付キーから出るので日付が嘘になることはもう無いが（ADR-0054）、
+        //   日数表示は日付キーから出るので日付が嘘になることはもう無いが（adr/data-model/elapsed-in-local-calendar-days.md）、
         //   「その日に実施した時刻」として存在しない値が残り、同じ暦日にコピーしたときの
-        //   時刻粒度が捏造される。記録の正直さは表示の都合とは別に守る（ADR-0006）
+        //   時刻粒度が捏造される。記録の正直さは表示の都合とは別に守る（adr/data-model/at-optional-same-day-only.md）
         session.logs.push(ExerciseLog {
             exercise_id,
             sets,
@@ -420,7 +420,7 @@ pub fn weight_band(lo_v: f64, hi_v: f64) -> (f64, f64) {
 ///   「今日」と出る（実際に出ていた。朝トレなら繰り上がりが UTC 深夜に来るので
 ///   「アプリが UTC で計っている」ように見える）。`ms` を private にしてあるのは
 ///   **この導出を型で書けなくする**ため。日数を読む経路は `days()` だけにする。
-///   ADR-0054 参照。
+///   adr/data-model/elapsed-in-local-calendar-days.md 参照。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Elapsed {
     /// `today - 日付キー`。常に 0 以上
@@ -528,7 +528,7 @@ pub fn humanize_days(days: i64) -> String {
 /// 日を跨いだら日数、同じ暦日なら時刻粒度。
 ///
 /// ★ 「2日5時間」形式は廃止した。日数部分が経過ミリ秒 / 24h のローリング日数だったため、
-///   チップ（日粒度）とヒーロー（時刻粒度）が違う日を指すことがあった（ADR-0054）。
+///   チップ（日粒度）とヒーロー（時刻粒度）が違う日を指すことがあった（adr/data-model/elapsed-in-local-calendar-days.md）。
 pub fn humanize(e: Elapsed) -> String {
     if e.days > 0 {
         return humanize_days(e.days);
@@ -559,7 +559,7 @@ pub fn humanize(e: Elapsed) -> String {
 ///
 /// ★ `views` ではなくここに置く。元は `views/mod.rs` にあったが、そこは wasm32 の
 ///   cfg gate の内側で `cargo test` が一度も触れず、`ms / 86_400_000` というバグが
-///   誰にも検出されないまま残っていた（ADR-0045 と同じ理由でロジックを core に置く）。
+///   誰にも検出されないまま残っていた（adr/architecture/chart-layout-as-a-testable-module.md と同じ理由でロジックを core に置く）。
 pub fn short_elapsed(e: Elapsed) -> String {
     match e.days() {
         0 => "今日".to_string(),
@@ -1203,7 +1203,7 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             .collect();
         // ★ 写像は単射とは限らない。取り込み先で改名済みの種目と、取り込む側の
         //   同名の別種目が同じ ID に落ちると、同じ日に同一 exercise_id のログが
-        //   2 本できる（ADR-0008「1 日 1 種目 1 ログ」違反）。そのまま入れると
+        //   2 本できる（adr/data-model/one-log-per-exercise-per-day.md「1 日 1 種目 1 ログ」違反）。そのまま入れると
         //   画面は 1 本目しか見ず、**次回起動の dedupe_logs が別種目のセットを
         //   連結する** — このリリースが潰そうとしている壊れ方そのものになる
         let logs = dedupe_by_exercise(mapped);
@@ -1666,7 +1666,7 @@ mod tests {
 
     #[test]
     fn copy_day_always_uses_the_given_at_never_the_source_one() {
-        // ★ ExerciseLog を clone すると元の `at` が付いてくる。ADR-0006 の回帰テスト
+        // ★ ExerciseLog を clone すると元の `at` が付いてくる。adr/data-model/at-optional-same-day-only.md の回帰テスト
         let mut db = menu_db();
         put(
             &mut db,
@@ -1717,7 +1717,7 @@ mod tests {
     #[test]
     fn copy_day_refuses_a_target_holding_an_empty_set_log() {
         // 空セットのログが残る旧データに書き足すと exercise_id が重複し、
-        // 「1 日 1 種目 1 ログ」（ADR-0008）が壊れる
+        // 「1 日 1 種目 1 ログ」（adr/data-model/one-log-per-exercise-per-day.md）が壊れる
         let mut db = menu_db();
         put(&mut db, d(2026, 8, 5), vec![log(10, &[(60.0, 10)], None)]);
         put(&mut db, d(2026, 8, 8), vec![log(10, &[], None)]);
@@ -2263,7 +2263,7 @@ mod tests {
     // ★ 以下 4 本は「経過日数はローカル暦の日差であって経過ミリ秒 / 24h ではない」ことを
     //   固定する。旧実装は `Exact(ms)` しか持たず、日数が必要な views 側が
     //   `ms / 86_400_000` を書いていたため、繰り上がりが暦の 0 時ではなくトレーニング
-    //   時刻の 24 時間後に起きていた（ADR-0054）。
+    //   時刻の 24 時間後に起きていた（adr/data-model/elapsed-in-local-calendar-days.md）。
     //
     //   旧テストがこれを捕まえられなかったのは、8/6 → 8/8 という「暦の日差 2」と
     //   「ms / 86_400_000 = 2」が偶然一致する組み合わせしか使っていなかったから。

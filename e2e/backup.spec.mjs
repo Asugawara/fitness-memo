@@ -143,7 +143,7 @@ test('シートを閉じると「元に戻す」は消える', async ({ page }) 
   await expect(page.getByTestId('backup-undo')).toHaveCount(0);
 });
 
-// ADR-0012 が「退避データを UI から読む手段がない ... iPhone 単体では実質的に
+// adr/storage/quarantine-on-parse-failure.md が「退避データを UI から読む手段がない ... iPhone 単体では実質的に
 // 救出不可能」と自認していた穴。ここが塞がっていることを見る。
 test('保管中のデータは一覧に出て、中身を見て取り込み直せる', async ({ page }) => {
   await page.addInitScript(() => {
@@ -232,7 +232,7 @@ test('保存できなくなったら黙って動き続けず警告を出す', as
   await expect(page.getByTestId('restore-notice')).toContainText('保存できていません');
 });
 
-// ── 見えることの検証（[ADR-0047]）─────────────────────────────────────────
+// ── 見えることの検証（adr/ux/declare-color-scheme-for-ua-widgets.md）────
 //
 // ★ 「コピー」がダークで読めなかった原因は色の付け忘れではなく、`color-scheme` を
 //   宣言していないこと。`button { color: inherit }` が UA の文字色だけ上書きし、
@@ -406,7 +406,7 @@ test('スクショから起こしたテキストを読み取って足すだけ�
     { weight: 60, reps: 10 },
     { weight: 60, reps: 8 },
   ]);
-  // ★ 過去日のバックフィルなので時刻を持たない（ADR-0006）
+  // ★ 過去日のバックフィルなので時刻を持たない（adr/data-model/at-optional-same-day-only.md）
   expect(logs[0].at).toBeNull();
   // 種目は 1 つも増えていない
   expect(saved.exercises).toHaveLength(28);

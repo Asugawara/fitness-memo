@@ -40,6 +40,9 @@ struct Row {
     key: u32,
     weight: String,
     reps: String,
+    /// このセットのメモ。**保存はセットに従属する**（回数の無い行のメモは保存されない）。
+    /// adr/data-model/notes-on-logs-and-sets.md
+    note: String,
 }
 
 impl Row {
@@ -48,6 +51,7 @@ impl Row {
             key,
             weight: String::new(),
             reps: String::new(),
+            note: String::new(),
         }
     }
 }
@@ -143,10 +147,23 @@ fn confirm_dom_id(ex: ExerciseId) -> String {
     format!("confirm-{ex}")
 }
 
-/// その日・その種目のセットを丸ごと差し替える。
-fn write_log(db: &mut Db, date: NaiveDate, ex: ExerciseId, sets: Vec<SetEntry>, is_today: bool) {
+/// その日・その種目のセットと種目メモを丸ごと差し替える。
+///
+/// ★ **刈り取りの規則は「セットもメモも無ければ落とす」の 1 本。** セットだけで
+/// 判定していた形は使えない — 種目メモを打った直後のセット commit（行の ✕、`+ セット`、
+/// 他の行の打鍵）でログごと消え、**打った文字が黙って消える**
+/// （adr/data-model/notes-on-logs-and-sets.md）。カードの集合は `load_cards` が
+/// `session.logs` から引くので、落とすとカードごとこの日から消える。
+fn write_log(
+    db: &mut Db,
+    date: NaiveDate,
+    ex: ExerciseId,
+    sets: Vec<SetEntry>,
+    note: String,
+    is_today: bool,
+) {
     let key = core::date_key(date);
-    if sets.is_empty() {
+    if sets.is_empty() && note.trim().is_empty() {
         if let Some(session) = db.sessions.get_mut(&key) {
             session.logs.retain(|l| l.exercise_id != ex);
         }
@@ -155,18 +172,28 @@ fn write_log(db: &mut Db, date: NaiveDate, ex: ExerciseId, sets: Vec<SetEntry>, 
         match session.logs.iter_mut().find(|l| l.exercise_id == ex) {
             Some(log) => {
                 log.sets = sets;
+                log.note = note;
                 // ★ at は当日入力時のみ埋める。過去日バックフィルは None のまま。
                 //   ここで now を入れると「最後のトレーニングから」が「たった今」になり
                 //   明示要件の出力が嘘になる
-                if is_today {
+                //
+                //   ★ **セットが 1 本以上あるときだけ**。メモを打つのはトレーニングでは
+                //     ないので、メモだけのログに時刻が入ると「その日に実施した」証拠を
+                //     持ってしまう（adr/data-model/at-optional-same-day-only.md）。
+                //     旧実装はセットが空なら削除枝に入っていたのでこの判定が要らなかった
+                if is_today && !log.sets.is_empty() {
                     log.at = Some(now_ms());
                 }
             }
-            None => session.logs.push(ExerciseLog {
-                exercise_id: ex,
-                sets,
-                at: is_today.then(now_ms),
-            }),
+            None => {
+                let at = (is_today && !sets.is_empty()).then(now_ms);
+                session.logs.push(ExerciseLog {
+                    exercise_id: ex,
+                    sets,
+                    at,
+                    note,
+                });
+            }
         }
     }
     // ログも体重もメモも無くなった日は残さない（過去日を閲覧しただけで実施日にしない）
@@ -633,20 +660,23 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
             })
     });
 
-    let initial: Vec<Row> = db.with_untracked(|d| {
+    let (initial, note0): (Vec<Row>, String) = db.with_untracked(|d| {
         d.sessions
             .get(&core::date_key(dates.selected.get_untracked()))
             .and_then(|s| s.log_of(ex))
             .map(|l| {
-                l.sets
+                let rows: Vec<Row> = l
+                    .sets
                     .iter()
                     .enumerate()
                     .map(|(i, s)| Row {
                         key: i as u32,
                         weight: fmt_weight(s.weight),
                         reps: s.reps.to_string(),
+                        note: s.note.clone(),
                     })
-                    .collect()
+                    .collect();
+                (rows, l.note.clone())
             })
             .unwrap_or_default()
     });
@@ -656,11 +686,26 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
     } else {
         initial
     });
+    // その日のその種目のメモ。
+    let ex_note = RwSignal::new(note0);
 
     // 「+ セット」で足した行。この行の回数欄へフォーカスを移したら None に戻す。
     let focus_key: RwSignal<Option<u32>> = RwSignal::new(None);
     // この種目をこの日から外す確認を出しているか。
     let confirm_close = RwSignal::new(false);
+    // メモ欄（種目メモ + 全セット行のメモ）を開いているか。
+    //
+    // ★ **既定は常に閉。`ConditionRow` の「値があれば最初から開く」は継がない。**
+    //   あちらが自動で開くのは、閉じているとき値がまったく見えないから。こちらは
+    //   閉じたまま薄字で読めるので、その必要が消えている。継ぐと、一度メモを書いた種目が
+    //   永久に入力欄 N+1 本ぶん高いカードになり（3 セットで約 200px）、それが日をまたいで
+    //   復活する。コンディションは 1 日 1 個、種目カードは 1 日 5〜8 個なので効き方が違う。
+    //
+    // ★ `storage::UiState` に入れない。あのキーの前提は「`Db` を参照しないフラグ」で、
+    //   種目ごとの開閉は `ExerciseId` の集合 = `Db` 参照になり、種目を消すと dangling する。
+    //   リロードで閉じるのは仕様（薄字が残るので情報は失われない）。
+    //   adr/ux/exercise-and-set-notes-behind-one-toggle.md
+    let note_open = RwSignal::new(false);
 
     // ★ この種目が普段「重量を使う」種目かを**実データから**判定する。
     //
@@ -682,18 +727,25 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
         let sets: Vec<SetEntry> = rows.with_untracked(|rs| {
             rs.iter()
                 .filter_map(|r| {
-                    // 空行が 0×0 として保存されコピーで複製され続けるのを防ぐ
+                    // 空行が 0×0 として保存されコピーで複製され続けるのを防ぐ。
+                    // ★ メモだけの行もここで落ちる。通すと 0×0 のゴーストセットが
+                    //   生まれて指標・カレンダーのドット・コピーが全部汚染される
+                    //   （adr/ux/text-input-not-number.md が潰した経路の復活）。
+                    //   セットに紐付かないメモの置き場所は種目メモとして用意してあり、
+                    //   落ちることは行内の `.warn` で見せる（note_orphan）
                     let reps = parse_reps(&r.reps)?;
                     Some(SetEntry {
                         weight: parse_weight(&r.weight),
                         reps,
+                        note: r.note.clone(),
                     })
                 })
                 .collect()
         });
+        let note = ex_note.get_untracked();
         let date = dates.selected.get_untracked();
         let is_today = date == dates.today.get_untracked();
-        db.update(|d| write_log(d, date, ex, sets, is_today));
+        db.update(|d| write_log(d, date, ex, sets, note, is_today));
     };
 
     let fresh_key = move || {
@@ -716,6 +768,10 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                 key,
                 weight,
                 reps: String::new(),
+                // ★ メモはプリフィルしない。重量を引き継ぐのはそれが**次のセットの計画値**
+                //   だからで、メモは**そのセットで起きたことの観測値**。コピーすると
+                //   起きていない観測を捏造する（copy_day が `at` を持ち込まないのと同型）
+                note: String::new(),
             })
         });
         focus_key.set(Some(key));
@@ -750,6 +806,9 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                 key: base + i as u32,
                 weight: fmt_weight(s.weight),
                 reps: s.reps.to_string(),
+                // ★ 前回のメモは持ち込まない。「肩に違和感」は前回の観測で今日の観測では
+                //   ない。core::copy_day（メニューの丸ごとコピー）と同じ規則
+                note: String::new(),
             })
             .collect();
         next_key.set(base + filled.len() as u32 + 1);
@@ -762,24 +821,30 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
     //   「この日の記録が消えます」と出すのは嘘だし、シートで種目を押し間違えた直後の
     //   取り消しが最も多い用途なので、そこに確認を挟むと邪魔でしかない。
     //   重量だけ打って回数が空の行は保存されない（parse_reps が None）ので「空」に入る。
-    let has_sets = move || {
+    //
+    //   ★ **種目メモも数える。** セットだけで判定すると、メモだけのカードが「空」扱いで
+    //     確認なしに消え、書いたメモが黙って捨てられる。セットメモは保存済みセットにしか
+    //     存在しないので `!l.sets.is_empty()` 側で覆える。
+    let has_content = move || {
         let key = core::date_key(dates.selected.get_untracked());
         db.with_untracked(|d| {
             d.sessions
                 .get(&key)
                 .and_then(|s| s.log_of(ex))
-                .is_some_and(|l| !l.sets.is_empty())
+                .is_some_and(|l| !l.is_empty())
         })
     };
 
     let close_card = move || {
         let date = dates.selected.get_untracked();
-        db.update(|d| write_log(d, date, ex, Vec::new(), false));
+        // ★ メモも空で渡す。セットだけ空にしても、メモが残っているとログが残って
+        //   「この日から外す」が効かない（write_log の刈り取りは両方を見る）
+        db.update(|d| write_log(d, date, ex, Vec::new(), String::new(), false));
         cards.update(|cs| cs.retain(|c| c.ex != ex));
     };
 
     let request_close = move |_| {
-        if !has_sets() {
+        if !has_content() {
             close_card();
             return;
         }
@@ -868,6 +933,26 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                         })
                                 })
                         };
+                        let note_of = move || {
+                            rows.with(|rs| {
+                                rs.iter()
+                                    .find(|r| r.key == key)
+                                    .map(|r| r.note.clone())
+                                    .unwrap_or_default()
+                            })
+                        };
+                        // メモは入っているが回数が空 = commit で落ちる行。
+                        // weight_missing の完全な対称（あちらは reps あり、こちらは reps なし）
+                        let note_orphan = move || {
+                            rows.with(|rs| {
+                                rs.iter()
+                                    .find(|r| r.key == key)
+                                    .is_some_and(|r| {
+                                        !r.note.trim().is_empty()
+                                            && parse_reps(&r.reps).is_none()
+                                    })
+                            })
+                        };
                         // ★ 「+ セット」で足した行の回数欄へフォーカスを移す。
                         //   iOS はユーザー操作起点のタスク内でしか focus() でキーボードを
                         //   開かないので、set_timeout を挟まず Effect（マイクロタスク）で
@@ -954,6 +1039,67 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                             }
                                         })
                                 }}
+                                // ★ メモだけ打って回数が空の行は保存されない。黙って捨てず、
+                                //   行に理由を出す。weight_missing（回数あり × 重量なし）とは
+                                //   条件が排他なので 2 つ同時には出ない
+                                {move || {
+                                    note_orphan()
+                                        .then(|| {
+                                            view! {
+                                                <span class="warn" data-testid="note-orphan">
+                                                    "回数を入れると保存されます"
+                                                </span>
+                                            }
+                                        })
+                                }}
+                                // メモ欄は ✕ の**後**に置く。`.set-row .icon-btn` の
+                                // margin-left:auto が ✕ を 1 行目の右端に留める前提なので、
+                                // flex-basis:100% の項目を前に置くと ✕ が 2 行目へ落ちる
+                                {move || {
+                                    if note_open.get() {
+                                        view! {
+                                            <input
+                                                class="set-note"
+                                                type="text"
+                                                value=note_of()
+                                                aria-label=move || {
+                                                    format!("{} セット目のメモ", index())
+                                                }
+                                                data-testid="set-note"
+                                                on:focusin=move |_| kb_focus(kb)
+                                                on:focusout=move |_| kb_blur(kb)
+                                                on:input=move |ev| {
+                                                    let v = event_target_value(&ev);
+                                                    rows.update(|rs| {
+                                                        if let Some(r) = rs
+                                                            .iter_mut()
+                                                            .find(|r| r.key == key)
+                                                        {
+                                                            r.note = v;
+                                                        }
+                                                    });
+                                                    commit();
+                                                }
+                                            />
+                                        }
+                                            .into_any()
+                                    } else {
+                                        // 閉じていても入力済みメモは読める。省略はしない
+                                        // （静止時に利用者のメモを隠すのは要件の否定）
+                                        (!note_of().trim().is_empty())
+                                            .then(|| {
+                                                view! {
+                                                    <span
+                                                        class="set-note-read"
+                                                        data-testid="set-note-read"
+                                                    >
+                                                        {note_of()}
+                                                    </span>
+                                                }
+                                            })
+                                            .into_any()
+                                    }
+                                }}
                             </div>
                         }
                     }
@@ -965,6 +1111,46 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                 </div>
             </div>
 
+            // ── 種目メモ ──────────────────────────────────────────────────────
+            //
+            // ★ セット行群の**下**に置く。`.last-row`（前回の記録）の直下に置くと
+            //   12px --muted の行が 2 本続いて「前回の記録の続き」に読める（--muted は
+            //   1 つしか無いので色で分けられない）。ここなら**字下げの有無**だけで
+            //   「行のメモ（23px 字下げ）/ 種目のメモ（字下げなし）」が読め、ラベル文字が
+            //   要らない。開いたときトグルの真上に現れるので、押した場所と近い
+            {move || {
+                if note_open.get() {
+                    view! {
+                        <label class="ex-note">
+                            "メモ"
+                            <input
+                                type="text"
+                                value=ex_note.get_untracked()
+                                aria-label="この種目のメモ"
+                                data-testid="exercise-note"
+                                on:focusin=move |_| kb_focus(kb)
+                                on:focusout=move |_| kb_blur(kb)
+                                on:input=move |ev| {
+                                    ex_note.set(event_target_value(&ev));
+                                    commit();
+                                }
+                            />
+                        </label>
+                    }
+                        .into_any()
+                } else {
+                    (!ex_note.get().trim().is_empty())
+                        .then(|| {
+                            view! {
+                                <p class="ex-note-read" data-testid="exercise-note-read">
+                                    {move || ex_note.get()}
+                                </p>
+                            }
+                        })
+                        .into_any()
+                }
+            }}
+
             // 前回比はセッション中に出さない。途中の不完全な合計を前回の完了セッションと
             // 比べても意味がないため（比較は推移タブで行う）
             //
@@ -972,6 +1158,15 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
             //   その分だけ縦に縮む）ことと、右端の列から抜けることが目的。
             //   ラベルが「この種目」ではなく「この日」なのは、曖昧なのは主語ではなく
             //   スコープ（種目マスタから消えるのか、この日から外れるだけか）だから
+            //
+            // ★ メモの入口をここに畳むのは、カード内で 44px のタップ標的が**既に
+            //   予算されている行がフッタだけ**だから。他のどこ（ヘッダ直下・`.last-row` の
+            //   下・`+ セット` の隣に新しい行）に置いても 44px × カード枚数だけ縦に伸びる
+            //   （5 種目で 220px）。フッタは既に 44px の .link-btn を抱えているので
+            //   高さが 1px も増えない。横も 393px 幅で外す導線から 58px 空き、
+            //   destructive-affordance-quiet-at-rest.md が事故として挙げた
+            //   「+ セットと 41px・右端完全一致」より離れ、3 者が別の列（左端/中央/右端）に居る。
+            //   adr/ux/exercise-and-set-notes-behind-one-toggle.md
             <footer class="card-foot">
                 <button
                     class="link-btn card-remove"
@@ -979,6 +1174,17 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                     on:click=request_close
                 >
                     "この日から外す"
+                </button>
+                <button
+                    class="link-btn note-toggle"
+                    aria-label="メモ"
+                    // ★ bool を渡さない。aria-expanded は列挙属性なので、真偽属性として
+                    //   扱われると false のとき属性ごと消える（＝折りたためることが消える）
+                    aria-expanded=move || if note_open.get() { "true" } else { "false" }
+                    data-testid="note-toggle"
+                    on:click=move |_| note_open.update(|o| *o = !*o)
+                >
+                    {move || if note_open.get() { "－ メモ" } else { "＋ メモ" }}
                 </button>
                 <span class="foot-total">
                     <span>"今日"</span>

@@ -82,6 +82,11 @@ fn report_text(r: &MergeReport) -> String {
     if r.logs_added > 0 {
         parts.push(format!("{} 件の記録", r.logs_added));
     }
+    // ★ メモだけが増えることがある（セットが同じでメモだけ違う日）。ここを出さないと
+    //   `is_noop` が偽なのに parts が空になり「 を追加しました」だけが出る
+    if r.notes_added > 0 {
+        parts.push(format!("{} 件のメモ", r.notes_added));
+    }
     if r.exercises_added > 0 {
         parts.push(format!("{} 種目", r.exercises_added));
     }

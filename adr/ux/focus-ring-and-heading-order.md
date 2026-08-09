@@ -7,7 +7,7 @@
 
 ## 背景
 
-`/modern-web-guidance` のアクセシビリティ監査を当てたところ、土台は既に整っていた。`<main>` / `<nav>` / `<header>` / `<section>` のランドマーク、アイコンボタンの `aria-label`、通知の `role="status"`、グラフの `role="img"` + `aria-label` はすべて入っている。`color-scheme` も [`color-scheme` を宣言し、クラスなしの `<button>` を作らない](declare-color-scheme-for-ua-widgets.md) で宣言済み。
+アクセシビリティ監査を当てたところ、土台は既に整っていた。`<main>` / `<nav>` / `<header>` / `<section>` のランドマーク、アイコンボタンの `aria-label`、通知の `role="status"`、グラフの `role="img"` + `aria-label` はすべて入っている。`color-scheme` も [`color-scheme` を宣言し、クラスなしの `<button>` を作らない](declare-color-scheme-for-ua-widgets.md) で宣言済み。
 
 残っていた穴は 2 つだった。
 

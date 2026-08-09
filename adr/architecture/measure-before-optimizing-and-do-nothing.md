@@ -7,7 +7,7 @@
 
 ## 背景
 
-`/modern-web-guidance` のパフォーマンス系ガイドから、このアプリに当てられる候補が 3 つ挙がった。
+Web パフォーマンスの一般的なガイドから、このアプリに当てられる候補が 3 つ挙がった。
 
 1. `optimize-script-priority` — wasm の preload に `fetchpriority="high"` を付ける
 2. `interactions-in-complex-layouts` — 種目カード列に `content-visibility: auto` を当ててリフローを封じ込める

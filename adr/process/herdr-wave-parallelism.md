@@ -44,11 +44,11 @@
 
 1. **分割直後のペインに `herdr agent start` を打つと `agent_pane_busy` で失敗する。** シェル初期化中のため。4〜6 秒待つか `herdr pane read --source visible` でプロンプトを確認してから起動する。
 2. **エージェント名は小文字のみ。** `worker-A` は `invalid_agent_name` で拒否される。
-3. **rustup 導入後、既存セッションの Bash は PATH を更新しない。** rustup は `~/.zshenv` と `~/.config/fish/conf.d/rustup.fish` を正しく書くので**新規ペインでは通る**が、rustup より前に起動していたセッションでは `cargo: command not found` になる。
+3. **rustup 導入後、既存セッションの Bash は PATH を更新しない。** rustup はシェルの初期化ファイルを正しく書くので**新規ペインでは通る**が、rustup より前に起動していたセッションでは `cargo: command not found` になる。
 4. **`herdr agent prompt` はテキストと Enter を同時に送るので、指示は必ず 1 行にする。** 改行を含めると途中で送信されて指示が壊れる。
 5. **`--model` / `--effort` は起動時 argv。** 波ごとに変えるにはそのペインの `claude` を終了して `herdr agent start` を打ち直す。
 6. **cargo の target ロックは待つだけで壊れない。** 2 ワーカーが同時に `cargo build` すると `Blocking waiting for file lock on build directory` と出る。ボトルネックになったら `CARGO_TARGET_DIR` を分ける。
-7. **ワーカーを止めるときは新規起動ではなく `claude --resume <session-id>` で再開する。** transcript は `~/.claude/projects/<sanitized-cwd>/<session-id>.jsonl` に残り、`rg -m1 'あなたは worker-[ab] です' <id>.jsonl` で誰かを特定できる。
+7. **ワーカーを止めるときは新規起動ではなく `claude --resume <session-id>` で再開する。** transcript は残っているので、そこを `rg -m1 'あなたは worker-[ab] です'` で引けば誰かを特定できる。
 8. **⚠ resume しても「既に作り終えたファイルへの訂正」は自動では適用されない。** 実際に踏んだ: worker-b は resume 後、未着手の 6 ファイルは作ったが、プロンプトに含めた「既存ファイルへの訂正 5 点」を反映しなかった。エージェントは自分の TODO の続きから再開するため、完了済みタスクの手直しは指示に含めても落ちやすい。**訂正は独立したタスクとして投げ直す。**
 9. **成果物の受け入れ検証は自分でやる。** 「変更したファイル一覧」の自己申告は当てにならない。要となる不変条件（`sw.js` に `.put(` が無い、`startsWith('fitness-memo-')` がある）を `rg` で機械的に確認する。
 

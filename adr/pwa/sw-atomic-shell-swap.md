@@ -29,7 +29,7 @@ precache 一覧を手書きすると `filehash` によるファイル名変更�
 
 `find` の列挙順はファイルシステム依存なので **`LC_ALL=C sort` を必ず挟む**。挟まないと同一内容でも `BUILD_ID` が変わり、全クライアントに無駄なフル再ダウンロードが起きる。ハッシュ入力には `public/sw.js`（テンプレート）と `scripts/stamp-sw.sh` 自身も含める。含めないと SW のロジックだけ変えたときにキャッシュ名が変わらず、新旧ロジックが同じキャッシュを共有してしまう。
 
-### なぜ `cache.put` しないか（当初案からの修正）
+### なぜ `cache.put` しないか
 
 「ミス時はネットワーク → 成功なら cache に格納」は一見自然だが、GitHub Pages が全ファイルに `cache-control: max-age=600` を返す（実測）ため次の順で壊れる。
 
@@ -44,11 +44,11 @@ precache 済みのものだけを返し、ミスは素通しする（格納し�
 
 ### なぜ prefix を絞って削除するか
 
-Cache Storage API は**オリジン単位**で共有される。SW の scope が `/fitness-memo/` でも `caches.keys()` は `asugawara.github.io` 全体のキャッシュを返す。`caches.keys()` を無差別に削除すると、同じ GitHub アカウントの他プロジェクトの Pages サイトのキャッシュを黙って破壊する。localStorage 側は `fitness-memo/v1` と prefix を切っているのに、キャッシュ側だけ無差別というのは非対称でもある。
+Cache Storage API は**オリジン単位**で共有される。SW の scope が `/fitness-memo/` でも `caches.keys()` はオリジン全体のキャッシュを返す。`caches.keys()` を無差別に削除すると、同じオリジンに同居する他サイトのキャッシュを黙って破壊する。localStorage 側は `fitness-memo/v1` と prefix を切っているのに、キャッシュ側だけ無差別というのは非対称でもある。
 
 ## 結果（トレードオフ）
 
-- 更新の反映は「次回起動」から（cache-first の宿命）。表示中のページは旧シェルのまま。個人用アプリとして許容し、計画の検証手順に「更新確認はアプリを完全終了してから再起動」を明記した。
+- 更新の反映は「次回起動」から（cache-first の宿命）。表示中のページは旧シェルのまま。個人用アプリとして許容する。更新の確認はアプリを完全終了してから再起動する必要がある。
 - `filehash` を既定の `true` のままにできる。immutable な URL は HTTP キャッシュとの相性がよく、`false` にしたときの「旧キャッシュの本文と新 index.html の integrity が不一致」という別の壊れ方も避けられる。
 - ミスを格納しないので、precache 一覧に漏れがあるとオフラインで取れない。一覧を staging 全走査で作っているので漏れは構造的に起きない。
 

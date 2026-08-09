@@ -39,8 +39,8 @@ if ('serviceWorker' in navigator) {
 - **`unregister()` も一緒に呼ぶのが重要である。** 判定を入れる前に一度でも SW を登録してしまうと、以後 `localhost:8080` は登録済みの SW に制御され続ける。登録しないだけでは既存の登録が残るので、明示的に解除する。
 - **`?sw=off` は standalone PWA が壊れたときの最後の手段である。** SW が壊れた状態で cache-first だと、修正版をデプロイしても届かない可能性がある。クエリを付けて開けば SW とキャッシュを消して素の状態に戻せる。
 - **`?sw=off` の後始末が終わってから自力でリロードする。** `unregister()` は**現在ページの controller を外さない**ので、そのままでは 1 回目のアクセスで解除されても表示は SW 経由のままになる。`Promise.all` を待って `location.replace('./')` するので、1 回のアクセスで完了する。standalone にはアドレスバーもリロード UI も無いため、手動リロードを前提にできない。
-- **キャッシュ削除は `fitness-memo-` prefix に絞る。** `caches.keys()` はオリジン全体（`asugawara.github.io`）を返すので、無差別に消すと同じアカウントの他プロジェクトの Pages サイトを壊す（[Service Worker はシェル全体を BUILD_ID で原子的に入れ替える](sw-atomic-shell-swap.md) の activate と同じ理由）。
-- **Phase 4（PWA 化）を画面完成後に置いた**のも同じ動機である。開発期間の大半を SW 無しで進めることで、この事故の窓自体を小さくした。
+- **キャッシュ削除は `fitness-memo-` prefix に絞る。** `caches.keys()` はオリジン全体を返すので、無差別に消すと同じオリジンに同居する他サイトを壊す（[Service Worker はシェル全体を BUILD_ID で原子的に入れ替える](sw-atomic-shell-swap.md) の activate と同じ理由）。
+- **PWA 化を画面の完成後に置いた**のも同じ動機である。開発期間の大半を SW 無しで進めることで、この事故の窓自体を小さくした。
 
 ## 結果（トレードオフ）
 

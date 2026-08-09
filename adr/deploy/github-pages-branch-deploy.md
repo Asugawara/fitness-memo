@@ -7,22 +7,12 @@
 
 ## 背景
 
-利用者の指示は 2 つあった。
+配信の制約は 2 つある。
 
-- 「GitHub Actions を使わないようにして」（[ワークフローファイルを書かない（ただし Actions 機能は無効化しない）](no-workflow-files.md)）
-- 「特定ブランチに push すればデプロイになる方式」「開発ブランチからそのブランチへの PR を作成する際に、時間のかかる E2E テストを行う」
+- ワークフローファイルを書かない（[ワークフローファイルを書かない（ただし Actions 機能は無効化しない）](no-workflow-files.md)）
+- 特定ブランチへの push がデプロイになり、開発ブランチからそのブランチへの PR で時間のかかる E2E テストを走らせる
 
 ワークフローを書かずに GitHub Pages へ配信する手段は branch deploy（`build_type: "legacy"`）だけである。公開ディレクトリは **`/` か `/docs` の 2 択**しかない。
-
-リポジトリの実測状態は次のとおりだった。
-
-| 項目 | 現状 |
-|---|---|
-| `github.com/Asugawara/fitness-memo` | **既に作成済み**（`gh repo create` は実行しない） |
-| 可視性 | `PUBLIC`（Pages が Pro なしで使える） |
-| 中身 | `isEmpty: true`。ブランチ 0、default branch 未設定 |
-| ローカルの remote | 未設定 |
-| Pages | 未設定（404） |
 
 ## 決定
 
@@ -35,7 +25,7 @@
 
 公開 URL は `https://asugawara.github.io/fitness-memo/`。
 
-**Phase 5 の手順は順序を守る。**
+**初期設定の手順は順序を守る。**
 
 ```sh
 git remote add origin https://github.com/Asugawara/fitness-memo.git
@@ -62,17 +52,17 @@ echo '{"build_type":"legacy","source":{"branch":"release","path":"/docs"}}' \
 - **リリース手順が `scripts/release.sh` に依存する。** 手作業で `docs/` を作ると内容がずれる。スクリプトが `trunk build --release --public-url /fitness-memo/` から `git push` と PR 作成まで一貫して行う。
 - **公開ディレクトリが `/docs` なので、リポジトリ内の `docs/` を文書置き場として使えない。** ADR を `adr/` に置いた理由がこれである（[ADR を `adr/` にカテゴリ別で置く](../process/adr-in-adr-directory.md)）。一般的な慣習（`docs/adr/`）から外れるが、デプロイ機構との衝突を避けるほうが優先度が高い。
 - **サブパス配信（`/fitness-memo/`）になるので、パス関連のバグがローカルで再現しない。** `trunk build --public-url` で js/wasm は解決されるが、manifest と SW は別の対策が必要になった（[manifest の URL を全て相対にする](../pwa/manifest-relative-urls.md), [fetch ハンドラで navigate を明示分岐する](../pwa/sw-explicit-navigate-branch.md)）。重い側 E2E を `E2E_BASE=/fitness-memo/` で走らせて本番と同じパス構成を再現する。
-- **マージからサイト反映まで最大 10 分ずれる。** Pages のビルドと CDN（実測 `cache-control: max-age=600`）による。「マージしたのに古い」を不具合と誤認しないよう検証手順に明記した。
+- **マージからサイト反映まで最大 10 分ずれる。** Pages のビルドと CDN（実測 `cache-control: max-age=600`）による。「マージしたのに古い」を不具合と誤認しないこと。
 - **`release` ブランチ不在で `POST /pages` を叩いた際の正確なエラーコード（409 か 422 か）は未実測である。** 公式 docs は「ブランチが事前に存在すること」を要求すると明記するのみ。上記の順序を守れば踏まない。
 
 ## 検討した代替案
 
-**GitHub Actions で build → deploy（`build_type: "workflow"`）**: 一般的な構成で、成果物をコミットしなくて済み、履歴も汚れない。**利用者が明確に拒否したため採らない**（[ワークフローファイルを書かない（ただし Actions 機能は無効化しない）](no-workflow-files.md)）。
+**GitHub Actions で build → deploy（`build_type: "workflow"`）**: 一般的な構成で、成果物をコミットしなくて済み、履歴も汚れない。**ワークフローファイルを書かない方針のため採らない**（[ワークフローファイルを書かない（ただし Actions 機能は無効化しない）](no-workflow-files.md)）。
 
 **`main` の `/docs` を配信元にする**: ブランチが 1 本で済み、bootstrap も不要。しかし「開発ブランチから配信ブランチへの PR で重い E2E を走らせる」という要件のフローが作れない。却下。
 
 **`gh-pages` ブランチ（`/` 配信）**: Pages の伝統的な構成で、成果物だけを持つブランチになる。しかし orphan 相当の運用になり [`release` を `main` から派生させ orphan 運用にしない](release-branch-from-main.md) の 3 つの落とし穴を踏む。加えて PR の diff が別ツリー同士になりレビューできない。却下。
 
-**Netlify / Cloudflare Pages / Vercel**: 設定が楽でサブパス問題も起きない。しかし外部サービスのアカウントが増え、「GitHub だけで完結する」という暗黙の前提から外れる。利用者から要望がなかったので検討のみ。
+**Netlify / Cloudflare Pages / Vercel**: 設定が楽でサブパス問題も起きない。しかし外部サービスのアカウントが増え、「GitHub だけで完結する」という前提から外れる。却下。
 
 **リポジトリを private にする**: ソースが公開されない。しかし無料アカウントでは Pages が使えない。データはリポジトリに入らないので public のリスクは小さいと判断した。

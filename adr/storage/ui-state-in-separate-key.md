@@ -64,6 +64,6 @@ pub fn dismiss_install_hint();
 
 **キーを分けず、値を持たないキーの有無で表す**（`localStorage.setItem("fitness-memo/install-hint-dismissed", "1")`）: JSON も serde も要らず最小。しかし UI のフラグが増えるたびにキーが増え、`fitness-memo/` 名前空間が散らかる。1 つの JSON にまとめておけば追加は 1 フィールドで済む。却下。
 
-**そもそも消せなくする（✕ を付けない）**: この ADR 自体が不要になる。データ損失の警告としては最も安全でもある。しかし [ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする](../ux/install-guide-banner-and-sheet.md) のとおり利用者が明示的に ✕ を求めた。却下。
+**そもそも消せなくする（✕ を付けない）**: この ADR 自体が不要になる。データ損失の警告としては最も安全でもある。しかし [ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする](../ux/install-guide-banner-and-sheet.md) のとおり ✕ を出す方針である。却下。
 
 **Cookie / IndexedDB を使う**: どちらも `Db` と保存先を分けられる。しかし `localStorage` はすでに使っていて同期 API であり、この用途に非同期の IndexedDB を持ち込む理由がない。Cookie は送信先が無いアプリでは単に不適切。却下。

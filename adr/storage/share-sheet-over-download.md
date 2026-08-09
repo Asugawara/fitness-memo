@@ -79,14 +79,7 @@ Web API を一切使わないので、iOS のどのバージョン・どの表�
 - **`src/transfer.rs` を新設した。** JS interop をここに閉じ込め、`storage.rs` を「`localStorage` を読み書きするだけ」に保つ（あちらの薄さは [`visibilitychange` の hidden で debounce を flush する](flush-on-visibilitychange.md) の検証可能性を支えている）
 - **web-sys features が 12 増え、`js-sys` / `wasm-bindgen` が直接依存に加わった。** [UI 依存を wasm32 の target 別 dependencies に置く](../architecture/wasm-target-scoped-dependencies.md) の「使う API は全て自前で宣言する」方針に従い全て明示した
 - **`then2` に渡す `Closure` を `forget()` している。** 書き出しは年に数回の操作なので 2 つ分のリークは受け入れる
-- **実機でしか確認できないことが残る**（下記）。E2E のコメントに「このファイルが緑でも iOS で動く保証はない」と明記した
-
-## 実機で確認すべきこと
-
-1. `.json` を共有シートに渡したとき「ファイルに保存」が出て、iCloud Drive に置けるか
-2. `files` 単独と `files + title` で共有シートの内容が実際に変わるか（WebKit ソースからの推論であり、この環境では未検証）
-3. `<input type="file">` のダイアログがアプリ復帰後に開くか（2019 年報告のバグの現存確認）
-4. キーボード表示時に textarea が隠れないか
+- **実機でしか確認できないことが残る。** 共有シートに「ファイルに保存」が出るか、`files` 単独と `files + title` で内容が変わるか（WebKit ソースからの推論）、`<input type="file">` のダイアログがアプリ復帰後に開くか（2019 年報告のバグの現存）、キーボード表示時に textarea が隠れないか。E2E のコメントに「このファイルが緑でも iOS で動く保証はない」と明記した
 
 ## 検討した代替案
 

@@ -7,7 +7,7 @@
 
 ## 背景
 
-公開先は <https://asugawara.github.io/fitness-memo/> だが、**SEO 資産がリポジトリの全履歴を通じて一度も存在しなかった**。`git log --all -S'name="description"'` は空を返し、`origin/release` の `docs/` に配信されていたのは 11 ファイル（HTML / js / wasm / css / manifest / sw / アイコン 4 枚）だけだった。
+公開先は <https://asugawara.github.io/fitness-memo/> だが、**SEO 資産が一度も存在しなかった**。配信されていたのは HTML / js / wasm / css / manifest / sw / アイコンだけで、`description` も OGP も無い。
 
 結果として次の 2 つが起きていた。
 
@@ -18,7 +18,7 @@
 
 1. **絶対 URL が必要なタグがある。** `canonical` / `og:url` / `og:image` は相対 URL ではスクレイパが解決できない。だがこのアプリはローカル（`localhost:4173/`）と本番（`/fitness-memo/`）の 2 つのベースパスで動き、[manifest の URL を全て相対にする](../pwa/manifest-relative-urls.md) は「相対 URL に統一してベースパスの差を吸収する」と決めている。**trunk の `--public-url` が書き換えるのは trunk 自身が生成した行だけ**なので、手書きの meta は書き換え対象外になる
 2. **`public/` に足したものは自動でオフラインシェルに載る。** `scripts/stamp-sw.sh` は `$TRUNK_STAGING_DIR` 配下を `find` で全列挙して Service Worker の precache SHELL と BUILD_ID を作る（[Service Worker はシェル全体を BUILD_ID で原子的に入れ替える](../pwa/sw-atomic-shell-swap.md)）。現状のシェル総量は約 1.0MB（1,022,587 B。wasm 885KB + js 42KB + css 39KB + アイコン 4 枚 47KB + HTML と manifest）
-3. **アプリ名が 4 箇所で固定されている。** コミット 4907db3 が `<title>` / `apple-mobile-web-app-title` / manifest の `name` / `short_name` を `fitness-memo` に揃えており、`e2e/pwa.spec.mjs` がそれを回帰テストとして握っている
+3. **アプリ名が 4 箇所で固定されている。** `<title>` / `apple-mobile-web-app-title` / manifest の `name` / `short_name` を `fitness-memo` に揃えてあり、`e2e/pwa.spec.mjs` がそれを回帰テストとして握っている
 
 ## 決定
 
@@ -45,7 +45,7 @@
 - **ハードコードの副作用として E2E の期待値が環境非依存の定数になる。** `e2e/seo.spec.mjs` は `dist`（`E2E_BASE=/`）でも `dist-release`（`E2E_BASE=/fitness-memo/`）でも同じ文字列を assert でき、重い側 E2E がサブパス配信での正しさを自動的に確認する。
 - **OGP 画像はアプリが一度も参照しない。** 取りに来るのはクローラと SNS のスクレイパのサーバだけで、オフラインのユーザーが要求することは原理的にない。参照しないものを precache するのはカテゴリエラーであり、約 1.0MB のシェルに 21KB を恒久的に上乗せするのは、オフライン起動の速さがこの PWA の存在理由であることと矛盾する。
 - **BUILD_ID からも外すのは「シェルに入らないものはシェルの同一性にも影響させない」ため。** SHELL だけ外して BUILD_ID に残すと、`og.png` を差し替えたときに**中身が同一のシェル**に対して新しいキャッシュ世代が切られ、全クライアントが約 1.0MB を無駄に再ダウンロードする。除外を片方だけにすると、除外した意味が逆転する。
-- **`<title>` を変える必要がない。** 4907db3 が揃えた 4 箇所のうち、**実機のホーム画面に出るアプリ名を決めるのは `short_name` と `apple-mobile-web-app-title` の 2 つだけ**で、`<title>` は検索結果とタブの見出しにしか出ない。つまり日本語化しても実機の見え方は変わらないが、**変えたことで得られるものも `description` / `og:title` / JSON-LD の `alternateName` が既に持っている**。据え置きが最も安く、効果を実測してから再検討できる。
+- **`<title>` を変える必要がない。** 揃えた 4 箇所のうち、**実機のホーム画面に出るアプリ名を決めるのは `short_name` と `apple-mobile-web-app-title` の 2 つだけ**で、`<title>` は検索結果とタブの見出しにしか出ない。つまり日本語化しても実機の見え方は変わらないが、**変えたことで得られるものも `description` / `og:title` / JSON-LD の `alternateName` が既に持っている**。据え置きが最も安く、効果を実測してから再検討できる。
 - **`og:title` にだけ日本語の説明を足す。** OGP 画像をアイコンのみにした結果、カードで「何のアプリか」を伝えるのは見出し文だけになった。`og:title` は 4 点セットに含まれないタグなので、`fitness-memo — オフラインで使える筋トレ記録アプリ` としてブランド表記を先頭に残したまま説明を足せる。Google がタイトルリンクを書き換えるときに `og:title` を採ることがあり、その経路でも効く。
 
 ## 結果（トレードオフ）
@@ -64,7 +64,7 @@
 
 **`og.png` を SHELL に載せたまま運用する**: 除外を書かなくて済む。しかし約 1.0MB のオフラインシェルに、アプリが一度も参照しない 21KB を恒久的に足すことになる。却下。
 
-**`<title>` を日本語化する（例: `筋トレメモ | オフラインで使える筋トレ記録アプリ`）**: 検索結果に出る唯一の見出しで、on-page で最も強いシグナル。実機のアイコン名にも書き出しファイル名にも影響しないことは確認済み。しかしアプリ名 4 点セットは 4907db3 で明示的に揃えた決定であり、`description` / `og:title` / JSON-LD で日本語キーワードは持てる。今回は崩さない。却下（ただし将来の再検討は残す）。
+**`<title>` を日本語化する（例: `筋トレメモ | オフラインで使える筋トレ記録アプリ`）**: 検索結果に出る唯一の見出しで、on-page で最も強いシグナル。実機のアイコン名にも書き出しファイル名にも影響しないことは確認済み。しかしアプリ名 4 点セットは明示的に揃えた決定であり、`description` / `og:title` / JSON-LD で日本語キーワードは持てる。今回は崩さない。却下（ただし将来の再検討は残す）。
 
 **静的コンテンツを `<body>` に置き、wasm 起動後に JS で消す**: CSR の空 `<body>` を根本から埋められる。しかし `mount_to_body` は append なので静的ブロックはアプリの上に残り続け、wasm 885KB のロード完了まで実在する。視覚的な入れ替わり・レイアウトシフト・既存の `boundingBox` 検証との競合を新たに背負う一方、Googlebot は JS を実行するので得られる差分はほぼ無い。却下。
 
@@ -72,7 +72,7 @@
 
 **sitemap.xml を置く**: ルーターを持たず（[ルーターを使わずタブを enum signal で切り替える](../architecture/no-router-tab-enum-signal.md)）インデックス可能な URL が 1 本しか無いので、sitemap の役割（クロール対象の発見）が成立しない。しかも robots.txt から宣言する経路も無い（下記）。必要になれば Search Console に URL を直接送信すれば足りる。却下。
 
-**robots.txt を置く**: サブパス配信（[GitHub Pages の branch deploy（`release` / `docs`）を使う](../deploy/github-pages-branch-deploy.md)）なので `/fitness-memo/robots.txt` はどのクローラも読まない。オリジンルートの `asugawara.github.io/robots.txt` は別リポジトリの管轄であり、ここからは配置できない。実測すると 404 が返る＝既定で全許可なので、そもそも置く必要がない。却下。
+**robots.txt を置く**: サブパス配信（[GitHub Pages の branch deploy（`release` / `docs`）を使う](../deploy/github-pages-branch-deploy.md)）なので `/fitness-memo/robots.txt` はどのクローラも読まない。オリジンルートの `robots.txt` は本リポジトリの配信範囲外であり、ここからは配置できない。実測すると 404 が返る＝既定で全許可なので、そもそも置く必要がない。却下。
 
 **`Trunk.toml` の `minify` を有効にする**: Core Web Vitals は SEO のランキング要因なので HTML / CSS / JS の圧縮は理屈として効く。しかし SRI ハッシュと `stamp-sw.sh` の BUILD_ID に触るリスクを負うことになり、そもそも転送量は wasm 885KB が支配している。SEO を理由にこのリスクは取らない。却下（速度を詰めるなら wasm 側の別タスク）。
 

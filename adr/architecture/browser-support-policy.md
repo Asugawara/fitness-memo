@@ -46,7 +46,7 @@
 
 **`<dialog closedby="any">` を使えない。** 背景タップで閉じる挙動を自前で書くことになった（[シートをネイティブ `<dialog>` にし、手動の重なり順から降りる](../ux/native-dialog-for-sheets.md)）。Safari が対応したら消せるコードとして残る。
 
-**invoker commands を使わない。** シートの開閉は Rust 側の signal と `NodeRef` で配線する。宣言的に書けたほうが短いが、Safari 26.2 は出たばかりで、手元の端末が到達している保証が無い。
+**invoker commands を使わない。** シートの開閉は Rust 側の signal と `NodeRef` で配線する。宣言的に書けたほうが短いが、Safari 26.2 は出たばかりで、対象端末が到達している保証が無い。
 
 **`overlay` は「書くが当てにしない」。** `transition-property` に並べてあるが Safari では効かない。未知の値として無視されるだけで害は無く、Chromium での退出アニメーションが正しくなる。**当てにした設計はしない**のが条件。
 

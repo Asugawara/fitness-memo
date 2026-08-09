@@ -7,7 +7,7 @@
 
 ## 背景
 
-CI は `.githooks/pre-commit` でローカル実行する（[CI を `.githooks/pre-commit` で回す](../deploy/ci-in-pre-commit.md)）。その中で `cargo test` を**ホストターゲット**（aarch64-apple-darwin）で走らせ、`core.rs` の純ロジックを検証する。
+CI は `.githooks/pre-commit` でローカル実行する（[CI を `.githooks/pre-commit` で回す](../deploy/ci-in-pre-commit.md)）。その中で `cargo test` を**ホストターゲット**で走らせ、`core.rs` の純ロジックを検証する。
 
 素直に `[dependencies]` に `leptos` を書くと、`cargo test` がホスト向けに leptos の依存グラフ全体をビルドする。ここに 2 つの問題がある。
 
@@ -65,7 +65,7 @@ fn main() {}
 
 ## 結果（トレードオフ）
 
-- **rust-analyzer が既定で `views` / `storage` を解析対象外にする。** ホスト cfg で解析するため、UI コードの補完・型チェック・エラー表示が効かない。対処は 1 行で、`.vscode/settings.json` などに `"rust-analyzer.cargo.target": "wasm32-unknown-unknown"` を書く。この設定にすると逆にホスト側の解析を失うが、`core` / `model` / `presets` はターゲット非依存なので失うものがない。
+- **rust-analyzer が既定で `views` / `storage` を解析対象外にする。** ホスト cfg で解析するため、UI コードの補完・型チェック・エラー表示が効かない。対処は 1 行で、rust-analyzer の設定に `"rust-analyzer.cargo.target": "wasm32-unknown-unknown"` を書く。この設定にすると逆にホスト側の解析を失うが、`core` / `model` / `presets` はターゲット非依存なので失うものがない。
 - **`cargo clippy` は必ず `--target wasm32-unknown-unknown` を付けないと UI コードを一切見ない。** 付け忘れると「clippy が通った」のに `views` が未検査という状態になる。pre-commit では明示している。
 - **`cargo build`（ターゲット指定なし）は空の `main` をビルドするだけで、アプリは何も入っていない。** 知らないと「ビルドは通るのに動かない」と混乱する。ビルドは `trunk build` で行う。
 - **`web-sys` の feature を手で管理するコストが継続的に発生する。** 新しい API を使うたびに `Cargo.toml` を触る必要があり、しかもエラーメッセージは「メソッドが存在しない」なので原因に気づきにくい。この手間は「偶然通っていた API が無言で壊れる」よりましと判断した。実際 `Element`（`scroll_into_view`）と `MediaQueryList`（standalone 判定）は後から追加されている。

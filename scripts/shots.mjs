@@ -27,11 +27,17 @@ const BASE = `http://localhost:${PORT}/`;
  * `center` は「この要素が画面の中央に来るまでスクロールしてから撮る」指定。
  * 記録タブだけ指定があるのは、先頭で撮るとカレンダーしか入らず、この画面の要である
  * 「カレンダーと入力欄が縦に並んで 1 画面」（adr/ux/record-tab-calendar-with-day-editor.md）が写らないため。
+ *
+ * `expand` は種目タブ用で、撮る前にその部位を開き、そのカードを画面中央に寄せる。
+ * 全部閉じた絵だと「部位しか無いアプリ」に見え、逆に開いた絵だけでは折りたたまれて
+ * いることが伝わらない。閉じた部位と開いた部位が同時に写るのが、この画面の一番正確な絵
+ * （adr/ux/menu-groups-as-single-open-accordion.md）。**先頭の部位を開くと上に閉じた
+ * カードが写らない**ので、真ん中あたりの「肩」（4 種目でカードも高すぎない）を開く。
  */
 const SHOTS = [
   { file: '1-record.png', testid: 'tab-record', screen: 'screen-record', center: 'today-date' },
   { file: '2-progress.png', testid: 'tab-progress', screen: 'screen-progress' },
-  { file: '3-menu.png', testid: 'tab-menu', screen: 'screen-menu' },
+  { file: '3-menu.png', testid: 'tab-menu', screen: 'screen-menu', expand: '肩' },
 ];
 
 /**
@@ -162,11 +168,18 @@ try {
   );
   if (!standalone) throw new Error('display-mode: standalone の偽装が効いていない');
 
-  for (const { file, testid, screen, center } of SHOTS) {
+  for (const { file, testid, screen, center, expand } of SHOTS) {
     await page.getByTestId(testid).click();
     await page.getByTestId(screen).waitFor({ state: 'visible' });
     // タブを切り替えてもスクロール位置は持ち越されるので、毎回先頭へ戻してから決める
     await page.evaluate(() => window.scrollTo(0, 0));
+    if (expand) {
+      const card = page.getByTestId('group-item').filter({
+        has: page.getByTestId('group-name').filter({ hasText: new RegExp(`^${expand}$`) }),
+      });
+      await card.getByTestId('group-toggle').click();
+      await card.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
+    }
     if (center) {
       await page
         .getByTestId(center)

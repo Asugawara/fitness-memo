@@ -15,6 +15,7 @@ use crate::core;
 use crate::core::Metric;
 use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, SetEntry};
 
+use super::icon::{self, icon};
 use super::{
     Sheet, fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms, parse_reps,
     parse_weight, scroll_to_id, use_dates, use_db, use_kb,
@@ -941,7 +942,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                     data-testid="remove-set"
                                     on:click=move |_| remove_row(key)
                                 >
-                                    "✕"
+                                    {icon(icon::X)}
                                 </button>
                                 {move || {
                                     weight_missing()

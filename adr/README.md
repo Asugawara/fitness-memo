@@ -26,6 +26,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [グラフの座標計算を `chart_layout` に切り出してテスト可能にする](architecture/chart-layout-as-a-testable-module.md) | 採用 |
 | [ブラウザサポートは Safari を基準にし、polyfill を入れない](architecture/browser-support-policy.md) | 採用 |
 | [読み込みと操作は実測して、何も入れないと決めた](architecture/measure-before-optimizing-and-do-nothing.md) | 採用 |
+| [アイコンに lucide を採り、`assets/icons/*.svg` を `include_str!` で埋め込む](architecture/lucide-icons-as-included-svg.md) | 採用 |
 
 ### data-model — データ構造と不変条件
 
@@ -86,6 +87,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [タブ切替に方向つき View Transition を掛ける](ux/directional-tab-transitions.md) | 採用 |
 | [フォーカスリングを明示し、記録タブの見出しを 1 本の階層にする](ux/focus-ring-and-heading-order.md) | 採用 |
 | [他アプリからの移行はスクショの文字起こしを貼り付けて受ける](ux/migrate-by-ocr-paste.md) | 採用 |
+| [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](ux/menu-groups-as-single-open-accordion.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

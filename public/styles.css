@@ -741,12 +741,45 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
   display: none;
 }
 
+/* 中身は .icon（20px の span）なので、UA ボタンの text-align 任せにせず
+   自前で中央に置く。テキストのグリフを入れていた頃と見え方は変わらない */
 .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 44px;
   min-height: 44px;
   border: 0;
   background: none;
   color: var(--muted);
+}
+
+/* ── アイコン ───────────────────────────────────────────────────────────────
+   lucide の SVG（assets/icons/、ISC / 一部 MIT）。ファイル側は viewBox とパスの
+   座標だけを持ち、線の色・太さ・端の丸めはここで与える。
+   adr/architecture/help-figures-as-included-svg.md が図に対して決めた
+   「座標は SVG、見た目は CSS」の分担をアイコンにも広げたもの
+   （adr/architecture/lucide-icons-as-included-svg.md）。 */
+.icon {
+  display: inline-flex;
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+
+/* ★ 寸法はラッパではなく <svg> 自身に効かせる。ラッパを縮めても <svg> の既定
+   ボックスは縮まない（.hlp-fig > svg と同じ理由）。
+   ★ stroke を currentColor にしてあるので、.icon-btn の --muted や .grp-toggle の
+   --text がそのまま線色になる。ダーク対応は既存トークンだけで完結する */
+.icon > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .link-btn {
@@ -1286,9 +1319,49 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
   font-size: 12px;
 }
 
-/* 部位ブロック。.card の 12px より下を詰めて、種目行の区切り線を主役にする */
+/* 部位ブロック。縦の余白はヘッダ（.grp-toggle の 52px）と各行（44px）が自前で持つ
+   ので、.card の 12px を左右だけに絞る。閉じた 6 行がこれで 1 画面に収まる */
 .grp {
-  padding: 10px 12px 4px;
+  padding: 0 12px;
+}
+
+/* 部位ヘッダの開閉トグル。ヘッダ幅のほぼ全部を占める 1 個のボタンにして、隣接する
+   44px 標的を右端の鉛筆だけにする（誤タップが構造的に消える）。
+   ★ 色は --accent ではなく --text。これは「押すと開く」であって編集の入口では
+     ないので、押せることはシェブロンの向きが示す */
+.grp-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+}
+
+/* シェブロンは状態の目印なので、名前より弱く置く */
+.grp-toggle > .icon {
+  color: var(--muted);
+}
+
+/* ★ 鉛筆だけ .icon-btn の --muted を上書きして --accent にする。
+   部位名が <button>（--accent）から <span> になり「押すと名前を変えられる」手掛かりが
+   ヘッダから消えたので、それをこのボタンが引き受ける。件数テキストと同じ --muted の
+   ままだと、改名したい人が名前を押し続けて編集にたどり着けない。
+   破壊的操作ではないので adr/ux/destructive-affordance-quiet-at-rest.md
+   （静止時に警告色を持たない）には触れない */
+.grp-edit {
+  color: var(--accent);
+}
+
+/* 開いている間だけ下向きにする。chevron-down を別ファイルで持たないための回転。
+   ★ transition は付けない。この CSS には animation / transition が 1 つも無く
+     prefers-reduced-motion のガードも置いていないので、1 つ入れると全部要る */
+.grp-toggle[aria-expanded="true"] > .icon {
+  transform: rotate(90deg);
 }
 
 /* 部位カラーの丸。色は inline の --dot で受け取る（.sheet-group h3::before と同じ作り） */
@@ -1300,9 +1373,10 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
   background: var(--dot, var(--muted));
 }
 
-/* ★ 色は .link-btn の --accent のまま（上書きしない）。
-   「種目名は自由に編集・追加できる」が明示要件なので、名前がタップで開くことが
-   見て分かる必要がある。他タブの見出しと同じ --text にすると手掛かりが消える */
+/* ★ 名前は <span>（かつては <button> で、ここが編集の入口だった）。
+   押せる手掛かりは .grp-toggle 全体とシェブロンが持ち、編集の入口は右端の鉛筆へ
+   移したので、名前だけを --accent で目立たせる理由がなくなった。
+   色は .grp-toggle の --text を継ぐ */
 .grp-name {
   flex: 1;
   text-align: left;

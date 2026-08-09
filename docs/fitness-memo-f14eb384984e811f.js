@@ -586,6 +586,9 @@ function __wbg_get_imports() {
         __wbg_scrollIntoView_5262843155744b69: function(arg0) {
             arg0.scrollIntoView();
         },
+        __wbg_scrollIntoView_d8b806f471b7418e: function(arg0, arg1) {
+            arg0.scrollIntoView(arg1);
+        },
         __wbg_setAttribute_71039043be82d098: function() { return handleError(function (arg0, arg1, arg2, arg3, arg4) {
             arg0.setAttribute(getStringFromWasm0(arg1, arg2), getStringFromWasm0(arg3, arg4));
         }, arguments); },
@@ -603,6 +606,9 @@ function __wbg_get_imports() {
             const ret = Reflect.set(arg0, arg1, arg2);
             return ret;
         }, arguments); },
+        __wbg_set_block_8135b3acafa1ca88: function(arg0, arg1) {
+            arg0.block = __wbindgen_enum_ScrollLogicalPosition[arg1];
+        },
         __wbg_set_download_67c3dbb2b32b18d0: function(arg0, arg1, arg2) {
             arg0.download = getStringFromWasm0(arg1, arg2);
         },
@@ -790,6 +796,9 @@ function wasm_bindgen_f55410fa4479144d___convert__closures_____invoke___js_sys_7
 
 
 const __wbindgen_enum_ReadableStreamType = ["bytes"];
+
+
+const __wbindgen_enum_ScrollLogicalPosition = ["start", "center", "end", "nearest"];
 const IntoUnderlyingByteSourceFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_intounderlyingbytesource_free(ptr, 1));

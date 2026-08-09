@@ -41,7 +41,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [ID を 60 bit 乱数にし、プリセットには固定 ID を与える](data-model/random-ids-for-safe-merge.md) | 採用 |
 | [指標を種目の属性ではなくグラフの表示設定にする](data-model/metric-is-a-view-setting.md) | 採用 |
 | [経過日数をローカル暦の日差にし、時刻粒度を同じ日の中だけに閉じる](data-model/elapsed-in-local-calendar-days.md) | 採用 |
-| [テキスト取り込みは「足すだけ」に固定し、部位を増やさず `at` を書かない](data-model/text-import-is-merge-only.md) | 採用 |
+| [テキスト取り込みは「足すだけ」に固定し、部位を増やさず `at` を書かない](data-model/text-import-is-merge-only.md) | 破棄（[取り込みごと撤去](ux/migrate-by-ocr-paste.md)） |
 
 ### storage — 永続化
 
@@ -86,7 +86,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [シートをネイティブ `<dialog>` にし、手動の重なり順から降りる](ux/native-dialog-for-sheets.md) | 採用 |
 | [タブ切替に方向つき View Transition を掛ける](ux/directional-tab-transitions.md) | 採用 |
 | [フォーカスリングを明示し、記録タブの見出しを 1 本の階層にする](ux/focus-ring-and-heading-order.md) | 採用 |
-| [他アプリからの移行はスクショの文字起こしを貼り付けて受ける](ux/migrate-by-ocr-paste.md) | 採用 |
+| [他アプリからの移行はスクショの文字起こしを貼り付けて受ける](ux/migrate-by-ocr-paste.md) | 破棄（読み取りが成立せず操作量も見合わないため撤去） |
 | [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](ux/menu-groups-as-single-open-accordion.md) | 採用 |
 
 ### deploy — 配信とブランチ運用

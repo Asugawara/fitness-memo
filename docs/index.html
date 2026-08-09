@@ -123,7 +123,7 @@
      SOFTWARE.
      ──────────────────────────────────────────────────────────────────── -->
 
-<link rel="stylesheet" href="/fitness-memo/styles-9d2bf6be12ded12a.css" integrity="sha384-X4/1ppY4fYVGuXUk6wY8si2q/Jhnp/KAgelrZ8z+lkdsQKk9NQvTAh3zoxGWYCww"/>
+<link rel="stylesheet" href="/fitness-memo/styles-f2216b35228cd0fd.css" integrity="sha384-OnxvOJS7nx4rFmxu4KRKxqrUXgMY5x+4RwBHvEan3448ngAZ/JNM9Tp9WB497FAM"/>
 
 
 <!-- og:image の実体。クローラ専用なので stamp-sw.sh が SW のシェルから除外している -->
@@ -131,8 +131,8 @@
 
 
 <script type="module">
-import init, * as bindings from '/fitness-memo/fitness-memo-fa0866c646a3222f.js';
-const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-fa0866c646a3222f_bg.wasm' });
+import init, * as bindings from '/fitness-memo/fitness-memo-671fb15769f8600e.js';
+const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-671fb15769f8600e_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -141,7 +141,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-<link rel="modulepreload" href="/fitness-memo/fitness-memo-fa0866c646a3222f.js" crossorigin="anonymous" integrity="sha384-uwQGwJnk/KH6vbC70BpaBH20p3r96xlf6sICaoTbZQA3VOp4hgNLrB4Akj9k6dxm"><link rel="preload" href="/fitness-memo/fitness-memo-fa0866c646a3222f_bg.wasm" crossorigin="anonymous" integrity="sha384-s3p1YHmweJin4VL8BvTyUI3jnBVXN9bctfzx+ylID1SOt9XavCBrT48Ac8KJzjn+" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/fitness-memo/fitness-memo-671fb15769f8600e.js" crossorigin="anonymous" integrity="sha384-uwQGwJnk/KH6vbC70BpaBH20p3r96xlf6sICaoTbZQA3VOp4hgNLrB4Akj9k6dxm"><link rel="preload" href="/fitness-memo/fitness-memo-671fb15769f8600e_bg.wasm" crossorigin="anonymous" integrity="sha384-vSawOOQ7bN1avFA/8YWCbfkkwHzpYti2e77ZTVd/SZ8GW9MG9UcKOg6SmmzcwaF/" as="fetch" type="application/wasm"></head>
 <body>
 <!-- CSR なので配信される HTML の body にはテキストが 1 文字も無い。Googlebot は JS を
      実行するので通常は問題にならないが、**JS を実行しないクローラ（LLM 系の多くを含む）

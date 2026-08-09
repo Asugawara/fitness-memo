@@ -325,6 +325,13 @@ pub fn scroll_into_view_if_needed(element_id: String) {
 ///   その代わり、シートの中身は閉じている間も評価されるので、
 ///   **中で `with_untracked` を使うと開き直しても古い値のままになる**（day.rs の
 ///   「追加済み」表示がこれで壊れかけた）。中身は素直に追跡する形で書くこと。
+///
+/// ★ **開いたときのフォーカスは `<dialog>` 自身に置く。** `show_modal()` は中の最初の
+///   フォーカス可能要素（= ✕）を選ぶが、そこへ残すと **iPhone Safari で**「タップした
+///   だけで青枠が出る」になるので `tabindex="-1"` の dialog へ引き取っている。
+///   **中身の入力欄にフォーカスは当てない。** iOS は `focus()` でキーボードを出すので、
+///   シートを開いた瞬間に画面の下半分が埋まる（adr/pwa/hide-tabs-when-keyboard-open.md）。
+///   呼び出し側で「開いたら入力欄へ」をやりたくなったら、まずここを読むこと。
 #[component]
 pub fn Sheet(
     /// 開いているか。
@@ -356,7 +363,8 @@ pub fn Sheet(
         if open.get() {
             if !d.open() {
                 // ★ 控えるのは show_modal() の**前**。呼んだ瞬間にフォーカスが
-                //   シート内の先頭（✕ ボタン）へ移ってしまう。
+                //   シート内の先頭（✕ ボタン）へ移ってしまう（その先は下の focus() で
+                //   <dialog> 自身へ引き取る）。
                 //   ★ <body> は捨てる。WebKit はボタンをタップしてもフォーカスを
                 //   与えない（実測で activeElement は BODY）ので、指で開いた場合は
                 //   「戻すべき場所」が存在しない。そこへ強引に focus を当てると、
@@ -368,6 +376,30 @@ pub fn Sheet(
                         .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()),
                 );
                 let _ = d.show_modal();
+                // ★ 初期フォーカスを <dialog> 自身へ引き取る（WAI-ARIA APG の
+                //   「モーダルを開いたらダイアログにフォーカス」）。放っておくと
+                //   dialog focusing steps が「中の最初のフォーカス可能要素」＝ ✕ を選び、
+                //   **指でタップして開いただけで閉じるボタンに青枠が出る**。
+                //   利用者からは「何も押していないのに印が出た」と見える。
+                //
+                //   ★ これは **iPhone Safari で起きる**。Playwright 実測（iPhone 15 Pro /
+                //   Desktop Chrome / Pixel 7）で、フォーカスが ✕ に移るのは両エンジン共通だが、
+                //   `:focus-visible` にマッチするのは **WebKit だけ**（Chromium は false で
+                //   リングが出ない）。「Safari はボタンをタップしてもフォーカスを与えない」
+                //   （下の opener のコメント）とは別の経路で、show_modal() の初期フォーカスは
+                //   UA が能動的に与えるものであり、WebKit はそれをキーボード相当と判定する。
+                //
+                //   ★ show_modal() と**同じタスクの中**で移すこと。dialog focusing steps は
+                //   show_modal() の一部として同期に走り、描画はタスク終了後なので、
+                //   ✕ にリングが 1 フレーム出ることは無い。ここを上の
+                //   scroll_into_view_if_needed のように request_animation_frame で
+                //   遅らせると本当に 1 フレーム出る。
+                //
+                //   ★ フォーカスがここに載ることと、リングが**描かれない**ことは別の話。
+                //   実測では WebKit が今度は **<dialog> 自身**を :focus-visible にマッチさせる
+                //   ので、これだけでは「✕ の青枠」が「シート上辺の青線」に化けるだけになる。
+                //   リングは styles.css の `.sheet:focus-visible { outline: none }` が受け持つ
+                let _ = d.focus();
             }
         } else if d.open() {
             d.close();
@@ -378,6 +410,11 @@ pub fn Sheet(
         <dialog
             node_ref=dialog
             class="sheet"
+            // ★ 上の focus() の受け皿。tabindex="-1" は「Tab では止まらないが focus() では
+            //   受けられる」なので **Tab 順は 1 つも変わらない**（シートに入って最初の
+            //   Tab は今までどおり ✕）。これが無いと「開いた modal dialog が focusable か」が
+            //   エンジン任せになり、focus() が黙って no-op になりうる
+            tabindex="-1"
             aria-label=move || title.get()
             data-testid=testid
             // Esc で閉じたときに呼び出し側のシグナルが真のまま残ると「閉じたのに

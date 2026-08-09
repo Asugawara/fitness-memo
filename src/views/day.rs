@@ -674,8 +674,6 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
 
     // 「+ セット」で足した行。この行の回数欄へフォーカスを移したら None に戻す。
     let focus_key: RwSignal<Option<u32>> = RwSignal::new(None);
-    // 削除確認を出している行。
-    let pending_remove: RwSignal<Option<u32>> = RwSignal::new(None);
     // この種目をこの日から外す確認を出しているか。
     let confirm_close = RwSignal::new(false);
 
@@ -739,28 +737,17 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
         // 重量だけの行は parse_reps が None を返して保存されないので commit は要らない
     };
 
+    // ★ 確認を挟まない（[ADR-0046]）。消えるのは 1 行で打ち直しは数秒、対してトレ中は
+    //   1 種目に 3〜5 行あり打ち間違いの消し直しも含めれば何度も踏む。確認のコストのほうが
+    //   失うものより高い。**カード削除（confirm_close）の確認は残す** — スコープが違う。
     let remove_row = move |key: u32| {
         rows.update(|rs| rs.retain(|r| r.key != key));
+        // 行が 0 本になると入力欄ごと消えるので、必ず空行を 1 本残す
         if rows.with_untracked(Vec::is_empty) {
             let key = fresh_key();
             rows.update(|rs| rs.push(Row::blank(key)));
         }
-        pending_remove.set(None);
         commit();
-    };
-
-    // 中身が空の行は消えるものが無いので確認を挟まない。
-    let request_remove = move |key: u32| {
-        let empty = rows.with_untracked(|rs| {
-            rs.iter()
-                .find(|r| r.key == key)
-                .is_some_and(|r| r.weight.trim().is_empty() && r.reps.trim().is_empty())
-        });
-        if empty {
-            remove_row(key);
-        } else {
-            pending_remove.set(Some(key));
-        }
     };
 
     let copy_last = move |_| {
@@ -959,14 +946,15 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                 // 回数欄に単位は添えない。プランクの 60 に「回」と付くほうが
                                 // 嘘になるし、それが秒だと分かるのは種目名からで表記からではない
                                 //
-                                // ★ 削除は入力欄と地続きにしない。margin-left:auto で右端へ寄せた上に
+                                // ★ 確認を挟まないので、離す設計が唯一の事故対策になった。
+                                //   削除は入力欄と地続きにしない。margin-left:auto で右端へ寄せた上に
                                 //   区切り線と内側余白で離す（auto を外すと回数欄の直後に来て
-                                //   今より押しやすくなる）。中身のある行は確認を挟む
+                                //   今より押しやすくなる）
                                 <button
-                                    class="icon-btn danger-btn"
+                                    class="icon-btn"
                                     aria-label="このセットを削除"
                                     data-testid="remove-set"
-                                    on:click=move |_| request_remove(key)
+                                    on:click=move |_| remove_row(key)
                                 >
                                     "✕"
                                 </button>
@@ -976,30 +964,6 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                             view! {
                                                 <span class="warn" data-testid="weight-missing">
                                                     "重量未入力"
-                                                </span>
-                                            }
-                                        })
-                                }}
-                                {move || {
-                                    (pending_remove.get() == Some(key))
-                                        .then(|| {
-                                            view! {
-                                                <span class="row-confirm" data-testid="remove-set-confirm">
-                                                    <span>"このセットを削除しますか？"</span>
-                                                    <button
-                                                        class="link-btn danger"
-                                                        data-testid="remove-set-yes"
-                                                        on:click=move |_| remove_row(key)
-                                                    >
-                                                        "削除"
-                                                    </button>
-                                                    <button
-                                                        class="link-btn"
-                                                        data-testid="remove-set-no"
-                                                        on:click=move |_| pending_remove.set(None)
-                                                    >
-                                                        "やめる"
-                                                    </button>
                                                 </span>
                                             }
                                         })

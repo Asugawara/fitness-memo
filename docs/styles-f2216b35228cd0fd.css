@@ -84,16 +84,22 @@ input {
   font-size: 16px;
 }
 
-/* ★ フォーカスリングを明示する。`outline: none` はどこにも書いていないので UA 既定は
-   出るが、既定のリングは「地の色に対して見えること」しか保証しない。このアプリには
-   --accent でベタ塗りしたコントロール（.primary / .opt.on / .seg-btn.active）があり、
-   その上では既定のリングが塗りに沈む。
+/* ★ フォーカスリングを明示する。既定のリングが保証するのは「地の色に対して見えること」
+   だけで、このアプリには --accent / --warn でベタ塗りしたコントロール
+   （.primary / .opt.on / .seg-btn.active / .notice の ✕）があり、その上では塗りに沈む。
 
    :focus ではなく :focus-visible にするのは、指でタップしただけの要素にリングを出さない
    ため（Safari はボタンをタップしてもフォーカスを与えないが、Chromium は与える）。
+   ★ ただし <dialog> の show_modal() だけは例外で、UA が能動的に中の先頭へフォーカスを
+   与える。**WebKit はそれを :focus-visible と判定する**ので、指で開いただけのシートに
+   リングが出ていた（adr/ux/native-dialog-for-sheets.md に実測表がある）。
 
-   :where() で包んで詳細度を 0 にしてある。個別の上書き（下の 3 つ）が
-   クラス 1 個で勝てるようにするため。 */
+   :where() で包んで詳細度を 0 にしてある。個別の上書き（下の各ブロック）が
+   クラス 1 個で勝てるようにするため。
+
+   ★ `outline: none` はこのファイルに 2 か所だけある。.sheet（<dialog> 自身＝押せない器）と
+   .icon-btn（同じ節のすぐ下でグリフ側に出し直している）で、**操作できる要素からは
+   1 つも消していない**。他所では書かないこと。 */
 :where(button, a:any-link, input, select, textarea):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -108,6 +114,50 @@ input {
 .seg-btn.active:focus-visible {
   outline-color: var(--accent-text);
   outline-offset: -4px;
+}
+
+/* ★ .segmented は overflow: hidden で、.seg-btn は親の content box を隙間なく埋める。
+   外側（+2px）に出したリングは親の外なので**上下の辺が丸ごとクリップされ**、隣のボタンに
+   重なった縦棒だけが残る。.active は既に内側（-4px）なので無事だった。非 active も揃える */
+.seg-btn:focus-visible {
+  outline-offset: -4px;
+}
+
+/* ★ アイコンボタンだけはリングを**箱ではなくグリフ**に出す。
+   .icon-btn は 44px 角（タップ標的の規約値。縮めない）なのに中身は 20px の .icon なので、
+   箱に沿わせると offset 2 + 幅 2 で外形 52px の角ばった四角になり、グリフの四辺に 12px の
+   空白を挟んでリングが立つ。しかも 44px の箱は親にぴったり収める前提で置かれているので、
+   その外へ 4px 出た時点でどこかを突き抜ける（シートの ✕ は上辺が .sheet の角丸の外＝
+   黒幕の上に出て、**上だけ長い**線に見えていた。セット行の ✕ は区切り線と padding で
+   グリフが箱の中心からずれており、リングとの間隔が左右で食い違う）。
+
+   グリフ基準にすると、どの箱に入っていても 20px の中心に外形 32px の円が出る。
+   32px = 44 - 6*2 なので 44px の標的の内側に必ず 6px 余り、親からはみ出しようがない。
+   箱の padding にも .set-row の区切り線にも影響されない。
+
+   ★ box-shadow ではなく outline のまま出す。強制カラーモードで色を差し替えてもらえるのが
+     outline だから（adr/ux/focus-ring-and-heading-order.md が box-shadow の二重リングを
+     見送ったのと同じ理由）。
+   ★ :has(> .icon) で門番する。中身が .icon でない .icon-btn が将来現れたときに
+     outline: none だけが残って**リングが消える**のを防ぐ。門番から外れた側は上の既定
+     （箱の 52px 角リング）に戻るだけで、無い状態にはならない。 */
+.icon-btn:has(> .icon):focus-visible {
+  outline: none;
+}
+
+.icon-btn:focus-visible > .icon {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  /* .icon は背景も枠も持たないので、この角丸はリングの形だけを決める */
+  border-radius: 50%;
+}
+
+/* ★ 通知の ✕ だけはリングが --warn のベタ塗りの上に載る。--accent は --warn の上で
+   コントラスト light 1.01 / dark 1.16（＝見えない）。上の .primary と同じ理屈で地色側へ抜く。
+   --accent-text × --warn の実測値は .notice のコメントにある（light 4.91 / dark 8.58）。
+   offset を負にする必要は無い。リングはグリフ側にあって塗りの内側に収まっている */
+.notice .icon-btn:focus-visible > .icon {
+  outline-color: var(--accent-text);
 }
 
 h1,
@@ -495,7 +545,6 @@ h3 {
   margin-left: auto;
   padding-left: 12px;
   border-left: 1px solid var(--line);
-  border-radius: 0;
 }
 
 .warn {
@@ -752,7 +801,10 @@ h3 {
 }
 
 /* 中身は .icon（20px の span）なので、UA ボタンの text-align 任せにせず
-   自前で中央に置く。テキストのグリフを入れていた頃と見え方は変わらない */
+   自前で中央に置く。テキストのグリフを入れていた頃と見え方は変わらない。
+   ★ この「中身は必ず .icon」はフォーカスリングの前提でもある。リングは 44px の箱では
+     なく .icon に出している（ファイル冒頭の focus 節）ので、ここにテキストを直接入れると
+     リングの出方が変わる */
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -835,6 +887,23 @@ h3 {
   transition-behavior: allow-discrete;
 }
 
+/* ★ views::Sheet が show_modal() の直後に <dialog> 自身へ focus() を当てるので、ここに
+   リングが載る。**WebKit では実際に載る**（Playwright / iPhone 15 Pro 実測で
+   `.sheet:matches(':focus-visible')` が true。Chromium は false）。フォーカスの移動先を
+   変えるだけでは「✕ の青枠」が「シート上辺の青線」に化けるだけなので、CSS 側が対で要る。
+
+   消す理由は 2 つ。
+   1. <dialog> は操作するものではない。リングが出ても「どこを押せるか」を何も伝えない
+   2. .sheet は inset: auto 0 0 / width: 100% なので、出ると左右と下は画面端へ落ち、
+      **上辺だけが横一文字の青線**として残る
+
+   キーボード利用者の手掛かりは「シートがせり上がって画面を覆うこと」と、最初の Tab で
+   ✕ にリングが出ることで足りている。**操作できる要素のリングは 1 つも消していない。**
+   素の :focus でもリングを描くエンジンが見つかったら :focus へ広げる */
+.sheet:focus-visible {
+  outline: none;
+}
+
 .sheet[open] {
   display: flex;
   flex-direction: column;
@@ -886,7 +955,9 @@ h3 {
 }
 
 /* 右端の閉じるは .icon-btn（44px 角）なので、縦の余白はボタン自身が持つ。
-   ここで 10px を足すと見出しだけ 64px になって間延びする */
+   ここで 10px を足すと見出しだけ 64px になって間延びする。
+   ★ フォーカスリングを収めるために足すのも不要。リングは 44px の内側に収まる
+     （ファイル冒頭の focus 節） */
 .sheet-head {
   display: flex;
   align-items: center;

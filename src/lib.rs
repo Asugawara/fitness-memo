@@ -14,6 +14,4 @@ pub mod storage;
 #[cfg(target_arch = "wasm32")]
 pub mod transfer;
 #[cfg(target_arch = "wasm32")]
-pub mod view_transition;
-#[cfg(target_arch = "wasm32")]
 pub mod views;

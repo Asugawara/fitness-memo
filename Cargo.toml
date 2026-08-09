@@ -30,6 +30,8 @@ web-sys = { version = "0.3", features = [
     "Event",
     "EventTarget",
     "Element",         # Document::get_element_by_id / Element::scroll_into_view
+    "ScrollIntoViewOptions",  # scroll_into_view_if_needed（block: nearest で必要な分だけ動かす）
+    "ScrollLogicalPosition",
     "HtmlElement",     # HtmlElement::focus（セット追加時に回数欄へフォーカスする）
     "MediaQueryList",  # Window::match_media("(display-mode: standalone)")
     # ── ボトムシート（views::Sheet）──

@@ -15,36 +15,19 @@
 //!   効かない）。16px 未満だと iOS がフォーカス時にページごとズームする
 //! - `autocorrect="off"` は leptos の view! が受け付けないので付けていない。iOS が
 //!   引用符を全角に変えることがあるが、`core::repair` が読み込み時に戻すので実害はない
-//! - **他アプリからの移行もここに置く**（`Pane::Text`）。専用のシートを立てると、
-//!   自動退避 → 適用 → 元に戻す の分岐が 2 本になる。データを失う経路は 1 本に保つ
-
-use std::collections::BTreeMap;
 
 use leptos::prelude::*;
 
 use crate::core::{self, Conflict, DbSummary, MergeReport};
-use crate::import_text::{self, Assign, Draft};
-use crate::model::{Db, GroupId};
+use crate::model::Db;
 use crate::{storage, transfer};
 
-use super::{Sheet, kb_blur, kb_focus, use_dates, use_db, use_kb};
+use super::{Sheet, kb_blur, kb_focus, use_db, use_kb};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pane {
     Export,
     Import,
-    /// 他アプリの画面から起こしたテキストを読む
-    Text,
-}
-
-/// 確認待ちのデータがどこから来たか。
-///
-/// テキスト由来のものは**置き換えを選ばせない**。読み取り違いが混じり得る入力で
-/// 既存を全部消す理由が無い。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Source {
-    Json,
-    Text,
 }
 
 /// 取り込み方。
@@ -61,7 +44,6 @@ enum Mode {
 struct Pending {
     db: Db,
     summary: DbSummary,
-    source: Source,
 }
 
 fn summary_text(s: &DbSummary) -> String {
@@ -99,6 +81,11 @@ fn report_text(r: &MergeReport) -> String {
     }
     if r.logs_added > 0 {
         parts.push(format!("{} 件の記録", r.logs_added));
+    }
+    // ★ メモだけが増えることがある（セットが同じでメモだけ違う日）。ここを出さないと
+    //   `is_noop` が偽なのに parts が空になり「 を追加しました」だけが出る
+    if r.notes_added > 0 {
+        parts.push(format!("{} 件のメモ", r.notes_added));
     }
     if r.exercises_added > 0 {
         parts.push(format!("{} 種目", r.exercises_added));
@@ -139,8 +126,6 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
 
     let pane = RwSignal::new(Pane::Export);
     let pasted = RwSignal::new(String::new());
-    // ★ ペインを跨いでも消さない。読み取り直しのたびに貼り直させるのは無しにする
-    let text_raw = RwSignal::new(String::new());
     let pending = RwSignal::new(None::<Pending>);
     let mode = RwSignal::new(Mode::Replace);
     let note = RwSignal::new(None::<String>);
@@ -227,11 +212,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         match parsed {
             Ok(next) => {
                 let summary = core::summarize(&next);
-                pending.set(Some(Pending {
-                    db: next,
-                    summary,
-                    source: Source::Json,
-                }));
+                pending.set(Some(Pending { db: next, summary }));
                 note.set(None);
             }
             Err(e) => {
@@ -381,18 +362,6 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                         >
                             "読み込み"
                         </button>
-                        <button
-                            class:opt=true
-                            class:on=move || pane.get() == Pane::Text
-                            data-testid="backup-pane-text"
-                            on:click=move |_| {
-                                pending.set(None);
-                                note.set(None);
-                                pane.set(Pane::Text);
-                            }
-                        >
-                            "他アプリから"
-                        </button>
                     </div>
 
                     <Show when=move || note.get().is_some()>
@@ -499,30 +468,24 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                                     }}
                                 </p>
                             </div>
-                            // ★ テキスト由来のときは置き換えを出さない。読み取り違いが
-                            //   混じり得る入力で既存を全部消す道を残す理由が無い
-                            <Show when=move || {
-                                pending.get().is_some_and(|p| p.source == Source::Json)
-                            }>
-                                <div class="opts">
-                                    <button
-                                        class:opt=true
-                                        class:on=move || mode.get() == Mode::Replace
-                                        data-testid="backup-mode-replace"
-                                        on:click=move |_| mode.set(Mode::Replace)
-                                    >
-                                        "置き換える"
-                                    </button>
-                                    <button
-                                        class:opt=true
-                                        class:on=move || mode.get() == Mode::Merge
-                                        data-testid="backup-mode-merge"
-                                        on:click=move |_| mode.set(Mode::Merge)
-                                    >
-                                        "足すだけ"
-                                    </button>
-                                </div>
-                            </Show>
+                            <div class="opts">
+                                <button
+                                    class:opt=true
+                                    class:on=move || mode.get() == Mode::Replace
+                                    data-testid="backup-mode-replace"
+                                    on:click=move |_| mode.set(Mode::Replace)
+                                >
+                                    "置き換える"
+                                </button>
+                                <button
+                                    class:opt=true
+                                    class:on=move || mode.get() == Mode::Merge
+                                    data-testid="backup-mode-merge"
+                                    on:click=move |_| mode.set(Mode::Merge)
+                                >
+                                    "足すだけ"
+                                </button>
+                            </div>
                             <p class="muted">
                                 {move || match mode.get() {
                                     Mode::Replace => "今の記録は控えを取ってから丸ごと入れ替えます",
@@ -558,16 +521,6 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                                 </button>
                             </div>
                         </Show>
-                    </Show>
-
-                    <Show when=move || pane.get() == Pane::Text>
-                        <TextPane
-                            raw=text_raw
-                            pane=pane
-                            mode=mode
-                            pending=pending
-                            note=note
-                        />
                     </Show>
 
                     // ── 退避データ ──
@@ -627,298 +580,5 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                         </details>
                     </Show>
         </Sheet>
-    }
-}
-
-// ── 他アプリから ────────────────────────────────────────────────────────────
-
-/// 種目 1 つ分の割り当て行。
-#[derive(Clone, PartialEq)]
-struct Row {
-    /// `import_text` の照合キー。割り当てはこれで引く
-    key: String,
-    /// 読み取った表記
-    display: String,
-    /// 既存の種目に当たったならその名前
-    target: Option<String>,
-    sets: usize,
-}
-
-/// 他アプリの画面から起こしたテキストを読むペイン。
-///
-/// ここは**確認画面まで**を作る。取り込みそのものは読み込みペインの `apply` に
-/// 渡す（自動退避 → 適用 → 元に戻す の分岐を 2 本にしないため）。
-#[component]
-fn TextPane(
-    /// 貼り付けた元テキスト。ペインを跨いでも消えないよう親が持つ
-    raw: RwSignal<String>,
-    pane: RwSignal<Pane>,
-    mode: RwSignal<Mode>,
-    pending: RwSignal<Option<Pending>>,
-    note: RwSignal<Option<String>>,
-) -> impl IntoView {
-    let db = use_db();
-    let dates = use_dates();
-    let kb = use_kb();
-
-    let draft = RwSignal::new(None::<Draft>);
-    // 新規種目の行き先。**選ばれなかった種目は取り込まない**
-    let assign = RwSignal::new(BTreeMap::<String, Assign>::new());
-    // 日付が読めなかった塊を載せる日
-    let fallback = RwSignal::new(String::new());
-
-    let read = move |_| {
-        let text = raw.get_untracked();
-        if text.trim().is_empty() {
-            note.set(Some("中身がありません".into()));
-            return;
-        }
-        let today = dates.today.get_untracked();
-        let parsed = db.with_untracked(|cur| import_text::parse(&text, cur, today));
-        note.set(if parsed.is_empty() {
-            Some("記録を読み取れませんでした。種目名の行と「60kg × 10」のような行が要ります".into())
-        } else {
-            None
-        });
-        assign.set(BTreeMap::new());
-        fallback.set(core::date_key(today));
-        draft.set(Some(parsed));
-    };
-
-    let rows = Memo::new(move |_| {
-        let mut rows: Vec<Row> = Vec::new();
-        draft.with(|d| {
-            let Some(d) = d else { return };
-            db.with(|cur| {
-                for day in &d.days {
-                    for log in &day.logs {
-                        match rows.iter_mut().find(|r| r.key == log.key) {
-                            Some(row) => row.sets += log.sets.len(),
-                            None => rows.push(Row {
-                                key: log.key.clone(),
-                                display: log.raw_name.clone(),
-                                target: log
-                                    .matched
-                                    .and_then(|id| cur.exercise(id))
-                                    .map(|e| e.name.clone()),
-                                sets: log.sets.len(),
-                            }),
-                        }
-                    }
-                }
-            });
-        });
-        rows
-    });
-
-    // 部位は既存のものだけ。移行で新しい部位を勝手に増やさない
-    let groups = Memo::new(move |_| {
-        db.with(|cur| {
-            let mut list: Vec<(u32, GroupId, String)> = cur
-                .groups
-                .iter()
-                .map(|g| (g.order, g.id, g.name.clone()))
-                .collect();
-            list.sort_by_key(|(order, _, _)| *order);
-            list.into_iter()
-                .map(|(_, id, name)| (id, name))
-                .collect::<Vec<_>>()
-        })
-    });
-
-    let summary_line = move || {
-        draft.with(|d| {
-            d.as_ref().map_or(String::new(), |d| {
-                let (exercises, days, sets) = d.counts();
-                let weighed = d
-                    .days
-                    .iter()
-                    .filter(|day| day.body_weight.is_some())
-                    .count();
-                let weight = if weighed > 0 {
-                    format!(" ・ 体重 {weighed} 日分")
-                } else {
-                    String::new()
-                };
-                format!("種目 {exercises} ・ {days} 日分 ・ {sets} セット{weight}を読み取りました")
-            })
-        })
-    };
-
-    let confirm = move |_| {
-        let Some(parsed) = draft.get_untracked() else {
-            return;
-        };
-        let today = dates.today.get_untracked();
-        let landing = core::parse_date_key(&fallback.get_untracked()).unwrap_or(today);
-        let picked = assign.get_untracked();
-        let built = db.with_untracked(|cur| {
-            storage::with_ids(|ids| import_text::to_db(&parsed, &picked, landing, cur, ids))
-        });
-        let summary = core::summarize(&built);
-        if summary.sets == 0 {
-            note.set(Some(
-                "取り込むものがありません（新しい種目は部位を選ぶと取り込まれます）".into(),
-            ));
-            return;
-        }
-        note.set(None);
-        // ★ テキスト由来は必ず「足すだけ」
-        mode.set(Mode::Merge);
-        pending.set(Some(Pending {
-            db: built,
-            summary,
-            source: Source::Text,
-        }));
-        pane.set(Pane::Import);
-    };
-
-    view! {
-        <details open data-testid="text-import-howto">
-            <summary>"前のアプリから移す手順"</summary>
-            <ol class="howto">
-                <li>"前のアプリで記録の画面を出してスクリーンショットを撮る"</li>
-                <li>"写真アプリでそのスクショを開き、右下の「テキスト認識表示」を押す"</li>
-                <li>"文字を長押しして「すべてを選択」→「コピー」"</li>
-                <li>"下の欄に貼り付けて「読み取る」"</li>
-            </ol>
-            <p class="muted">
-                "前のアプリのデータをこのアプリから直接読むことはできません（iPhone が"
-                "アプリどうしを隔てているため）。画面の文字を写すのが唯一の道です"
-            </p>
-        </details>
-
-        // ★ 読み取った後は縮める。160px のまま居座ると、割り当ての行を見るのに
-        //   毎回スクロールすることになる。消さないのは、読み違いを直して読み直す
-        //   のがこの機能で一番よくある操作だから
-        <textarea
-            class="json-box"
-            class:compact=move || draft.with(Option::is_some)
-            autocapitalize="off"
-            spellcheck="false"
-            data-testid="text-import-input"
-            on:focusin=move |_| kb_focus(kb)
-            on:focusout=move |_| kb_blur(kb)
-            on:input=move |ev| raw.set(event_target_value(&ev))
-            prop:value=move || raw.get()
-        ></textarea>
-        <div class="sheet-actions">
-            <button class="primary" data-testid="text-import-read" on:click=read>
-                "読み取る"
-            </button>
-        </div>
-
-        <Show when=move || draft.with(|d| d.as_ref().is_some_and(|d| !d.is_empty()))>
-            <p class="muted" data-testid="text-import-summary">
-                {summary_line}
-            </p>
-
-            <Show when=move || draft.with(|d| d.as_ref().is_some_and(|d| d.converted_lb))>
-                <p class="menu-note" data-testid="text-import-lb">
-                    "lb で書かれていた重量は kg に換算しました"
-                </p>
-            </Show>
-
-            <ul class="backup-list" data-testid="text-import-rows">
-                <For each=move || rows.get() key=|row| row.key.clone() let:row>
-                    {
-                        let key = row.key.clone();
-                        view! {
-                            <li>
-                                <span>{row.display.clone()}</span>
-                                " "
-                                <span class="muted">{format!("（{} セット）", row.sets)}</span>
-                                {match row.target.clone() {
-                                    Some(name) => {
-                                        view! {
-                                            <p class="muted">{format!("→ {name}")}</p>
-                                        }
-                                            .into_any()
-                                    }
-                                    None => {
-                                        view! {
-                                            <select
-                                                class="target-select"
-                                                data-testid="text-import-assign"
-                                                on:change=move |ev| {
-                                                    let value = event_target_value(&ev);
-                                                    let key = key.clone();
-                                                    assign
-                                                        .update(|picked| match value.parse::<GroupId>() {
-                                                            Ok(group) => {
-                                                                picked.insert(key, Assign::Into(group));
-                                                            }
-                                                            Err(_) => {
-                                                                picked.remove(&key);
-                                                            }
-                                                        });
-                                                }
-                                            >
-                                                <option value="">"取り込まない"</option>
-                                                <For
-                                                    each=move || groups.get()
-                                                    key=|(id, _)| *id
-                                                    let:group
-                                                >
-                                                    <option value=group
-                                                        .0
-                                                        .to_string()>{group.1.clone()}</option>
-                                                </For>
-                                            </select>
-                                        }
-                                            .into_any()
-                                    }
-                                }}
-                            </li>
-                        }
-                    }
-                </For>
-            </ul>
-
-            <Show when=move || draft.with(|d| d.as_ref().is_some_and(Draft::has_undated))>
-                <p class="muted">"日付が書かれていない分があります。実際にトレーニングした日を選んでください"</p>
-                <input
-                    type="date"
-                    class="date-input"
-                    data-testid="text-import-date"
-                    on:change=move |ev| fallback.set(event_target_value(&ev))
-                    prop:value=move || fallback.get()
-                />
-            </Show>
-
-        </Show>
-
-        // ★ 読み取れなかった行を黙って捨てない。移行できたつもりで前のアプリを
-        //   消されるのが、この機能で一番あり得ない結末。**「確認へ」より上に置く** —
-        //   進んだ後に出しても、取りこぼしに気づく前に押されている
-        <Show when=move || draft.with(|d| d.as_ref().is_some_and(|d| !d.ignored.is_empty()))>
-            <details data-testid="text-import-ignored">
-                <summary>
-                    {move || {
-                        let n = draft.with(|d| d.as_ref().map_or(0, |d| d.ignored.len()));
-                        format!("読み取れなかった行（{n} 行）")
-                    }}
-                </summary>
-                <ul class="backup-list">
-                    <For
-                        each=move || {
-                            draft.with(|d| d.as_ref().map_or(Vec::new(), |d| d.ignored.clone()))
-                        }
-                        key=|line| line.clone()
-                        let:line
-                    >
-                        <li class="muted">{line}</li>
-                    </For>
-                </ul>
-            </details>
-        </Show>
-
-        <Show when=move || draft.with(|d| d.as_ref().is_some_and(|d| !d.is_empty()))>
-            <div class="sheet-actions">
-                <button class="primary" data-testid="text-import-confirm" on:click=confirm>
-                    "確認へ"
-                </button>
-            </div>
-        </Show>
     }
 }

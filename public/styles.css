@@ -182,81 +182,9 @@ h3 {
   display: none;
 }
 
-/* ── タブ切替のトランジション ───────────────────────────────────────────────
-   方向（forward / backward）は `src/view_transition.rs` が `types` で渡し、CSS は
-   `:active-view-transition-type()` で受ける。並びは 記録 → 推移 → 種目。
-
-   ★ タブバーと通知は root のスナップショットから外す。既定では画面全体が 1 枚の
-     `root` として撮られるので、付けないと**タブバーまで一緒に横へ流れる**。
-     名前は前後で 1 個ずつでなければならない（同名が 2 個以上あると遷移が丸ごと
-     無効化され、アニメーション無しで即座に差し替わる）。
-   詳細は adr/ux/directional-tab-transitions.md */
-
-.bottom-tabs {
-  view-transition-name: bottom-tabs;
-}
-
-.notice {
-  view-transition-name: notice;
-}
-
-/* ★ animation-* は継承しないので、old / new にも明示する。
-   group だけに置くと中身が UA 既定のクロスフェード時間で動く */
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation-duration: 0.2s;
-  animation-timing-function: ease-out;
-  animation-fill-mode: both;
-}
-
-/* ★ inset ではなく translate を動かす（レイアウトを起こさない） */
-@keyframes tab-slide-out-left {
-  to {
-    translate: -100% 0;
-  }
-}
-
-@keyframes tab-slide-in-right {
-  from {
-    translate: 100% 0;
-  }
-}
-
-@keyframes tab-slide-out-right {
-  to {
-    translate: 100% 0;
-  }
-}
-
-@keyframes tab-slide-in-left {
-  from {
-    translate: -100% 0;
-  }
-}
-
-html:active-view-transition-type(forward)::view-transition-old(root) {
-  animation-name: tab-slide-out-left;
-}
-
-html:active-view-transition-type(forward)::view-transition-new(root) {
-  animation-name: tab-slide-in-right;
-}
-
-html:active-view-transition-type(backward)::view-transition-old(root) {
-  animation-name: tab-slide-out-right;
-}
-
-html:active-view-transition-type(backward)::view-transition-new(root) {
-  animation-name: tab-slide-in-left;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  ::view-transition-group(*),
-  ::view-transition-old(*),
-  ::view-transition-new(*) {
-    animation: none !important;
-  }
-}
+/* ★ タブ切替に演出は置かない。トレ中に毎回 0.2s の横スライドを見るのが煩わしく、
+   方向つき View Transition は入れた当日に撤去した。切替は即時が最速で最良。
+   経緯は adr/ux/directional-tab-transitions.md（破棄）*/
 
 /* ── 通知・注意書き ─────────────────────────────────────────────────────── */
 
@@ -528,7 +456,10 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  /* ★ 行内の折り返し（.warn / メモ）を上の行に寄せる。行間は padding 3px+3px = 6px
+     なので、折り返し行の gap を 6px のままにすると、その行が上下どちらの set-row に
+     属するか等距離で読めない。.warn にも潜在していた問題が、メモ欄を足して実害になった */
+  gap: 2px 6px;
   padding: 3px 0;
 }
 
@@ -574,10 +505,74 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
   color: var(--warn);
 }
 
+/* ── セットメモ（adr/ux/exercise-and-set-notes-behind-one-toggle.md）───────────
+   .warn と同じ手（flex-basis で 1 行占有して 2 行目に落とす）。左を 23px 空けるのは
+   .set-no（1.4em @12px = 16.8px）+ gap 6px = 22.8px で決まる重量欄の左端に合わせるため。
+   ★ 薄字と入力欄で同じ値を使うので、開閉しても文字の左端が動かない。em にしないのは
+   入力欄が 16px 固定（iOS のズーム閾値）で 1.9em が 30.4px になり薄字と揃わないから。 */
+.set-note-read,
+.set-row .set-note {
+  flex-basis: calc(100% - 23px);
+  margin-left: 23px;
+}
+
+/* ★ 薄さを opacity で作らない（このファイル後半「体重（第2軸）」の節と同じ理由 —
+   非テキストの 3:1 を割り、ダークで消える）。--muted・12px・字下げの 3 つで作る。
+   12px は .last-row（前回の記録）と同じ段で、どちらも「本文ではない利用者のデータ」。
+   長いメモは折り返す。1 行省略にしないのは、静止時にメモを隠すと
+   「閉じていても読める」という前提そのものが崩れるから。 */
+.set-note-read {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* 同じ行の数値欄（.set-row .num）に枠をそろえる。地色を --bg にすると
+   カードの --surface の上で凹んで見える */
+.set-row .set-note {
+  min-height: 44px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
 .add-set-wrap {
   display: flex;
   justify-content: flex-end;
   margin-top: 4px;
+}
+
+/* ── 種目メモ ─────────────────────────────────────────────────────────────────
+   ★ セット行群の**下**に置く。.last-row（前回の記録）の直下に置くと 12px --muted の
+     行が 2 本続き「前回の記録の続き」に読める（--muted は 1 つしか無いので色で
+     分けられない）。カードの読み順「名前 → 前回 → セット → 合計」に割り込ませない。
+   ★ 字下げしないことが「行のメモ（23px 字下げ）」との唯一の差。ラベル文字を足さずに
+     スコープを読ませるための対比なので、字下げを付けないこと。 */
+.ex-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.ex-note input {
+  flex: 1;
+  min-height: 44px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  /* ラベルの --muted を継がせない（button, input { color: inherit } があるため）。
+     編集中の値はセット欄と同じ --text で読めること */
+  color: var(--text);
+}
+
+.ex-note-read {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .card-foot {
@@ -622,6 +617,21 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
 .card-foot .card-remove {
   color: var(--muted);
   font-size: 13px;
+}
+
+/* メモの入口。カードで 44px のタップ標的が既に予算されている行はフッタだけなので
+   ここに畳む（他に置くと 44px × カード枚数だけ縦に純増する）。
+   ★ .link-btn の --accent を --muted へ落とす。カードでいちばん彩度の高い色を
+     「めったに使わない開閉」に与えない。静止時の主張については
+     adr/ux/destructive-affordance-quiet-at-rest.md と同じ規則。
+   詳細度の事情も .card-remove と同じ — .link-btn（0,1,0）と同詳細度では色を
+   上書きできないので子孫セレクタ（0,2,0）で書く。
+   横 padding は「＋ メモ」の文字幅が約 42px でタップ標的（44×44）を横で割るため。
+   高さは .link-btn の min-height:44px が持つ。 */
+.card-foot .note-toggle {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 0 8px;
 }
 
 /* ── ボタン ─────────────────────────────────────────────────────────────── */
@@ -1675,38 +1685,4 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
 .backup-list li {
   padding: 8px 0;
   border-top: 1px solid var(--line);
-}
-
-/* ── 他アプリから取り込む ───────────────────────────────────────────────── */
-
-/* 読み取り済みの入力欄。割り当ての行を見るのに毎回スクロールさせない */
-.json-box.compact {
-  min-height: 72px;
-}
-
-.howto {
-  margin: 6px 0 0;
-  padding-left: 20px;
-  font-size: 13px;
-  line-height: 1.7;
-}
-
-/* 日付が読めなかった分の着地日。★ height を明示するのは .target-select と同じ理由で、
-   WebKit の UA テーマが min-height を無視して 44px に届かないため */
-.date-input {
-  width: 100%;
-  min-height: 44px;
-  height: 44px;
-  margin: 6px 0 0;
-  padding: 0 10px;
-  color: inherit;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  box-sizing: border-box;
-}
-
-/* 割り当て行の中の <select>。行の中で潰れないよう上に余白を持たせる */
-.backup-list .target-select {
-  margin-top: 6px;
 }

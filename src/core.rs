@@ -79,6 +79,70 @@ pub fn log_value(m: Metric, l: &ExerciseLog) -> f64 {
     }
 }
 
+// ── メモ（adr/data-model/notes-on-logs-and-sets.md）──────────────────────────
+
+/// 重量と回数だけを見たセット列の一致。**メモを無視する。**
+///
+/// ★ [`SetEntry`] の `PartialEq` にメモが入ったので、`==` は「セットは同じでメモだけ
+/// 違う」を**不一致**にする。それを「同じ記録か」の判定に使うと、[`merge_db`] では
+/// [`log_rank`] が同点なので差し替えの分岐にも入らず、取り込む側のメモが
+/// `Conflict` も出さずに黙って捨てられる。
+///
+/// 「同じセットか」を問うときは必ずここを通すこと。`==` を使ってよいのは
+/// 「メモまで含めてまったく同じか」を問うときだけ。
+fn same_sets(a: &[SetEntry], b: &[SetEntry]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(x, y)| x.weight == y.weight && x.reps == y.reps)
+}
+
+/// メモの合流。**同じ文が既に入っていれば足さない。** 足したら `true`。
+///
+/// ★ 無条件に連結すると、同じファイルを 2 回取り込んでメモが 2 倍になる。
+/// [`MergeReport`] の数が冪等でも**文字列は利用者に見える**ので、こちらも冪等でないと
+/// 事故になる。`Session::note` が元から持っていたガードを 1 関数に切り出して、
+/// [`merge_same_day`] / [`dedupe_logs`] / [`merge_db`] の 3 箇所で共有する。
+/// 2 本目の規則を書いた瞬間にどれかが冪等でなくなる。
+///
+/// ★ 判定は部分一致。「痛」が「肩が痛い」の中にあると新しいメモでも足されない。
+/// 誤って足さない側に倒すのは意図で、`Session::note` の既存挙動を変えないことと、
+/// 冪等性のほうが短いメモの取りこぼしより重いことの両方から。
+fn append_note(dst: &mut String, src: &str) -> bool {
+    let incoming = src.trim();
+    if incoming.is_empty() || dst.contains(incoming) {
+        return false;
+    }
+    if dst.trim().is_empty() {
+        dst.clear();
+        dst.push_str(incoming);
+    } else {
+        dst.push('\n');
+        dst.push_str(incoming);
+    }
+    true
+}
+
+/// 空白だけのメモを空文字にする。**「空白 = 無い」を 1 箇所で決める。**
+///
+/// これが無いと `" "` が `skip_serializing_if = "String::is_empty"` をすり抜けて
+/// 保存され続け、`ExerciseLog::is_empty()`（`trim` する）と JSON の見え方がずれる。
+fn blank_notes_to_empty(s: &mut Session) {
+    if s.note.trim().is_empty() {
+        s.note.clear();
+    }
+    for log in &mut s.logs {
+        if log.note.trim().is_empty() {
+            log.note.clear();
+        }
+        for set in &mut log.sets {
+            if set.note.trim().is_empty() {
+                set.note.clear();
+            }
+        }
+    }
+}
+
 // ── 参照 ────────────────────────────────────────────────────────────────────
 
 /// 指定日より**厳密に前**で最も新しい、その種目の記録。
@@ -177,10 +241,26 @@ pub fn recent_menus(db: &Db, before: NaiveDate, limit: usize) -> Vec<MenuCandida
 /// 過去日バックフィルなら `None`。
 ///
 /// 体重と体調メモは複製しない。どちらもその日の観測値であってメニュー構成ではない。
+/// **種目メモとセットメモも同じ理由で複製しない**（adr/data-model/notes-on-logs-and-sets.md）。
 pub fn copy_day(db: &mut Db, from: NaiveDate, to: NaiveDate, at: Option<i64>) -> Vec<ExerciseId> {
     // `&db` と `&mut db` の借用を分けるため先に取り出しておく
+    //
+    // ★ `l.sets.clone()` は**メモまで運ぶ**ので、ここで明示的に落とす。「3 セット目で
+    //   肩に違和感」は前回の観測で、今日の観測ではない。複製すると起きていない観測が
+    //   翌日に生える
     let picked: Vec<(ExerciseId, Vec<SetEntry>)> = copyable(db, from)
-        .map(|l| (l.exercise_id, l.sets.clone()))
+        .map(|l| {
+            let sets = l
+                .sets
+                .iter()
+                .map(|s| SetEntry {
+                    weight: s.weight,
+                    reps: s.reps,
+                    note: String::new(),
+                })
+                .collect();
+            (l.exercise_id, sets)
+        })
         .collect();
     if picked.is_empty() {
         return Vec::new();
@@ -213,6 +293,7 @@ pub fn copy_day(db: &mut Db, from: NaiveDate, to: NaiveDate, at: Option<i64>) ->
             exercise_id,
             sets,
             at,
+            note: String::new(),
         });
     }
     copied
@@ -612,8 +693,10 @@ impl std::fmt::Display for RestoreError {
 /// 正規化の内容:
 /// - 日付キーを `%Y-%m-%d` に再正規化し、パースできないキーのセッションは捨てる
 ///   （辞書順 = 時系列順の前提が壊れ、どの画面からも到達できないため）
-/// - 同一 `exercise_id` の重複ログをマージ（セットを連結、`at` は `Some` の最大値）
-/// - セットが空のログを捨て、ログも体重もメモも無いセッションを捨てる
+/// - 同一 `exercise_id` の重複ログをマージ（セットを連結、`at` は `Some` の最大値、
+///   メモは重複ガード付きで連結）
+/// - 空白だけのメモを空にする
+/// - **セットもメモも無い**ログを捨て、ログも体重もメモも無いセッションを捨てる
 pub fn migrate(raw: &str, ids: &mut IdGen) -> Result<Db, RestoreError> {
     // schema だけを先に取り出す。本体の形が世代ごとに違うので 2 段パースになる
     #[derive(serde::Deserialize)]
@@ -648,6 +731,9 @@ fn normalize(db: &mut Db) {
     }
     for session in sessions.values_mut() {
         drop_unrepresentable_weights(session);
+        // ★ dedupe_logs より**先**。あちらは空白だけのメモを「ある」と見るので、
+        //   先に潰さないと「保存する価値の無いログ」が残る
+        blank_notes_to_empty(session);
         dedupe_logs(session);
     }
     sessions.retain(|_, s| !s.is_empty());
@@ -667,6 +753,9 @@ fn normalize(db: &mut Db) {
 /// 負の重量も落とす。UI の `parse_weight` が弾くので入力からは入らないが、取り込みには
 /// 入りうる。入ると [`log_rank`] の「重量は非負」という前提が崩れ、`to_bits` の順序が
 /// 反転してマージが悪いほうを勝たせる。
+/// ★ 捨てるセットのメモも一緒に消える。メモはセットの付属物なので正しい（「3 セット目が
+/// キツかった」は 3 セット目が無ければ指すものが無い）が、無言の欠落なので明記しておく。
+/// ここが発火するのは `3.5e38` のような壊れた取り込みだけで、UI からは入らない。
 fn drop_unrepresentable_weights(s: &mut Session) {
     for log in &mut s.logs {
         log.sets
@@ -683,6 +772,11 @@ mod legacy {
 
     use serde::Deserialize;
 
+    // ★ `SetEntry` は現行のものを再利用する。schema ≤2 の JSON にメモは存在しないが、
+    //   `note` が `#[serde(default)]` なので欠けていても読める。これが成り立つのは
+    //   **`SetEntry` に足すフィールドが常に default を持つ**あいだだけ。default の無い
+    //   フィールドを足すと v1 / v2 の読み込みが `missing field` で落ちる
+    //   （`migrates_from_schema_one` / `..._two` のテストが落ちるので気づける）。
     use crate::model::SetEntry;
 
     #[derive(Deserialize)]
@@ -812,6 +906,8 @@ fn upgrade_from_sequential(old: legacy::Db, ids: &mut IdGen) -> Db {
                                 exercise_id: to_exercise(l.exercise_id),
                                 sets: l.sets,
                                 at: l.at,
+                                // schema ≤2 にメモは無い
+                                note: String::new(),
                             })
                             .collect(),
                         body_weight: s.body_weight,
@@ -862,20 +958,16 @@ fn pin_presets(
 
 /// 正規化で同じ日付キーに落ちた 2 つのセッションを 1 つにまとめる。
 ///
-/// ★ **これはインポートのマージに流用してはいけない。** メモを無条件に連結するので、
-/// 同じファイルを 2 回取り込むとメモが 2 回増える（冪等でない）。マージ側は
-/// `merge_db` が重複ガード付きで別に処理する。
+/// ★ **これはインポートのマージに流用してはいけない。** ログを無条件に連結するので、
+/// 同じファイルを 2 回取り込むとセットが 2 倍になる（冪等でない）。メモの連結は
+/// [`append_note`] の重複ガードで冪等になったが、**ログの連結は冪等でないまま**。
+/// マージ側は `merge_db` が別に処理する。
 fn merge_same_day(dst: &mut Session, src: Session) {
     dst.logs.extend(src.logs);
     if dst.body_weight.is_none() {
         dst.body_weight = src.body_weight;
     }
-    if dst.note.trim().is_empty() {
-        dst.note = src.note;
-    } else if !src.note.trim().is_empty() {
-        dst.note.push('\n');
-        dst.note.push_str(&src.note);
-    }
+    append_note(&mut dst.note, &src.note);
 }
 
 /// 「1 日 1 種目 1 ログ」への正規化。初出の順序は保つ。
@@ -891,6 +983,7 @@ fn dedupe_logs(s: &mut Session) {
                     (Some(a), None) => Some(a),
                     (None, b) => b,
                 };
+                append_note(&mut existing.note, &log.note);
             }
             None => {
                 order.push(log.exercise_id);
@@ -901,7 +994,12 @@ fn dedupe_logs(s: &mut Session) {
     s.logs = order
         .into_iter()
         .filter_map(|id| merged.remove(&id))
-        .filter(|l| !l.sets.is_empty())
+        // ★ **`!l.sets.is_empty()` にしてはいけない。** 種目メモだけのログ（「肩が痛いので
+        //   今日はやめた」）はここを毎回の読み込みで通るので、セットで判定すると
+        //   画面には出ているのに次回起動で消える — 保存と表示が食い違う最悪の形になる。
+        //   「メモがある」と「トレした」は別で、後者は `Session::is_trained` が
+        //   セットだけを見て判定し続ける（adr/data-model/notes-on-logs-and-sets.md）
+        .filter(|l| !l.is_empty())
         .collect();
 }
 
@@ -1054,6 +1152,12 @@ pub struct MergeReport {
     pub exercises_added: usize,
     pub sessions_added: usize,
     pub logs_added: usize,
+    /// 追記したメモの本数（体調メモ・種目メモ・セットメモの合計）。
+    ///
+    /// ★ これが無いと、メモだけが増えたマージで [`MergeReport::is_noop`] が真になり、
+    /// 画面が「新しく取り込むものはありませんでした」と嘘をつく。メモの冪等性を
+    /// **数で**見る口でもある（追記は `conflicts` に出ないので、他に見る手段が無い）。
+    pub notes_added: usize,
     pub conflicts: Vec<Conflict>,
 }
 
@@ -1064,6 +1168,7 @@ impl MergeReport {
             && self.exercises_added == 0
             && self.sessions_added == 0
             && self.logs_added == 0
+            && self.notes_added == 0
     }
 }
 
@@ -1099,6 +1204,10 @@ fn dedupe_by_exercise(logs: Vec<ExerciseLog>) -> Vec<ExerciseLog> {
         .collect()
 }
 
+/// ★ **メモを見ない。** メモの有無で「どちらのセットを採るか」が変わってはいけない
+/// （2 セットのログがメモ 1 個で 5 セットのログに勝つ形は論外）。同点の tie-break に
+/// メモを足す案も、`*existing = log` で自分側のセットメモを失うので採らない —
+/// [`merge_db`] は一致時に位置でメモを埋めるほうで情報を守る。
 fn log_rank(l: &ExerciseLog) -> LogRank {
     let volume: f64 = l.sets.iter().map(set_volume).sum();
     (
@@ -1232,7 +1341,22 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
                 report.logs_added += 1;
                 continue;
             };
-            if existing.sets == log.sets {
+            // ★ セットの採否より**先に**種目メモを合わせる。あとに回すと下の
+            //   `*existing = log` が取り込み先のメモを取り込む側のもので上書きして消す
+            if append_note(&mut existing.note, &log.note) {
+                report.notes_added += 1;
+            }
+            // ★ `==` ではなく `same_sets`。メモだけの違いを食い違い扱いにすると、
+            //   rank が同点なので下の分岐にも入れず、取り込む側のセットメモが
+            //   `Conflict` も出さずに黙って捨てられる
+            if same_sets(&existing.sets, &log.sets) {
+                // 重量・回数が一致する組だけ、位置でセットメモを埋める。並びが同じなので
+                // 対応がつく（食い違うときは埋めない — 別のセットにメモが付くほうが害が大きい）
+                for (mine, theirs) in existing.sets.iter_mut().zip(&log.sets) {
+                    if append_note(&mut mine.note, &theirs.note) {
+                        report.notes_added += 1;
+                    }
+                }
                 continue;
             }
             // 取り込む側が強いときだけ差し替える。逆向きは黙って捨てる
@@ -1246,7 +1370,10 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
                         .find(|x| x.id == log.exercise_id)
                         .map_or_else(|| log.exercise_id.to_string(), |x| x.name.clone()),
                 });
-                *existing = log;
+                // ★ 上で合流させた種目メモを持ち越す。`*existing = log` だけだと、
+                //   セットが負けたせいで**取り込み先のメモまで消える**
+                let note = std::mem::take(&mut existing.note);
+                *existing = ExerciseLog { note, ..log };
             }
         }
 
@@ -1258,15 +1385,8 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             _ => {}
         }
 
-        // ★ 重複ガード。無条件に連結すると同じファイルを 2 回入れてメモが 2 倍になる
-        let incoming = session.note.trim();
-        if !incoming.is_empty() && !dst.note.contains(incoming) {
-            if dst.note.trim().is_empty() {
-                dst.note = session.note;
-            } else {
-                dst.note.push('\n');
-                dst.note.push_str(&session.note);
-            }
+        if append_note(&mut dst.note, &session.note) {
+            report.notes_added += 1;
         }
     }
 
@@ -1353,9 +1473,33 @@ mod tests {
                 .map(|(weight, reps)| SetEntry {
                     weight: *weight,
                     reps: *reps,
+                    note: String::new(),
                 })
                 .collect(),
             at,
+            note: String::new(),
+        }
+    }
+
+    /// メモ入りのログ。種目メモとセットメモを 1 本で組み立てる。
+    fn noted_log(
+        exercise_id: u64,
+        note: &str,
+        sets: &[(f32, u32, &str)],
+        at: Option<i64>,
+    ) -> ExerciseLog {
+        ExerciseLog {
+            exercise_id: e(exercise_id),
+            sets: sets
+                .iter()
+                .map(|(weight, reps, set_note)| SetEntry {
+                    weight: *weight,
+                    reps: *reps,
+                    note: set_note.to_string(),
+                })
+                .collect(),
+            at,
+            note: note.to_string(),
         }
     }
 
@@ -1372,7 +1516,11 @@ mod tests {
     // ── 指標 ────────────────────────────────────────────────────────────────
 
     fn set(weight: f32, reps: u32) -> SetEntry {
-        SetEntry { weight, reps }
+        SetEntry {
+            weight,
+            reps,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1455,7 +1603,8 @@ mod tests {
             l.sets,
             vec![SetEntry {
                 weight: 55.0,
-                reps: 10
+                reps: 10,
+                note: String::new(),
             }]
         );
 
@@ -1766,6 +1915,61 @@ mod tests {
         let session = db.sessions.get(&date_key(d(2026, 8, 8))).unwrap();
         assert_eq!(session.body_weight, None, "その日の観測値は運ばない");
         assert_eq!(session.note, "");
+    }
+
+    #[test]
+    fn copy_day_does_not_copy_the_exercise_note_or_the_set_notes() {
+        // 「肩に違和感」は前回の観測。複製すると起きていない観測が翌日に生える
+        // （adr/data-model/notes-on-logs-and-sets.md）
+        let mut db = menu_db();
+        put(
+            &mut db,
+            d(2026, 8, 5),
+            vec![noted_log(
+                10,
+                "フォームが崩れた",
+                &[(60.0, 10, "軽い"), (60.0, 8, "肩に違和感")],
+                None,
+            )],
+        );
+
+        assert_eq!(
+            copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None),
+            vec![e(10)]
+        );
+        let log = &db.sessions.get(&date_key(d(2026, 8, 8))).unwrap().logs[0];
+        assert_eq!(log.note, "", "種目メモは運ばない");
+        assert!(
+            log.sets.iter().all(|s| s.note.is_empty()),
+            "セットメモは運ばない: {:?}",
+            log.sets
+        );
+        // 重量・回数はメニュー構成なので運ぶ
+        assert_eq!(
+            log.sets
+                .iter()
+                .map(|s| (s.weight, s.reps))
+                .collect::<Vec<_>>(),
+            vec![(60.0, 10), (60.0, 8)]
+        );
+    }
+
+    #[test]
+    fn copy_day_refuses_a_target_that_only_holds_a_note_only_log() {
+        // メモだけのログがある日に書き足すと exercise_id が重複しうる。
+        // UI 側はカードが出るので導線が出ないが、判定は logs.is_empty() に寄せている
+        let mut db = menu_db();
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(60.0, 10)], None)]);
+        put(
+            &mut db,
+            d(2026, 8, 8),
+            vec![noted_log(10, "肩が痛いのでやめた", &[], None)],
+        );
+
+        assert!(copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None).is_empty());
+        let logs = &db.sessions.get(&date_key(d(2026, 8, 8))).unwrap().logs;
+        assert_eq!(logs.len(), 1, "exercise_id が重複しない");
+        assert_eq!(logs[0].note, "肩が痛いのでやめた", "メモを消さない");
     }
 
     #[test]
@@ -2447,11 +2651,13 @@ mod tests {
             vec![
                 SetEntry {
                     weight: 60.0,
-                    reps: 10
+                    reps: 10,
+                    note: String::new(),
                 },
                 SetEntry {
                     weight: 60.0,
-                    reps: 8
+                    reps: 8,
+                    note: String::new(),
                 }
             ]
         );
@@ -2520,6 +2726,218 @@ mod tests {
         assert_eq!(db.sessions["2026-08-03"].body_weight, Some(70.5));
         assert!(!db.sessions["2026-08-03"].is_trained());
         assert_eq!(db.sessions["2026-08-04"].note, "睡眠不足");
+    }
+
+    #[test]
+    fn migrate_keeps_a_log_that_only_has_a_note() {
+        // ★ ここが `!l.sets.is_empty()` に戻ると、画面に出ている種目メモが
+        //   次回起動で消える（adr/data-model/notes-on-logs-and-sets.md）
+        let raw = r#"{
+          "schema": 3, "groups": [], "exercises": [],
+          "sessions": {
+            "2026-08-08": { "logs": [
+              {"exercise_id": "00000000000a", "sets": [], "note": "肩が痛いのでやめた"}
+            ]}
+          }
+        }"#;
+
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
+
+        let session = &db.sessions["2026-08-08"];
+        assert_eq!(session.logs.len(), 1, "メモだけのログを捨ててはいけない");
+        assert_eq!(session.logs[0].note, "肩が痛いのでやめた");
+        assert!(
+            !session.is_trained(),
+            "メモだけの日を実施日にしてはいけない"
+        );
+    }
+
+    #[test]
+    fn migrate_drops_a_log_with_neither_sets_nor_a_note() {
+        let raw = r#"{
+          "schema": 3, "groups": [], "exercises": [],
+          "sessions": {
+            "2026-08-08": { "logs": [
+              {"exercise_id": "00000000000a", "sets": []},
+              {"exercise_id": "00000000000b", "sets": [], "note": "  "}
+            ], "body_weight": 70.0 }
+          }
+        }"#;
+
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
+
+        assert!(
+            db.sessions["2026-08-08"].logs.is_empty(),
+            "空白だけのメモは「無い」"
+        );
+    }
+
+    #[test]
+    fn migrate_clears_a_whitespace_only_note_at_every_level() {
+        // 空白が残ると skip_serializing_if をすり抜けて保存され、
+        // is_empty()（trim する）と JSON の見え方がずれる
+        let raw = r#"{
+          "schema": 3, "groups": [], "exercises": [],
+          "sessions": {
+            "2026-08-08": {
+              "logs": [{
+                "exercise_id": "00000000000a",
+                "sets": [{"weight": 60.0, "reps": 10, "note": "\n"}],
+                "note": "　"
+              }],
+              "note": " "
+            }
+          }
+        }"#;
+
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
+
+        let session = &db.sessions["2026-08-08"];
+        assert_eq!(session.note, "");
+        assert_eq!(session.logs[0].note, "");
+        assert_eq!(session.logs[0].sets[0].note, "");
+        // ★ 新しく足した 2 つ（ログ・セット）の空メモは JSON に出ない。`Session.note` は
+        //   `skip_serializing_if` を持たず昔から `"note":""` を書いているので、そこは
+        //   数えない（既存の保存形式を変えないため意図的にそのまま）
+        let json = export_json(&db);
+        assert_eq!(
+            json.matches("\"note\"").count(),
+            1,
+            "ログ / セットの空メモが書き出されている: {json}"
+        );
+    }
+
+    #[test]
+    fn migrate_merges_the_notes_of_duplicate_logs() {
+        let raw = r#"{
+          "schema": 3, "groups": [], "exercises": [],
+          "sessions": {
+            "2026-08-08": { "logs": [
+              {"exercise_id": "00000000000a", "sets": [{"weight": 60.0, "reps": 10}], "note": "A"},
+              {"exercise_id": "00000000000a", "sets": [{"weight": 60.0, "reps": 8}], "note": "B"}
+            ]}
+          }
+        }"#;
+
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
+
+        let logs = &db.sessions["2026-08-08"].logs;
+        assert_eq!(logs.len(), 1, "1 日 1 種目 1 ログ");
+        assert_eq!(logs[0].note, "A\nB", "どちらのメモも失わない");
+        assert_eq!(logs[0].sets.len(), 2, "セットは連結される");
+    }
+
+    #[test]
+    fn migrate_does_not_duplicate_an_identical_note_of_duplicate_logs() {
+        let raw = r#"{
+          "schema": 3, "groups": [], "exercises": [],
+          "sessions": {
+            "2026-08-08": { "logs": [
+              {"exercise_id": "00000000000a", "sets": [{"weight": 60.0, "reps": 10}], "note": "重い"},
+              {"exercise_id": "00000000000a", "sets": [{"weight": 60.0, "reps": 8}], "note": "重い"}
+            ]}
+          }
+        }"#;
+
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
+
+        assert_eq!(db.sessions["2026-08-08"].logs[0].note, "重い");
+    }
+
+    #[test]
+    fn migrate_from_schema_two_leaves_every_note_blank() {
+        // legacy が現行の SetEntry を再利用しているので、note が default で読めることを固定する
+        let raw = r##"{
+          "schema": 2, "next_id": 1,
+          "groups": [{"id": 3, "name": "胸", "color": "#e0524a", "order": 0}],
+          "exercises": [{"id": 42, "name": "わたしの種目", "group_id": 3, "order": 0}],
+          "sessions": {
+            "2026-08-08": { "logs": [
+              {"exercise_id": 42, "sets": [{"weight": 60.0, "reps": 10}]}
+            ]}
+          }
+        }"##;
+
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
+
+        let log = &db.sessions["2026-08-08"].logs[0];
+        assert_eq!(log.note, "");
+        assert_eq!(log.sets[0].note, "");
+    }
+
+    #[test]
+    fn dropping_an_unrepresentable_weight_drops_that_sets_note_too() {
+        // メモはセットの付属物なので一緒に消えるのが正しい。無言の欠落なので固定しておく
+        let raw = r#"{
+          "schema": 3, "groups": [], "exercises": [],
+          "sessions": {
+            "2026-08-08": { "logs": [{
+              "exercise_id": "00000000000a",
+              "sets": [
+                {"weight": 3.5e38, "reps": 10, "note": "壊れた重量"},
+                {"weight": 60.0, "reps": 8, "note": "残る"}
+              ]
+            }]}
+          }
+        }"#;
+
+        let db = migrate(raw, &mut ids()).expect("正当な JSON");
+
+        let sets = &db.sessions["2026-08-08"].logs[0].sets;
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0].note, "残る");
+    }
+
+    #[test]
+    fn migrate_round_trips_notes_at_every_level() {
+        let mut db = menu_db();
+        db.sessions.insert(
+            date_key(d(2026, 8, 8)),
+            Session {
+                logs: vec![noted_log(
+                    10,
+                    "フォームが崩れた",
+                    &[(60.0, 10, "軽い"), (60.0, 8, "肩に違和感")],
+                    Some(1_800_000_000_000),
+                )],
+                body_weight: Some(70.5),
+                note: "睡眠不足".into(),
+            },
+        );
+
+        let again = migrate(&export_json(&db), &mut ids()).expect("自分が書いた JSON");
+        assert_eq!(again, db);
+    }
+
+    #[test]
+    fn same_sets_ignores_the_notes() {
+        let a = vec![
+            SetEntry {
+                weight: 60.0,
+                reps: 10,
+                note: "きつい".into(),
+            },
+            set(60.0, 8),
+        ];
+        let b = vec![set(60.0, 10), set(60.0, 8)];
+        assert!(same_sets(&a, &b), "メモの違いで不一致にしてはいけない");
+        assert_ne!(a, b, "== はメモを見る（だから same_sets が要る）");
+
+        assert!(!same_sets(&a, &[set(60.0, 10)]), "長さが違う");
+        assert!(!same_sets(&a, &[set(62.0, 10), set(60.0, 8)]), "重量が違う");
+        assert!(!same_sets(&a, &[set(60.0, 10), set(60.0, 6)]), "回数が違う");
+    }
+
+    #[test]
+    fn log_rank_ignores_the_notes() {
+        // メモの有無でどちらのセットが勝つかが変わってはいけない
+        let plain = log(10, &[(60.0, 10)], None);
+        let noted = noted_log(10, "メモつき", &[(60.0, 10, "きつい")], None);
+        assert_eq!(log_rank(&plain), log_rank(&noted));
+
+        // 2 セットのログがメモ 1 個で 5 セットのログに勝たない
+        let five = log(10, &[(60.0, 10); 5], None);
+        assert!(log_rank(&five) > log_rank(&noted));
     }
 
     /// ★ 旧 `migrate_repairs_next_id_so_new_ids_cannot_collide` の後継。
@@ -2645,8 +3063,10 @@ mod tests {
                 sets: vec![SetEntry {
                     weight: 60.0,
                     reps: 10,
+                    note: String::new(),
                 }],
                 at: Some(1_800_000_000_000),
+                note: String::new(),
             }],
         );
 
@@ -2682,8 +3102,10 @@ mod tests {
                     sets: vec![SetEntry {
                         weight: 60.0,
                         reps: 10,
+                        note: String::new(),
                     }],
                     at: Some(1_800_000_000_000),
+                    note: String::new(),
                 }],
                 body_weight: Some(70.5),
                 note: "調子よい".into(),
@@ -2776,13 +3198,16 @@ mod tests {
                         SetEntry {
                             weight: 60.0,
                             reps: 10,
+                            note: String::new(),
                         },
                         SetEntry {
                             weight: 60.0,
                             reps: 8,
+                            note: String::new(),
                         },
                     ],
                     at: None,
+                    note: String::new(),
                 }],
                 ..Session::default()
             },
@@ -2804,6 +3229,33 @@ mod tests {
         assert_eq!(s.last, Some(d(2026, 8, 1)));
 
         assert_eq!(summarize(&Db::default()), DbSummary::default());
+    }
+
+    #[test]
+    fn summarize_does_not_count_a_note_only_day_as_trained() {
+        // ★ `DbSummary` にメモの件数は足さない。取り込み事故を止めている 3 つの数
+        //   （種目 / 実施日 / セット）が 1 行の中で薄まる。メモだけの DB は
+        //   「0 日・0 セット」と出るので、置き換えようとした利用者には異常が見える
+        let mut db = crate::presets::seeded_db();
+        db.sessions.insert(
+            date_key(d(2026, 8, 1)),
+            Session {
+                logs: vec![noted_log(
+                    crate::presets::preset_exercise_id("ベンチプレス")
+                        .expect("プリセット")
+                        .bits(),
+                    "肩が痛いのでやめた",
+                    &[],
+                    None,
+                )],
+                ..Session::default()
+            },
+        );
+
+        let s = summarize(&db);
+        assert_eq!(s.days, 0, "メモだけの日を実施日に数えない");
+        assert_eq!(s.sets, 0);
+        assert_eq!(s.first, None);
     }
 
     /// ★ 敵対的レビューで実証された全損経路の回帰テスト。
@@ -2884,16 +3336,20 @@ mod tests {
                         sets: vec![SetEntry {
                             weight: 60.0,
                             reps: 10,
+                            note: String::new(),
                         }],
                         at: None,
+                        note: String::new(),
                     },
                     ExerciseLog {
                         exercise_id: ExerciseId::from_bits(0xAAA1),
                         sets: vec![SetEntry {
                             weight: 20.0,
                             reps: 15,
+                            note: String::new(),
                         }],
                         at: None,
+                        note: String::new(),
                     },
                 ],
                 body_weight: Some(70.0),
@@ -2934,16 +3390,20 @@ mod tests {
                         sets: vec![SetEntry {
                             weight: 65.0,
                             reps: 8,
+                            note: String::new(),
                         }],
                         at: None,
+                        note: String::new(),
                     },
                     ExerciseLog {
                         exercise_id: ExerciseId::from_bits(0xBBB1),
                         sets: vec![SetEntry {
                             weight: 45.0,
                             reps: 6,
+                            note: String::new(),
                         }],
                         at: None,
+                        note: String::new(),
                     },
                 ],
                 body_weight: None,
@@ -3058,6 +3518,7 @@ mod tests {
                         exercise_id: bench,
                         sets,
                         at: None,
+                        note: String::new(),
                     }],
                     ..Session::default()
                 },
@@ -3069,10 +3530,12 @@ mod tests {
                 SetEntry {
                     weight: 60.0,
                     reps: 10,
+                    note: String::new(),
                 },
                 SetEntry {
                     weight: 60.0,
                     reps: 8,
+                    note: String::new(),
                 },
             ]
         };
@@ -3081,10 +3544,12 @@ mod tests {
                 SetEntry {
                     weight: 62.0,
                     reps: 10,
+                    note: String::new(),
                 },
                 SetEntry {
                     weight: 60.0,
                     reps: 8,
+                    note: String::new(),
                 },
             ]
         };
@@ -3137,16 +3602,20 @@ mod tests {
                         sets: vec![SetEntry {
                             weight: 60.0,
                             reps: 10,
+                            note: String::new(),
                         }],
                         at: None,
+                        note: String::new(),
                     },
                     ExerciseLog {
                         exercise_id: other,
                         sets: vec![SetEntry {
                             weight: 40.0,
                             reps: 12,
+                            note: String::new(),
                         }],
                         at: None,
+                        note: String::new(),
                     },
                 ],
                 ..Session::default()
@@ -3199,6 +3668,147 @@ mod tests {
         assert_eq!(after_first, "Aのメモ\nBのメモ");
     }
 
+    // ── メモのマージ（adr/data-model/notes-on-logs-and-sets.md）─────────────────
+
+    /// 種目メモ・セットメモを載せた 2 台を作る。セットの内容は引数で変える。
+    fn noted_pair(mine_sets: &[(f32, u32, &str)], theirs_sets: &[(f32, u32, &str)]) -> (Db, Db) {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let day = date_key(d(2026, 8, 1));
+        let build = |note: &str, sets: &[(f32, u32, &str)]| {
+            let mut db = crate::presets::seeded_db();
+            db.sessions.insert(
+                day.clone(),
+                Session {
+                    logs: vec![ExerciseLog {
+                        exercise_id: bench,
+                        sets: sets
+                            .iter()
+                            .map(|(w, r, n)| SetEntry {
+                                weight: *w,
+                                reps: *r,
+                                note: n.to_string(),
+                            })
+                            .collect(),
+                        at: None,
+                        note: note.to_string(),
+                    }],
+                    ..Session::default()
+                },
+            );
+            db
+        };
+        (
+            build("わたしのメモ", mine_sets),
+            build("あちらのメモ", theirs_sets),
+        )
+    }
+
+    fn merged_log(db: &Db) -> &ExerciseLog {
+        &db.sessions[&date_key(d(2026, 8, 1))].logs[0]
+    }
+
+    #[test]
+    fn merge_appends_the_exercise_note_even_when_the_sets_are_identical() {
+        // ★ セット一致で早期 continue する枝が、取り込む側のメモを見ていなかった
+        let (mut mine, theirs) = noted_pair(&[(60.0, 10, "")], &[(60.0, 10, "")]);
+
+        let report = merge_db(&mut mine, theirs);
+
+        assert_eq!(merged_log(&mine).note, "わたしのメモ\nあちらのメモ");
+        assert_eq!(report.notes_added, 1);
+    }
+
+    #[test]
+    fn merge_fills_set_notes_positionally_when_the_sets_match() {
+        let (mut mine, theirs) = noted_pair(
+            &[(60.0, 10, ""), (60.0, 8, "自分の 2 本目")],
+            &[(60.0, 10, "あちらの 1 本目"), (60.0, 8, "")],
+        );
+
+        merge_db(&mut mine, theirs);
+
+        let sets = &merged_log(&mine).sets;
+        assert_eq!(sets[0].note, "あちらの 1 本目", "空いていた側は埋まる");
+        assert_eq!(sets[1].note, "自分の 2 本目", "自分のメモは残る");
+    }
+
+    #[test]
+    fn merge_does_not_touch_set_notes_when_the_sets_diverge() {
+        // 並びが食い違うときに位置で埋めると、別のセットにメモが付く
+        let (mut mine, theirs) = noted_pair(
+            &[(60.0, 10, "自分のだけ")],
+            &[(62.0, 10, "あちらの 1"), (62.0, 8, "あちらの 2")],
+        );
+
+        merge_db(&mut mine, theirs);
+
+        let sets = &merged_log(&mine).sets;
+        // セットは取り込む側が強いので差し替わる。**そのメモも一緒に来る**
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[0].note, "あちらの 1");
+        assert_eq!(sets[1].note, "あちらの 2");
+    }
+
+    #[test]
+    fn merge_keeps_my_exercise_note_when_the_incoming_sets_win() {
+        // ★ `*existing = log` だけだと、セットが負けたせいで取り込み先のメモまで消える
+        let (mut mine, theirs) = noted_pair(&[(60.0, 10, "")], &[(62.0, 10, ""), (62.0, 8, "")]);
+
+        let report = merge_db(&mut mine, theirs);
+
+        let log = merged_log(&mine);
+        assert_eq!(log.sets.len(), 2, "強いほうのセットを採る");
+        assert_eq!(
+            log.note, "わたしのメモ\nあちらのメモ",
+            "セットが負けても種目メモは失わない"
+        );
+        assert!(
+            report
+                .conflicts
+                .iter()
+                .any(|c| matches!(c, Conflict::SetsDiverged { .. }))
+        );
+    }
+
+    #[test]
+    fn merge_does_not_silently_drop_a_note_when_only_the_notes_differ() {
+        // ★ `==` のままだと rank が同点で下の分岐にも入らず、メモが黙って消えていた
+        let (mut mine, theirs) = noted_pair(&[(60.0, 10, "")], &[(60.0, 10, "あちらのセットメモ")]);
+
+        merge_db(&mut mine, theirs);
+
+        assert_eq!(merged_log(&mine).sets[0].note, "あちらのセットメモ");
+    }
+
+    #[test]
+    fn merge_reports_notes_added_so_the_screen_does_not_claim_nothing_happened() {
+        // メモだけが増えたマージで is_noop が真になると、画面が
+        // 「新しく取り込むものはありませんでした」と嘘をつく
+        let (mut mine, theirs) = noted_pair(&[(60.0, 10, "")], &[(60.0, 10, "あちらのセットメモ")]);
+
+        let report = merge_db(&mut mine, theirs);
+
+        assert!(!report.is_noop(), "メモが増えたのに noop 扱い: {report:?}");
+        assert_eq!(report.logs_added, 0, "ログは増えていない");
+        assert_eq!(report.notes_added, 2, "種目メモとセットメモの 2 本");
+    }
+
+    #[test]
+    fn merging_notes_twice_adds_nothing_the_second_time() {
+        let (mut mine, theirs) = noted_pair(
+            &[(60.0, 10, "自分の")],
+            &[(60.0, 10, "あちらの"), (60.0, 8, "あちらの 2")],
+        );
+
+        merge_db(&mut mine, theirs.clone());
+        let once = mine.clone();
+        let report = merge_db(&mut mine, theirs);
+
+        assert_eq!(mine, once, "2 回目のマージが DB を変えた");
+        assert_eq!(report.notes_added, 0, "同じメモを 2 回足した");
+        assert!(report.is_noop(), "2 回目に何かを足した: {report:?}");
+    }
+
     /// 取り込む側にしか無い日は、ログごと採用する。**そのログも写像を通っている。**
     #[test]
     fn merge_maps_ids_even_for_days_taken_wholesale() {
@@ -3229,8 +3839,10 @@ mod tests {
                     sets: vec![SetEntry {
                         weight: 40.0,
                         reps: 12,
+                        note: String::new(),
                     }],
                     at: None,
+                    note: String::new(),
                 }],
                 ..Session::default()
             },

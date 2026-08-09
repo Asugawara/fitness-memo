@@ -6,7 +6,6 @@
 
 pub mod chart_layout;
 pub mod core;
-pub mod import_text;
 pub mod model;
 pub mod presets;
 
@@ -14,7 +13,5 @@ pub mod presets;
 pub mod storage;
 #[cfg(target_arch = "wasm32")]
 pub mod transfer;
-#[cfg(target_arch = "wasm32")]
-pub mod view_transition;
 #[cfg(target_arch = "wasm32")]
 pub mod views;

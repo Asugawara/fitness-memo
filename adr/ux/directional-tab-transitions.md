@@ -1,9 +1,14 @@
 # タブ切替に方向つき View Transition を掛ける
 
-- **状態**: 採用
+- **状態**: 破棄（採用の当日に撤去。[破棄](#破棄) を参照）
 - **日付**: 2026-08-09
 - **カテゴリ**: ux
 - **関連**: [ルーターを使わずタブを enum signal で切り替える](../architecture/no-router-tab-enum-signal.md), [UI 依存を wasm32 の target 別 dependencies に置く](../architecture/wasm-target-scoped-dependencies.md), [ブラウザサポートは Safari を基準にし、polyfill を入れない](../architecture/browser-support-policy.md)
+
+> **破棄。この ADR の「決定」と「理由」は現行の指示ではない。** 採用した当日に実機で使い、
+> 0.2s の横スライドが視線を取ることが分かったので、本文が自ら定めた撤去条件どおり畳んだ。
+> `document.startViewTransition()` のラッパも `Tab::order()` も CSS の演出も**もう無い**。
+> タブ切替は演出なしで即時に入れ替わる。経緯と教訓は [破棄](#破棄) に書いた。
 
 ## 背景
 
@@ -57,3 +62,37 @@
 **CSS のアニメーションだけで表現する（View Transition を使わない）。** 新画面に `@keyframes` で入場アニメーションを付ける形。旧画面が消える様子を描けないので、方向が半分しか伝わらない。また leptos がタブごとにノードを作り直すため、退場側を残す仕組みを自前で持つことになる。
 
 **`cross-document-transitions` を使う。** ルーターが無く 1 ドキュメントで完結しているので前提が成立しない（[ルーターを使わずタブを enum signal で切り替える](../architecture/no-router-tab-enum-signal.md)）。
+
+## 破棄
+
+**入れた当日に実機で使い、撤去した。** 上の「結果（トレードオフ）」に書いた撤去条件（「トレ中に毎回 0.2s の横スライドを見る」ことが煩わしいと分かったら **この ADR ごと戻す**）に、実使用が一発で当たった。
+
+**採用時の 2 つの弁護は、どちらも的を外していた。**
+
+- 「操作をブロックしない」は**手**の話で、問題は**目**だった。セット間の短い休憩でタブを行き来する場面では、横に流れる画面が視線を連れていく。次のタップが通ることと、視点を取られないことは別物
+- 「`prefers-reduced-motion` で消える」は、**演出が邪魔だと感じる利用者に OS 設定を変えさせる**話だった。他のアプリのアニメーションまで一括で止める設定であって、このアプリのタブ切替 1 個のための逃げ道ではない
+
+得られたはずの「3 枚が横に並んでいる」という手がかりは、実際にはタブバーの並びで足りていた。トレ中に毎回払う 0.2s に見合わない。
+
+**撤去したもの。**
+
+- `src/view_transition.rs`（ファイルごと）と `src/lib.rs` のモジュール宣言
+- `src/views/mod.rs` の `use` 1 行、`TabCtx::switch` の差し込み、`Tab::order()`
+- `public/styles.css` のタブ切替ブロック — `view-transition-name` 2 つ（`.bottom-tabs` / `.notice`）、0.2s を決めていた `::view-transition-old/new(root)` の規則、`tab-slide-*` の `@keyframes` 4 本、`:active-view-transition-type()` の 4 規則、View Transition 用の `prefers-reduced-motion`
+- `Cargo.toml` の `wasm-bindgen-futures` と web-sys の `css` feature（`Cargo.lock` からも直接依存が 1 行消える）
+- E2E の View Transition テスト 3 本（向き / 同一タブ / スナップショット除外）と `recordViewTransitions` ヘルパ
+
+**宣言どおり差し込み口が 1 箇所だったので、撤去は機械的に済んだ。**
+
+**`TabCtx::switch` の同値ガードだけは残す。** これは View Transition と無関係に要る。`RwSignal::set` は同値でも購読者へ通知し、`{move || match tab.get() { ... }}` が `<main class="screen">` の中身を作り直すので、同じタブを再タップしただけで確定前の入力が飛ぶ（[記録タブをカレンダー + 選択日エディタの単一画面にする](record-tab-calendar-with-day-editor.md) が `DateCtx::open` について書いているのと同じ罠）。
+
+**ただしこのガードが守るのは同一タブの再タップだけ。** 別タブへ移って戻る往復では `set` が正当に走るので、`Db` にまだ載っていない入力（reps 未入力の行など）は同じ理由で消える。撤去前からの挙動で、この撤去の範囲外。加えて `dates.resync()` はガードより前に走るので、**日付を跨いだ瞬間の再タップは「何も起きない」とは限らない**（`selected` が動けば `DayEditor` が作り直される）。
+
+E2E も置き換えが要る。ここで **2 度、落ちないテストを書いた**。
+
+- 「画面のルート要素が作り直されない」（`screen-menu` に印を付けて再タップ後も残るか）は、**ガードを外しても通った。** leptos は同じ型の view を rebuild するときルートのノードを使い回すので、そこは壊れない。壊れるのは中身で、実測するとガードを外した瞬間に `set-weight` 自体が見つからなくなる。だから**確定前の入力が生き残るか**を見る形にした
+- 撤去そのものの退行ガードとして書いた「`.bottom-tabs` の `view-transition-name` が `none`」は、**そもそも失敗しえなかった。** `none` はこのプロパティの初期値なので、何も宣言しなければ常に `none` を返す。おまけに見ている対象が逆で、`view-transition-name: bottom-tabs` は「タブバーを `root` のスナップショットから**外す**」ための宣言だった。演出側（`@keyframes` と `startViewTransition` の呼び出し）だけが戻ればタブバーごと横に流れるのに、このテストは緑のままになる
+
+**演出が走るかどうかは `document.startViewTransition` が呼ばれるかでしか分からない。** CSS の宣言の有無は代理指標にならない。E2E はこれを直接フックして「タブを 2 回切り替えても呼び出し 0 回」を見る形にし、UA 既定のクロスフェードだけが戻る経路も塞ぐために「View Transition 関連の CSS 規則が 0 件」も併せて見る。
+
+**残る教訓。** 「操作をブロックしないから邪魔ではない」は、このアプリでは通らない。演出の当否は**視線を取るかどうか**で判断する。

@@ -26,7 +26,7 @@ const BASE = `http://localhost:${PORT}/`;
  *
  * `center` は「この要素が画面の中央に来るまでスクロールしてから撮る」指定。
  * 記録タブだけ指定があるのは、先頭で撮るとカレンダーしか入らず、この画面の要である
- * 「カレンダーと入力欄が縦に並んで 1 画面」（ADR-0035）が写らないため。
+ * 「カレンダーと入力欄が縦に並んで 1 画面」（adr/ux/record-tab-calendar-with-day-editor.md）が写らないため。
  */
 const SHOTS = [
   { file: '1-record.png', testid: 'tab-record', screen: 'screen-record', center: 'today-date' },
@@ -56,7 +56,7 @@ const SEED = [
 ];
 
 /**
- * 撮影用の体重（`daysAgo` 28 → 0 の毎日）。推移タブの第2軸に出る（ADR-0044）。
+ * 撮影用の体重（`daysAgo` 28 → 0 の毎日）。推移タブの第2軸に出る（adr/ux/body-weight-second-axis-always-on.md）。
  *
  * ★ 記録日だけでなく**毎日**入れる。体重は毎日でトレーニングは週数回、という
  *   実際の使い方でしか X 軸の合併ドメイン（最後にトレした日より後の計量まで軸が
@@ -120,7 +120,7 @@ try {
 
   await page.evaluate(({ seed, weights }) => {
     // ★ storage.rs の KEY と一致していること。schema 世代ごとにキーを切る運用
-    //   （ADR-0034）なので、ここが古いと getItem が null を返して黙って落ちる
+    //   （adr/storage/storage-key-per-schema-generation.md）なので、ここが古いと getItem が null を返して黙って落ちる
     const KEY = 'fitness-memo/v3';
     const db = JSON.parse(localStorage.getItem(KEY));
     // Local::now().date_naive() と揃えるため UTC ではなくローカル日付で組み立てる

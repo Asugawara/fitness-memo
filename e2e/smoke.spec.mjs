@@ -776,7 +776,7 @@ test('カードが増えても「種目を追加」が常に画面内にあり�
   await expect(page.getByTestId('add-sheet')).toBeVisible();
 });
 
-// ★ 中身の有無で分岐しない（[ADR-0046]）。消えるのは 1 行で打ち直しは数秒、対して
+// ★ 中身の有無で分岐しない（adr/ux/set-delete-without-confirmation.md）。消えるのは 1 行で打ち直しは数秒、対して
 //   確認は 1 種目 3〜5 行 × 打ち間違いの消し直しのぶんだけ踏むことになる
 test('中身のあるセットも確認を挟まず 1 タップで消える', async ({ page }) => {
   const card = await addExercise(page, 'ベンチプレス');
@@ -912,7 +912,7 @@ test('カード削除の入口は「+ セット」と同じ列に無い', async 
 // 省いていたため、DOM順で <nav class="bottom-tabs"> が前面に出ていた）の固定用。
 // 目視でしか気づけない類の退行なので、force を付けないクリックで機械的に検出する。
 //
-// ★ ADR-0050 でシートを <dialog> + show_modal() に移したので、2 件とも今は UA が
+// ★ adr/ux/native-dialog-for-sheets.md でシートを <dialog> + show_modal() に移したので、2 件とも今は UA が
 //   構造的に保証している（top layer は z-index の外・背景は inert）。それでも残すのは、
 //   「シートの下端が押せること」「シート表示中に裏のタブへ抜けないこと」が要件そのもので、
 //   実装をどう変えても守られるべきだから。手書きの重なり順に戻れば再び落ちる。
@@ -945,7 +945,7 @@ test('「種目を追加」シート表示中は背景が inert で、誤タッ�
   await expect(page.getByTestId('screen-progress')).toHaveCount(0);
 });
 
-// ネイティブ <dialog> に移して初めて成立した挙動（ADR-0050）。手書きの
+// ネイティブ <dialog> に移して初めて成立した挙動（adr/ux/native-dialog-for-sheets.md）。手書きの
 // <div role="dialog"> では Esc もフォーカス復帰も無かったので、退行したら気づけるようにする。
 
 test('シートは Esc で閉じ、閉じたあとフォーカスが開いたボタンへ戻る', async ({ page }) => {
@@ -998,7 +998,7 @@ test('動きを減らす設定ではシートが上下に動かない', async ({
   await expect(sheet).toHaveCSS('translate', 'none');
 });
 
-// ── 見出しの階層とフォーカスリング（ADR-0052）────────────────────────────────
+// ── 見出しの階層とフォーカスリング（adr/ux/focus-ring-and-heading-order.md）──
 
 test('記録タブの h1 は 1 個だけで、選択日は h2 にぶら下がる', async ({ page }) => {
   // カレンダーの月見出しが h1、選択日が h2、種目カードが h3。
@@ -1046,7 +1046,7 @@ test('フォーカスリングが出て、塗りボタンでは地色側で抜�
   expect(ring.color).not.toBe(asRgb);
 });
 
-// ── タブ切替の View Transition（ADR-0051）────────────────────────────────────
+// ── タブ切替の View Transition（adr/ux/directional-tab-transitions.md）───
 
 // `document.startViewTransition` を包んで、渡された types を記録する。
 // 向きの決定は今回入れたロジックそのものなので、そこだけを直接見る。
@@ -1135,7 +1135,7 @@ test('空の日にだけ過去メニューの候補が出て、1 タップで種
   await expect(rows.nth(1).getByTestId('set-reps')).toHaveValue('8');
   await expect(cards.nth(1).getByTestId('set-row').nth(0).getByTestId('set-reps')).toHaveValue('12');
 
-  // 1 種目でも入ったら候補は消える（ADR-0021 と同じ「空のときだけ」の考え方）
+  // 1 種目でも入ったら候補は消える（adr/ux/copy-button-only-when-empty.md と同じ「空のときだけ」の考え方）
   await expect(list).toHaveCount(0);
 
   // signal に載っただけでなく Db にコミットされている

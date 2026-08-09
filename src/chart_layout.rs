@@ -1,6 +1,6 @@
 //! 推移グラフの座標計算。**ターゲット非依存なので `cargo test` で検証できる。**
 //!
-//! [ADR-0004](../adr/architecture/0004-no-chart-library-hand-rolled-svg.md) は
+//! [グラフライブラリを使わず SVG を自前で描く](../adr/architecture/no-chart-library-hand-rolled-svg.md) は
 //! 「`layout()` のテストが無いのは弱点で、`core.rs` に移せばホストでテストできた」と
 //! 自分で書いている。描画（`views::chart`）から座標計算だけを切り出したのがこのモジュール。
 //!

@@ -22,7 +22,7 @@ use crate::core::{self, Conflict, DbSummary, MergeReport};
 use crate::model::Db;
 use crate::{storage, transfer};
 
-use super::{kb_blur, kb_focus, use_db, use_kb};
+use super::{Sheet, kb_blur, kb_focus, use_db, use_kb};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pane {
@@ -333,32 +333,13 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
     });
 
     view! {
-        <Show when=move || open.get()>
-            <div
-                class="sheet-backdrop"
-                style="z-index:19"
-                data-testid="backup-sheet-backdrop"
-                on:click=move |_| close()
-            ></div>
-            <div
-                class="sheet"
-                style="z-index:20"
-                role="dialog"
-                aria-label="データの書き出し / 読み込み"
-                data-testid="backup-sheet"
-            >
-                <header class="sheet-head">
-                    <strong>"データの書き出し / 読み込み"</strong>
-                    <button
-                        class="icon-btn"
-                        aria-label="閉じる"
-                        data-testid="backup-sheet-close"
-                        on:click=move |_| close()
-                    >
-                        "✕"
-                    </button>
-                </header>
-                <div class="sheet-body">
+        <Sheet
+            open=open
+            on_close=Callback::new(move |_| close())
+            title="データの書き出し / 読み込み".to_string()
+            testid="backup-sheet"
+            close_testid="backup-sheet-close"
+        >
                     <div class="opts">
                         <button
                             class:opt=true
@@ -593,8 +574,6 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                             </ul>
                         </details>
                     </Show>
-                </div>
-            </div>
-        </Show>
+        </Sheet>
     }
 }

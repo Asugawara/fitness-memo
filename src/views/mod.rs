@@ -13,6 +13,8 @@ use std::time::Duration;
 
 use chrono::{Datelike, Local, NaiveDate, Weekday};
 use leptos::prelude::*;
+// シートを閉じたときのフォーカス復帰で Element → HtmlElement に落とすのに使う
+use wasm_bindgen::JsCast;
 
 use crate::core::Elapsed;
 use crate::model::{Db, SetEntry};
@@ -297,6 +299,133 @@ pub fn scroll_to_id(element_id: String) {
             el.scroll_into_view();
         }
     });
+}
+
+// ── ボトムシート ────────────────────────────────────────────────────────────
+
+/// 下から上がるシート。種目を追加 / 種目の編集 / ホーム画面に追加 / 書き出し読み込みの
+/// 4 箇所で共有する。
+///
+/// ★ `<div role="dialog">` ではなく**ネイティブ `<dialog>` を `show_modal()` で開く**。
+///   top layer に載るので z-index を持つ必要が無くなり、背景は UA が `inert` にする。
+///   以前この 3 つを手で両立させようとして 2 件壊している（styles.css 冒頭のコメント）。
+///   Esc（close request）も UA 側の仕事になる。経緯は ADR-0050。
+///
+/// ★ **常時マウントする。** 開いている間だけ DOM に置く形にすると、閉じる際に
+///   「top layer に載ったままの要素を DOM から消す」ことになり `close` イベントが
+///   飛ばない。呼び出し側は `open` を倒すだけでよい。
+///   その代わり、シートの中身は閉じている間も評価されるので、
+///   **中で `with_untracked` を使うと開き直しても古い値のままになる**（day.rs の
+///   「追加済み」表示がこれで壊れかけた）。中身は素直に追跡する形で書くこと。
+#[component]
+pub fn Sheet(
+    /// 開いているか。
+    #[prop(into)]
+    open: Signal<bool>,
+    /// 閉じる要求。✕ / Esc / 背景タップの 3 経路が全部ここに集まる。
+    /// 呼び出し側の後始末（backup.rs のメモ消しなど）を奪わないので `Callback` で受ける。
+    #[prop(into)]
+    on_close: Callback<()>,
+    /// 見出し。アクセシブル名も兼ねる。
+    #[prop(into)]
+    title: Signal<String>,
+    testid: &'static str,
+    close_testid: &'static str,
+    children: Children,
+) -> impl IntoView {
+    let dialog: NodeRef<leptos::html::Dialog> = NodeRef::new();
+
+    // 開く直前にフォーカスされていた要素。閉じたらここへ戻す（下の on:close を参照）。
+    // web_sys の型は Send + Sync ではないので local 版で持つ
+    let opener: StoredValue<Option<web_sys::HtmlElement>, LocalStorage> =
+        StoredValue::new_local(None);
+
+    // signal → DOM。★ 現在の開閉状態で門番する。`show_modal()` は既に開いている
+    //   dialog に呼ぶと InvalidStateError を投げ、`close()` は閉じている dialog にも
+    //   `close` イベントを飛ばすので、素直に呼ぶと on_close と往復する
+    Effect::new(move |_| {
+        let Some(d) = dialog.get() else { return };
+        if open.get() {
+            if !d.open() {
+                // ★ 控えるのは show_modal() の**前**。呼んだ瞬間にフォーカスが
+                //   シート内の先頭（✕ ボタン）へ移ってしまう。
+                //   ★ <body> は捨てる。WebKit はボタンをタップしてもフォーカスを
+                //   与えない（実測で activeElement は BODY）ので、指で開いた場合は
+                //   「戻すべき場所」が存在しない。そこへ強引に focus を当てると、
+                //   他のコントロールと違う挙動をシートだけが持つことになる
+                opener.set_value(
+                    document()
+                        .active_element()
+                        .filter(|e| e.tag_name() != "BODY")
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()),
+                );
+                let _ = d.show_modal();
+            }
+        } else if d.open() {
+            d.close();
+        }
+    });
+
+    view! {
+        <dialog
+            node_ref=dialog
+            class="sheet"
+            aria-label=move || title.get()
+            data-testid=testid
+            // Esc で閉じたときに呼び出し側のシグナルが真のまま残ると「閉じたのに
+            // 二度と開かない」になる。UA 起因の close も必ずここを通す
+            on:close=move |_| {
+                on_close.run(());
+                // ★ WebKit は <dialog> を閉じてもフォーカスを開いた要素へ戻さない。
+                //   実測（Playwright / iPhone 15 Pro）で Esc 後の activeElement は BODY で、
+                //   キーボードで操作している人はそのたびにページ先頭から辿り直しになる。
+                //   Chromium は自前で戻すので二重に当たるが、同じ要素なので無害。
+                //   主対象が iOS Safari である以上、UA 任せにはできない
+                if let Some(el) = opener.get_value() {
+                    let _ = el.focus();
+                }
+            }
+            on:click=move |ev| {
+                // ★ 背景タップで閉じる。`closedby="any"` は Safari 未対応なので使えない
+                //   （ADR-0049）。backdrop へのクリックは **dialog 自身**が target に
+                //   なるのでまずそこで絞り、さらに座標が箱の外かを見る。target だけで
+                //   判定するとシート内の余白を突いたときにも閉じてしまう
+                let Some(d) = dialog.get_untracked() else { return };
+                let dialog_js: &wasm_bindgen::JsValue = d.as_ref();
+                let on_dialog_itself = ev
+                    .target()
+                    .is_some_and(|t| {
+                        let t: &wasm_bindgen::JsValue = t.as_ref();
+                        t == dialog_js
+                    });
+                if !on_dialog_itself {
+                    return;
+                }
+                let r = d.get_bounding_client_rect();
+                let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
+                let inside = r.left() <= x && x <= r.right() && r.top() <= y
+                    && y <= r.bottom();
+                if !inside {
+                    on_close.run(());
+                }
+            }
+        >
+            <header class="sheet-head">
+                <strong>{move || title.get()}</strong>
+                // aria-label は残す。見た目は ✕ でも支援技術と E2E の role+name には
+                // 「閉じる」で届く必要がある
+                <button
+                    class="icon-btn"
+                    aria-label="閉じる"
+                    data-testid=close_testid
+                    on:click=move |_| on_close.run(())
+                >
+                    "✕"
+                </button>
+            </header>
+            <div class="sheet-body">{children()}</div>
+        </dialog>
+    }
 }
 
 // ── タブ ────────────────────────────────────────────────────────────────────

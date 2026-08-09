@@ -16,8 +16,8 @@ use crate::core::Metric;
 use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, SetEntry};
 
 use super::{
-    fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms, parse_reps, parse_weight,
-    recency_class, scroll_to_id, short_elapsed, use_dates, use_db, use_kb,
+    Sheet, fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms, parse_reps,
+    parse_weight, recency_class, scroll_to_id, short_elapsed, use_dates, use_db, use_kb,
 };
 
 /// 選択日に並べているカード 1 枚。
@@ -424,84 +424,60 @@ pub fn DayEditor() -> impl IntoView {
                 </button>
             </div>
 
-            {move || {
-                sheet
-                    .get()
-                    .then(|| {
-                        view! {
-                            <div
-                                class="sheet-backdrop"
-                                on:click=move |_| sheet.set(false)
-                                data-testid="sheet-backdrop"
-                            ></div>
-                            <div
-                                class="sheet"
-                                role="dialog"
-                                aria-label="種目を追加"
-                                data-testid="add-sheet"
-                            >
-                                <header class="sheet-head">
-                                    <strong>"種目を追加"</strong>
-                                    // aria-label は残す。見た目は ✕ でも支援技術と
-                                    // E2E の role+name には「閉じる」で届く必要がある
-                                    <button
-                                        class="icon-btn"
-                                        aria-label="閉じる"
-                                        data-testid="add-sheet-close"
-                                        on:click=move |_| sheet.set(false)
-                                    >
-                                        "✕"
-                                    </button>
-                                </header>
-                                <div class="sheet-body">
-                                    {move || {
-                                        db.with(|d| {
-                                            let mut groups = d.groups.clone();
-                                            groups.sort_by_key(|g| g.order);
-                                            groups
+            <Sheet
+                open=sheet
+                on_close=Callback::new(move |_| sheet.set(false))
+                title="種目を追加".to_string()
+                testid="add-sheet"
+                close_testid="add-sheet-close"
+            >
+                {move || {
+                    db.with(|d| {
+                        let mut groups = d.groups.clone();
+                        groups.sort_by_key(|g| g.order);
+                        groups
+                            .into_iter()
+                            .map(|g| {
+                                let mut exercises: Vec<_> = d
+                                    .exercises
+                                    .iter()
+                                    .filter(|e| e.group_id == g.id && !e.archived)
+                                    .cloned()
+                                    .collect();
+                                exercises.sort_by_key(|e| e.order);
+                                view! {
+                                    <section class="sheet-group">
+                                        <h3 style=format!("--dot:{}", g.color)>{g.name}</h3>
+                                        <div class="pick-list">
+                                            {exercises
                                                 .into_iter()
-                                                .map(|g| {
-                                                    let mut exercises: Vec<_> = d
-                                                        .exercises
-                                                        .iter()
-                                                        .filter(|e| e.group_id == g.id && !e.archived)
-                                                        .cloned()
-                                                        .collect();
-                                                    exercises.sort_by_key(|e| e.order);
+                                                .map(|e| {
+                                                    let id = e.id;
                                                     view! {
-                                                        <section class="sheet-group">
-                                                            <h3 style=format!("--dot:{}", g.color)>{g.name}</h3>
-                                                            <div class="pick-list">
-                                                                {exercises
-                                                                    .into_iter()
-                                                                    .map(|e| {
-                                                                        let id = e.id;
-                                                                        let added = cards
-                                                                            .with_untracked(|cs| cs.iter().any(|c| c.ex == id));
-                                                                        view! {
-                                                                            <button
-                                                                                class="pick"
-                                                                                class:added=added
-                                                                                data-testid="pick-exercise"
-                                                                                on:click=move |_| pick(id)
-                                                                            >
-                                                                                {e.name}
-                                                                            </button>
-                                                                        }
-                                                                    })
-                                                                    .collect::<Vec<_>>()}
-                                                            </div>
-                                                        </section>
+                                                        <button
+                                                            class="pick"
+                                                            // ★ 追跡する（`with_untracked` にしない）。
+                                                            //   シートは常時マウントなので、開いた瞬間に
+                                                            //   作り直されることを当てにできない
+                                                            class:added=move || {
+                                                                cards.with(|cs| cs.iter().any(|c| c.ex == id))
+                                                            }
+                                                            data-testid="pick-exercise"
+                                                            on:click=move |_| pick(id)
+                                                        >
+                                                            {e.name}
+                                                        </button>
                                                     }
                                                 })
-                                                .collect::<Vec<_>>()
-                                        })
-                                    }}
-                                </div>
-                            </div>
-                        }
+                                                .collect::<Vec<_>>()}
+                                        </div>
+                                    </section>
+                                }
+                            })
+                            .collect::<Vec<_>>()
                     })
-            }}
+                }}
+            </Sheet>
         </section>
     }
 }

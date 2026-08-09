@@ -935,6 +935,54 @@ test('動きを減らす設定ではシートが上下に動かない', async ({
   await expect(sheet).toHaveCSS('translate', 'none');
 });
 
+// ── 見出しの階層とフォーカスリング（ADR-0052）────────────────────────────────
+
+test('記録タブの h1 は 1 個だけで、選択日は h2 にぶら下がる', async ({ page }) => {
+  // カレンダーの月見出しが h1、選択日が h2、種目カードが h3。
+  // 両方 h1 にすると 1 画面に見出しの階層が 2 本立ち、アウトラインで前後が読めない
+  await expect(page.locator('main h1')).toHaveCount(1);
+  await expect(page.getByTestId('cal-title')).toHaveJSProperty('tagName', 'H1');
+  await expect(page.getByTestId('today-date')).toHaveJSProperty('tagName', 'H2');
+
+  await page.getByTestId('add-exercise').click();
+  await page.getByTestId('pick-exercise').first().click();
+  await expect(page.getByTestId('card-name').first()).toHaveJSProperty('tagName', 'H3');
+});
+
+test('他タブの h1 もそれぞれ 1 個', async ({ page }) => {
+  await page.getByTestId('tab-progress').click();
+  await expect(page.locator('main h1')).toHaveCount(1);
+  await page.getByTestId('tab-menu').click();
+  await expect(page.locator('main h1')).toHaveCount(1);
+});
+
+test('フォーカスリングが出て、塗りボタンでは地色側で抜く', async ({ page }) => {
+  const add = page.getByTestId('add-exercise'); // .primary（--accent のベタ塗り）
+  await add.focus();
+
+  const ring = await add.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { width: s.outlineWidth, style: s.outlineStyle, color: s.outlineColor };
+  });
+  // UA 既定任せにしない。--accent の塗りの上では既定のリングが沈む
+  expect(ring.style).toBe('solid');
+  expect(parseFloat(ring.width)).toBeGreaterThan(0);
+
+  // 塗りと同じ色のリングだと境界が消えるので、--accent-text 側で抜いている
+  const accent = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
+  );
+  const asRgb = await page.evaluate((c) => {
+    const d = document.createElement('div');
+    d.style.color = c;
+    document.body.appendChild(d);
+    const v = getComputedStyle(d).color;
+    d.remove();
+    return v;
+  }, accent);
+  expect(ring.color).not.toBe(asRgb);
+});
+
 // ── タブ切替の View Transition（ADR-0051）────────────────────────────────────
 
 // `document.startViewTransition` を包んで、渡された types を記録する。

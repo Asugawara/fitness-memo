@@ -79,6 +79,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0047](ux/0047-declare-color-scheme-for-ua-widgets.md) | `color-scheme` を宣言し、クラスなしの `<button>` を作らない | 採用 |
 | [0050](ux/0050-native-dialog-for-sheets.md) | シートをネイティブ `<dialog>` にし、手動の重なり順から降りる | 採用 |
 | [0051](ux/0051-directional-tab-transitions.md) | タブ切替に方向つき View Transition を掛ける | 採用 |
+| [0052](ux/0052-focus-ring-and-heading-order.md) | フォーカスリングを明示し、記録タブの見出しを 1 本の階層にする | 採用 |
 
 ### deploy — 配信とブランチ運用
 

@@ -298,188 +298,191 @@ pub fn DayEditor() -> impl IntoView {
     };
 
     view! {
-        <section class="day" data-testid="screen-day">
-            // ★ 経過と部位チップは常時 1 行。カレンダーのドットは「いつやったか」しか
-            //   示さないので、「どの部位が空いているか」はここでしか読めない
-            <div class="hero" data-testid="hero">
-                // ラベルと値を分けて持つ（値だけを読めるようにしておく）
-                <span class="hero-elapsed">
-                    "最後から "
-                    <b data-testid="elapsed">
+            <section class="day" data-testid="screen-day">
+                // ★ 経過と部位チップは常時 1 行。カレンダーのドットは「いつやったか」しか
+                //   示さないので、「どの部位が空いているか」はここでしか読めない
+                <div class="hero" data-testid="hero">
+                    // ラベルと値を分けて持つ（値だけを読めるようにしておく）
+                    <span class="hero-elapsed">
+                        "最後から "
+                        <b data-testid="elapsed">
+                            {move || {
+                                elapsed.get().map_or_else(|| "—".to_string(), core::humanize)
+                            }}
+                        </b>
+                    </span>
+                    <div class="chips" data-testid="group-chips">
                         {move || {
-                            elapsed.get().map_or_else(|| "—".to_string(), core::humanize)
+                            all_chips
+                                .get()
+                                .into_iter()
+                                .map(|(name, e)| {
+                                    let label = e.map_or_else(|| "—".to_string(), short_elapsed);
+                                    view! {
+                                        <span
+                                            class="chip"
+                                            data-recency=recency_class(e)
+                                            data-testid="group-chip"
+                                        >
+                                            <b>{name}</b>
+                                            <i>{label}</i>
+                                        </span>
+                                    }
+                                })
+                                .collect::<Vec<_>>()
                         }}
-                    </b>
-                </span>
-                <div class="chips" data-testid="group-chips">
-                    {move || {
-                        all_chips
-                            .get()
-                            .into_iter()
-                            .map(|(name, e)| {
-                                let label = e.map_or_else(|| "—".to_string(), short_elapsed);
-                                view! {
-                                    <span
-                                        class="chip"
-                                        data-recency=recency_class(e)
-                                        data-testid="group-chip"
-                                    >
-                                        <b>{name}</b>
-                                        <i>{label}</i>
-                                    </span>
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                    }}
+                    </div>
                 </div>
-            </div>
 
-            <header class="day-head" class:past=move || dates.is_past_edit()>
-                <h1 data-testid="today-date">{move || fmt_date(dates.selected.get())}</h1>
+                <header class="day-head" class:past=move || dates.is_past_edit()>
+    // ★ h1 ではなく h2。記録タブは 1 画面にカレンダーと選択日の入力欄が縦に並ぶので
+    // （ADR-0035）、h1 は上のカレンダーの月見出しが持つ。両方を h1 にすると
+    // 見出しの階層が 1 画面に 2 本立ち、支援技術のアウトラインで前後関係が読めなくなる
+    <h2 data-testid="today-date">{move || fmt_date(dates.selected.get())}</h2>
+                    {move || {
+                        if dates.is_past_edit() {
+                            view! {
+                                <button
+                                    class="link-btn"
+                                    data-testid="back-to-today"
+                                    on:click=move |_| dates.back_to_today()
+                                >
+                                    "今日へ戻る"
+                                </button>
+                            }
+                                .into_any()
+                        } else {
+                            view! { <span class="badge">"今日"</span> }.into_any()
+                        }
+                    }}
+                </header>
+
                 {move || {
-                    if dates.is_past_edit() {
-                        view! {
-                            <button
-                                class="link-btn"
-                                data-testid="back-to-today"
-                                on:click=move |_| dates.back_to_today()
-                            >
-                                "今日へ戻る"
-                            </button>
-                        }
-                            .into_any()
-                    } else {
-                        view! { <span class="badge">"今日"</span> }.into_any()
-                    }
+                    dates
+                        .is_past_edit()
+                        .then(|| {
+                            view! {
+                                <p class="past-banner" data-testid="past-banner">
+                                    {move || format!("{} を編集中", fmt_date(dates.selected.get()))}
+                                </p>
+                            }
+                        })
                 }}
-            </header>
 
-            {move || {
-                dates
-                    .is_past_edit()
-                    .then(|| {
-                        view! {
-                            <p class="past-banner" data-testid="past-banner">
-                                {move || format!("{} を編集中", fmt_date(dates.selected.get()))}
-                            </p>
-                        }
-                    })
-            }}
+                // 体重・体調メモ。日付が変わったら初期値ごと作り直す
+                {move || {
+                    let _ = dates.selected.get();
+                    view! { <ConditionRow /> }
+                }}
 
-            // 体重・体調メモ。日付が変わったら初期値ごと作り直す
-            {move || {
-                let _ = dates.selected.get();
-                view! { <ConditionRow /> }
-            }}
+                <div class="cards">
+                    <For
+                        each=move || cards.get()
+                        key=|c| (c.date.clone(), c.ex)
+                        children=move |c| view! { <ExerciseCard ex=c.ex cards=cards /> }
+                    />
+                </div>
 
-            <div class="cards">
-                <For
-                    each=move || cards.get()
-                    key=|c| (c.date.clone(), c.ex)
-                    children=move |c| view! { <ExerciseCard ex=c.ex cards=cards /> }
-                />
-            </div>
+                // ★ 空の日にしか出さない。カードが 1 枚でもある状態でコピーすると
+                //   <For> がカードを使い回して入力欄が古いまま残り、次の 1 打鍵の
+                //   commit() がコピー結果を上書きして消す。表示条件は見た目の話ではない
+                {move || {
+                    let rows = menus.get();
+                    (!rows.is_empty())
+                        .then(|| {
+                            view! {
+                                <section class="menu-copy" data-testid="menu-copy">
+                                    <h3 class="menu-copy-label">"前回のメニューから始める"</h3>
+                                    {rows
+                                        .into_iter()
+                                        .map(|r| {
+                                            let from = r.date;
+                                            view! {
+                                                <button
+                                                    class="menu-cand"
+                                                    data-testid="menu-candidate"
+                                                    on:click=move |_| copy_menu(from)
+                                                >
+                                                    <span class="cand-head">
+                                                        <b>{fmt_date(r.date)}</b>
+                                                        <i>{r.groups}</i>
+                                                    </span>
+                                                    <span class="cand-names">{r.names}</span>
+                                                </button>
+                                            }
+                                        })
+                                        .collect::<Vec<_>>()}
+                                </section>
+                            }
+                        })
+                }}
 
-            // ★ 空の日にしか出さない。カードが 1 枚でもある状態でコピーすると
-            //   <For> がカードを使い回して入力欄が古いまま残り、次の 1 打鍵の
-            //   commit() がコピー結果を上書きして消す。表示条件は見た目の話ではない
-            {move || {
-                let rows = menus.get();
-                (!rows.is_empty())
-                    .then(|| {
-                        view! {
-                            <section class="menu-copy" data-testid="menu-copy">
-                                <h2 class="menu-copy-label">"前回のメニューから始める"</h2>
-                                {rows
-                                    .into_iter()
-                                    .map(|r| {
-                                        let from = r.date;
-                                        view! {
-                                            <button
-                                                class="menu-cand"
-                                                data-testid="menu-candidate"
-                                                on:click=move |_| copy_menu(from)
-                                            >
-                                                <span class="cand-head">
-                                                    <b>{fmt_date(r.date)}</b>
-                                                    <i>{r.groups}</i>
-                                                </span>
-                                                <span class="cand-names">{r.names}</span>
-                                            </button>
-                                        }
-                                    })
-                                    .collect::<Vec<_>>()}
-                            </section>
-                        }
-                    })
-            }}
+                <div class="add-wrap">
+                    <button
+                        class="primary"
+                        data-testid="add-exercise"
+                        on:click=move |_| sheet.set(true)
+                    >
+                        "種目を追加"
+                    </button>
+                </div>
 
-            <div class="add-wrap">
-                <button
-                    class="primary"
-                    data-testid="add-exercise"
-                    on:click=move |_| sheet.set(true)
+                <Sheet
+                    open=sheet
+                    on_close=Callback::new(move |_| sheet.set(false))
+                    title="種目を追加".to_string()
+                    testid="add-sheet"
+                    close_testid="add-sheet-close"
                 >
-                    "種目を追加"
-                </button>
-            </div>
-
-            <Sheet
-                open=sheet
-                on_close=Callback::new(move |_| sheet.set(false))
-                title="種目を追加".to_string()
-                testid="add-sheet"
-                close_testid="add-sheet-close"
-            >
-                {move || {
-                    db.with(|d| {
-                        let mut groups = d.groups.clone();
-                        groups.sort_by_key(|g| g.order);
-                        groups
-                            .into_iter()
-                            .map(|g| {
-                                let mut exercises: Vec<_> = d
-                                    .exercises
-                                    .iter()
-                                    .filter(|e| e.group_id == g.id && !e.archived)
-                                    .cloned()
-                                    .collect();
-                                exercises.sort_by_key(|e| e.order);
-                                view! {
-                                    <section class="sheet-group">
-                                        <h3 style=format!("--dot:{}", g.color)>{g.name}</h3>
-                                        <div class="pick-list">
-                                            {exercises
-                                                .into_iter()
-                                                .map(|e| {
-                                                    let id = e.id;
-                                                    view! {
-                                                        <button
-                                                            class="pick"
-                                                            // ★ 追跡する（`with_untracked` にしない）。
-                                                            //   シートは常時マウントなので、開いた瞬間に
-                                                            //   作り直されることを当てにできない
-                                                            class:added=move || {
-                                                                cards.with(|cs| cs.iter().any(|c| c.ex == id))
-                                                            }
-                                                            data-testid="pick-exercise"
-                                                            on:click=move |_| pick(id)
-                                                        >
-                                                            {e.name}
-                                                        </button>
-                                                    }
-                                                })
-                                                .collect::<Vec<_>>()}
-                                        </div>
-                                    </section>
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                }}
-            </Sheet>
-        </section>
-    }
+                    {move || {
+                        db.with(|d| {
+                            let mut groups = d.groups.clone();
+                            groups.sort_by_key(|g| g.order);
+                            groups
+                                .into_iter()
+                                .map(|g| {
+                                    let mut exercises: Vec<_> = d
+                                        .exercises
+                                        .iter()
+                                        .filter(|e| e.group_id == g.id && !e.archived)
+                                        .cloned()
+                                        .collect();
+                                    exercises.sort_by_key(|e| e.order);
+                                    view! {
+                                        <section class="sheet-group">
+                                            <h3 style=format!("--dot:{}", g.color)>{g.name}</h3>
+                                            <div class="pick-list">
+                                                {exercises
+                                                    .into_iter()
+                                                    .map(|e| {
+                                                        let id = e.id;
+                                                        view! {
+                                                            <button
+                                                                class="pick"
+                                                                // ★ 追跡する（`with_untracked` にしない）。
+                                                                //   シートは常時マウントなので、開いた瞬間に
+                                                                //   作り直されることを当てにできない
+                                                                class:added=move || {
+                                                                    cards.with(|cs| cs.iter().any(|c| c.ex == id))
+                                                                }
+                                                                data-testid="pick-exercise"
+                                                                on:click=move |_| pick(id)
+                                                            >
+                                                                {e.name}
+                                                            </button>
+                                                        }
+                                                    })
+                                                    .collect::<Vec<_>>()}
+                                            </div>
+                                        </section>
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    }}
+                </Sheet>
+            </section>
+        }
 }
 
 /// 体重・体調メモの折りたたみ 1 行。
@@ -798,7 +801,8 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
             //   （カードの右端は「行の ✕ → + セット → sticky の種目を追加」が並ぶ列なので、
             //   そこには置かない。詳細は ADR-0043）
             <header class="card-head">
-                <h2 data-testid="card-name">{move || name.get()}</h2>
+                // 選択日（h2）の下にぶら下がる種目なので h3
+                <h3 data-testid="card-name">{move || name.get()}</h3>
                 <span class="group-name">{move || group_name.get()}</span>
             </header>
 

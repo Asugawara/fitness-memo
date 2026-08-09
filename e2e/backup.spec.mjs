@@ -231,3 +231,130 @@ test('保存できなくなったら黙って動き続けず警告を出す', as
 
   await expect(page.getByTestId('restore-notice')).toContainText('保存できていません');
 });
+
+// ── 見えることの検証（[ADR-0047]）─────────────────────────────────────────
+//
+// ★ 「コピー」がダークで読めなかった原因は色の付け忘れではなく、`color-scheme` を
+//   宣言していないこと。`button { color: inherit }` が UA の文字色だけ上書きし、
+//   UA が描く背景はライトのまま取り残されて、コントラストが約 1.02:1 になっていた。
+//   トークン値はベタ書きせずコントラスト比で見るので、ライト / ダーク両方で成立する。
+
+/** `rgb(r, g, b)` / `rgba(...)` を [r,g,b] にする。 */
+function parseRgb(value) {
+  const nums = value.match(/[\d.]+/g);
+  return nums ? nums.slice(0, 3).map(Number) : null;
+}
+
+/** WCAG の相対輝度。 */
+function luminance([r, g, b]) {
+  const lin = [r, g, b].map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+}
+
+/**
+ * 要素の文字色と**実効**背景色のコントラスト比。
+ *
+ * ★ 背景が透明なら祖先を辿る。クラスを外して UA 既定へ戻すと backgroundColor は
+ *   `rgba(0, 0, 0, 0)` を返すので、辿らないと body の色を拾って**通ってしまう**。
+ */
+async function contrastRatio(locator) {
+  const pair = await locator.evaluate((el) => {
+    const color = getComputedStyle(el).color;
+    let node = el;
+    while (node) {
+      const bg = getComputedStyle(node).backgroundColor;
+      if (bg && bg !== 'transparent' && !/rgba\(0, 0, 0, 0\)/.test(bg)) {
+        return { color, background: bg };
+      }
+      node = node.parentElement;
+    }
+    return { color, background: 'rgb(255, 255, 255)' };
+  });
+  const fg = luminance(parseRgb(pair.color));
+  const bg = luminance(parseRgb(pair.background));
+  const [hi, lo] = fg > bg ? [fg, bg] : [bg, fg];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+for (const scheme of ['dark', 'light']) {
+  test(`${scheme} でシート内のボタンの文字が背景から読める`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await openSheet(page);
+    await expandDetails(page);
+
+    // 書き出しの救済経路。ここが読めないと、いちばん困っているときに押せない
+    expect(
+      await contrastRatio(page.getByTestId('backup-copy')),
+      `${scheme} で「コピー」が背景に埋もれている`,
+    ).toBeGreaterThanOrEqual(4.5);
+
+    await page.getByTestId('backup-pane-import').click();
+    await expandDetails(page);
+    expect(
+      await contrastRatio(page.getByTestId('backup-paste-load')),
+      `${scheme} で「読み込む」が背景に埋もれている`,
+    ).toBeGreaterThanOrEqual(4.5);
+  });
+}
+
+test('シートの中にクラスなしの button を作らない', async ({ page }) => {
+  // ★ 退行の固定。UA 既定の chrome に任せた瞬間にダークで消え、44px も割る。
+  //   色ではなく構造で見るので、どのテーマで回しても落ちる
+  await openSheet(page);
+  await expandDetails(page);
+  await expect(page.locator('[data-testid=backup-sheet] button:not([class])')).toHaveCount(0);
+
+  await page.getByTestId('backup-pane-import').click();
+  await expandDetails(page);
+  await expect(page.locator('[data-testid=backup-sheet] button:not([class])')).toHaveCount(0);
+});
+
+// ★ 上の 2 本は .secondary が自前で背景を持つので、`color-scheme` を消しても通る。
+//   宣言が守っているのは**自前で色を持てないもの** — input[type=file] の
+//   「ファイルを選択」と select のネイティブピッカー。そこは getComputedStyle で
+//   覗けないので、宣言そのものと、素の <button> を代理にした効果を別々に見る。
+test('color-scheme を宣言している', async ({ page }) => {
+  await page.goto('./');
+  const declared = await page.evaluate(
+    () => getComputedStyle(document.documentElement).colorScheme,
+  );
+  expect(declared, 'ライトとダークの両方を宣言していない').toContain('dark');
+  expect(declared).toContain('light');
+});
+
+test('UA が描くコントロールがテーマに追従する', async ({ page, browserName }) => {
+  // ★ Chromium 限定。WebKit のネイティブ form control は自前のテーマが描くので
+  //   getComputedStyle に出ない（ダークでも backgroundColor は rgb(255,255,255) を
+  //   返す）。宣言そのものは上の 1 本が全エンジンで見ている。
+  test.skip(browserName !== 'chromium', 'WebKit / Firefox は UA 描画が computed style に出ない');
+  await page.goto('./');
+
+  const uaBackground = async (scheme) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    return page.evaluate(() => {
+      const probe = document.createElement('button');
+      document.body.appendChild(probe);
+      const bg = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return bg;
+    });
+  };
+
+  const dark = luminance(parseRgb(await uaBackground('dark')));
+  const light = luminance(parseRgb(await uaBackground('light')));
+  expect(dark, 'ダークで UA 既定の背景がライトのまま取り残されている').toBeLessThan(light);
+});
+
+test('シート内のボタンは 44px のタップ標的を持つ', async ({ page }) => {
+  await openSheet(page);
+  await expandDetails(page);
+
+  for (const id of ['backup-export', 'backup-copy']) {
+    const box = await page.getByTestId(id).boundingBox();
+    expect(box, `${id} が描画されていない`).not.toBeNull();
+    expect(box.height, `${id} のタップ標的が 44px 未満`).toBeGreaterThanOrEqual(44);
+  }
+});

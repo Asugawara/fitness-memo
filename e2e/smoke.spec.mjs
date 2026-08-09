@@ -713,36 +713,51 @@ test('カードが増えても「種目を追加」が常に画面内にあり�
   await expect(page.getByTestId('add-sheet')).toBeVisible();
 });
 
-test('中身のあるセットの削除は確認を挟み、「やめる」で残る', async ({ page }) => {
+// ★ 中身の有無で分岐しない（[ADR-0046]）。消えるのは 1 行で打ち直しは数秒、対して
+//   確認は 1 種目 3〜5 行 × 打ち間違いの消し直しのぶんだけ踏むことになる
+test('中身のあるセットも確認を挟まず 1 タップで消える', async ({ page }) => {
   const card = await addExercise(page, 'ベンチプレス');
   const row0 = card.getByTestId('set-row').nth(0);
   await row0.getByTestId('set-weight').fill('60');
   await row0.getByTestId('set-reps').fill('10');
-
-  await row0.getByTestId('remove-set').click();
-  await expect(page.getByTestId('remove-set-confirm')).toBeVisible();
-  // 確認中は行がまだ生きている
   await expect(card.getByTestId('today-metric')).toHaveText('600');
 
-  await page.getByTestId('remove-set-no').click();
-  await expect(page.getByTestId('remove-set-confirm')).toHaveCount(0);
-  await expect(row0.getByTestId('set-weight')).toHaveValue('60');
-
-  await row0.getByTestId('remove-set').click();
-  await page.getByTestId('remove-set-yes').click();
-  await expect(card.getByTestId('today-metric')).toHaveText('0');
-});
-
-test('空のセット行は確認なしで消える（消えるものが無いため）', async ({ page }) => {
-  const card = await addExercise(page, 'ベンチプレス');
-  await card.getByTestId('set-reps').first().fill('10');
   await card.getByTestId('add-set').click();
-  await expect(card.getByTestId('set-row')).toHaveCount(2);
+  await card.getByTestId('set-row').nth(1).getByTestId('set-reps').fill('8');
+  await expect(card.getByTestId('today-metric')).toHaveText('1,080');
 
-  // 2 行目は重量プリフィルのみで回数が空 = 中身なし扱い
+  // 1 タップで消え、確認は一度も出ない
   await card.getByTestId('set-row').nth(1).getByTestId('remove-set').click();
   await expect(page.getByTestId('remove-set-confirm')).toHaveCount(0);
   await expect(card.getByTestId('set-row')).toHaveCount(1);
+  await expect(card.getByTestId('today-metric')).toHaveText('600');
+});
+
+test('最後の 1 行を消しても入力欄は空行として残る', async ({ page }) => {
+  // ★ 行が 0 本になるとカードから入力欄ごと消えて、打ち直す先が無くなる
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-weight').first().fill('60');
+  await card.getByTestId('set-reps').first().fill('10');
+  await expect(card.getByTestId('today-metric')).toHaveText('600');
+
+  await card.getByTestId('set-row').first().getByTestId('remove-set').click();
+  await expect(card.getByTestId('set-row')).toHaveCount(1);
+  await expect(card.getByTestId('set-weight').first()).toHaveValue('');
+  await expect(card.getByTestId('set-reps').first()).toHaveValue('');
+  await expect(card.getByTestId('today-metric')).toHaveText('0');
+});
+
+test('セット削除の確認 UI はどこにも生えない', async ({ page }) => {
+  // ★ 退行の固定。確認を戻すならこのテストを消す判断を通すこと
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-weight').first().fill('60');
+  await card.getByTestId('set-reps').first().fill('10');
+
+  await card.getByTestId('set-row').first().getByTestId('remove-set').click();
+  await expect(page.getByTestId('remove-set-confirm')).toHaveCount(0);
+  await expect(page.getByTestId('remove-set-yes')).toHaveCount(0);
+  await expect(page.getByTestId('remove-set-no')).toHaveCount(0);
+  await expect(page.locator('.row-confirm')).toHaveCount(0);
 });
 
 test('「この日から外す」はフッタにあり、セットがあれば確認を経由する', async ({ page }) => {

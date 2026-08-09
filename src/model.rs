@@ -228,10 +228,26 @@ pub struct Exercise {
     pub archived: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+/// 1 セット。重量 × 回数と、そのセットのメモ。
+///
+/// ★ **`Copy` は付けられない**（`note: String` を持つ）。外しても壊れた箇所は無かった —
+/// 参照する側は全て `&SetEntry` か `Vec<SetEntry>` の move / clone を通っている。
+///
+/// ★ `PartialEq` にメモが入ったので、**「同じセットか」の判定に `==` を使ってはいけない**。
+/// 重量と回数だけを見る [`crate::core::same_sets`] を通すこと。`==` のままだと
+/// 「セットは同じでメモだけ違う」が食い違い扱いになり、取り込みで黙って捨てられる。
+///
+/// ★ `skip_serializing_if` は容量と互換の両方のため。空メモを毎セット書くと
+/// 1 セット ≈ 25 → 35 bytes（+40%）で adr/storage/localstorage-single-key-json.md の
+/// 見積りに直接効く。書かなければメモを使っていない利用者の JSON は**今までとバイト単位で
+/// 同一**で、`e2e/calendar.spec.mjs` などの `toEqual([{weight, reps}])` が
+/// 「保存形式は変わっていない」ことを主張し続ける。
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct SetEntry {
     pub weight: f32,
     pub reps: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -244,8 +260,30 @@ pub struct ExerciseLog {
     /// 日付キーから出すので（adr/data-model/elapsed-in-local-calendar-days.md）`at` を書いても日付が嘘になることはないが、
     /// 過去日に `at = now` を入れると「その日に実施した時刻」として存在しない値が
     /// 残り、同じ暦日の中の時刻表記が捏造される。記録は起きたとおりに持つ。
+    ///
+    /// ★ メモだけを書いたログには**押さない**。メモを書くのはトレーニングではないので、
+    /// セットが 1 本も無いログに時刻が入ると「その日に実施した」証拠を持ってしまう。
     #[serde(default)]
     pub at: Option<i64>,
+    /// **その日のその種目**のメモ（adr/data-model/notes-on-logs-and-sets.md）。
+    ///
+    /// ★ 種目マスタ（[`Exercise`]）には置かない。種目側に置くと毎日同じ注記が出て
+    /// 「今日そこがどうだったか」が書けない。[`Session::note`]（その日の体調）とも別で、
+    /// こちらは種目に閉じる。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+}
+
+impl ExerciseLog {
+    /// セットもメモも無い = 保存する価値がない。
+    ///
+    /// ★ 「セットが無い」ではない。セットを 1 本も入れずに「肩が痛いので今日はやめた」と
+    /// 書いた状態を消してはいけない（[`Session::is_empty`] が体重・体調メモだけの日を
+    /// 残しているのと同じ理由）。**「トレした日か」の判定はこれではなく
+    /// [`Session::is_trained`]** で、そちらはセットしか見ない。
+    pub fn is_empty(&self) -> bool {
+        self.sets.is_empty() && self.note.trim().is_empty()
+    }
 }
 
 /// 1 日分の記録。**1 日 = 1 セッション、1 日 1 種目 1 ログ。**
@@ -269,6 +307,11 @@ impl Session {
     }
 
     /// カレンダーの「実施日」判定。セット付きのログが 1 つでもあるか。
+    ///
+    /// ★ **メモだけのログは実施日にしない。** メモはトレーニングをした証拠ではないので、
+    /// ドット・月フッタ・グラフ・経過日数・「前回」はどれもこの式（セットだけを見る）を
+    /// 通す。[`ExerciseLog::is_empty`] と混同しないこと — あちらは「保存する価値が
+    /// あるか」で、メモだけのログは**保存はするが実施日にはしない**。
     pub fn is_trained(&self) -> bool {
         self.logs.iter().any(|l| !l.sets.is_empty())
     }
@@ -422,5 +465,92 @@ mod tests {
             let id: G = ids.alloc();
             assert!(seen.insert(id), "重複した ID: {id}");
         }
+    }
+
+    // ── メモ（adr/data-model/notes-on-logs-and-sets.md）────────────────────────
+
+    fn log_of(sets: Vec<SetEntry>, note: &str) -> ExerciseLog {
+        ExerciseLog {
+            exercise_id: E::from_bits(1),
+            sets,
+            at: None,
+            note: note.to_string(),
+        }
+    }
+
+    #[test]
+    fn set_entry_omits_an_empty_note_from_its_json() {
+        // ★ バイト一致で見る。ここが崩れるとメモを使っていない利用者の保存データが
+        //   変わり、e2e の `toEqual([{weight, reps}])` 3 箇所が落ちる
+        let set = SetEntry {
+            weight: 60.0,
+            reps: 10,
+            note: String::new(),
+        };
+        assert_eq!(
+            serde_json::to_string(&set).expect("直列化できる"),
+            r#"{"weight":60.0,"reps":10}"#
+        );
+    }
+
+    #[test]
+    fn set_entry_reads_json_written_before_notes_existed() {
+        let set: SetEntry =
+            serde_json::from_str(r#"{"weight":60.0,"reps":10}"#).expect("メモ以前の形も読める");
+        assert_eq!(set.weight, 60.0);
+        assert_eq!(set.reps, 10);
+        assert_eq!(set.note, "");
+    }
+
+    #[test]
+    fn exercise_log_omits_an_empty_note_from_its_json() {
+        let json = serde_json::to_string(&log_of(Vec::new(), "")).expect("直列化できる");
+        assert!(!json.contains("note"), "空メモが出ている: {json}");
+    }
+
+    #[test]
+    fn exercise_log_reads_json_written_before_notes_existed() {
+        let log: ExerciseLog = serde_json::from_str(r#"{"exercise_id":"000000000001","sets":[]}"#)
+            .expect("メモも at も無い形が読める");
+        assert_eq!(log.note, "");
+        assert_eq!(log.at, None);
+    }
+
+    #[test]
+    fn exercise_log_is_empty_only_without_sets_and_without_a_note() {
+        let set = || {
+            vec![SetEntry {
+                weight: 60.0,
+                reps: 10,
+                note: String::new(),
+            }]
+        };
+        assert!(log_of(Vec::new(), "").is_empty());
+        assert!(!log_of(Vec::new(), "肩が痛い").is_empty());
+        assert!(!log_of(set(), "").is_empty());
+        assert!(!log_of(set(), "肩が痛い").is_empty());
+    }
+
+    #[test]
+    fn exercise_log_with_a_whitespace_only_note_is_empty() {
+        // 空白だけのメモを「ある」とすると、保存の価値が無いログが残り続ける
+        for blank in [" ", "\n", "\t", "　", "  \n "] {
+            assert!(log_of(Vec::new(), blank).is_empty(), "{blank:?}");
+        }
+    }
+
+    #[test]
+    fn a_log_that_only_has_a_note_is_worth_saving_but_is_not_a_trained_day() {
+        // ★ 「保存する価値がある」と「トレした」は別。前者は is_empty、後者は is_trained
+        let session = Session {
+            logs: vec![log_of(Vec::new(), "肩が痛いのでやめた")],
+            body_weight: None,
+            note: String::new(),
+        };
+        assert!(!session.is_empty(), "メモを黙って捨ててはいけない");
+        assert!(
+            !session.is_trained(),
+            "メモだけの日にカレンダーのドットを点けてはいけない"
+        );
     }
 }

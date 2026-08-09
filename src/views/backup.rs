@@ -402,7 +402,14 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                         <details>
                             <summary>"うまくいかないとき"</summary>
                             <div class="sheet-actions">
-                                <button data-testid="backup-copy" on:click=do_copy>
+                                // ★ クラスなしの <button> を作らない（[ADR-0047]）。
+                                //   UA 既定の chrome に任せるとダークで文字が消え、
+                                //   タップ標的も 44px に届かない
+                                <button
+                                    class="secondary"
+                                    data-testid="backup-copy"
+                                    on:click=do_copy
+                                >
                                     "コピー"
                                 </button>
                             </div>
@@ -446,6 +453,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                                         ></textarea>
                                         <div class="sheet-actions">
                                             <button
+                                                class="secondary"
                                                 data-testid="backup-paste-load"
                                                 on:click=move |_| stage(pasted.get_untracked())
                                             >

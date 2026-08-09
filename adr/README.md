@@ -69,11 +69,13 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0023](ux/0023-text-input-not-number.md) | 数値入力に `type="number"` を使わない | 採用 |
 | [0024](ux/0024-calendar-add-from-empty-day.md) | カレンダーの空日からも記録を追加できるようにする | 採用（導線は [0035](ux/0035-record-tab-calendar-with-day-editor.md) で改訂） |
 | [0035](ux/0035-record-tab-calendar-with-day-editor.md) | 記録タブをカレンダー + 選択日エディタの単一画面にする | 採用 |
-| [0036](ux/0036-set-entry-prefill-and-focus.md) | セット追加は直前行の重量をコピーして回数欄へフォーカスする | 採用 |
+| [0036](ux/0036-set-entry-prefill-and-focus.md) | セット追加は直前行の重量をコピーして回数欄へフォーカスする | 採用（削除確認の判定は [0046](ux/0046-set-delete-without-confirmation.md) で改訂） |
 | [0037](ux/0037-copy-whole-day-menu.md) | 1 日分のメニューは候補リストから 1 タップで丸ごとコピーする | 採用 |
 | [0040](ux/0040-install-guide-banner-and-sheet.md) | ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする | 採用 |
 | [0043](ux/0043-destructive-affordance-quiet-at-rest.md) | 破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む） | 採用 |
 | [0044](ux/0044-body-weight-second-axis-always-on.md) | 体重を推移グラフの第2軸に常時重ねる | 採用 |
+| [0046](ux/0046-set-delete-without-confirmation.md) | セット削除は確認を挟まない（カード削除の確認は残す） | 採用 |
+| [0047](ux/0047-declare-color-scheme-for-ua-widgets.md) | `color-scheme` を宣言し、クラスなしの `<button>` を作らない | 採用 |
 
 ### deploy — 配信とブランチ運用
 

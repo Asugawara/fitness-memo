@@ -23,6 +23,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0041](architecture/0041-help-figures-as-included-svg.md) | ヘルプの図を `assets/` の SVG に置き `include_str!` + `inner_html` で挿す | 採用 |
 | [0045](architecture/0045-chart-layout-as-a-testable-module.md) | グラフの座標計算を `chart_layout` に切り出してテスト可能にする | 採用 |
 | [0049](architecture/0049-browser-support-policy.md) | ブラウザサポートは Safari を基準にし、polyfill を入れない | 採用 |
+| [0053](architecture/0053-measure-before-optimizing-and-do-nothing.md) | 読み込みと操作は実測して、何も入れないと決めた | 採用 |
 
 ### data-model — データ構造と不変条件
 

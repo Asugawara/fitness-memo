@@ -16,6 +16,8 @@ iPhone のホーム画面から起動して完全オフラインで動く、個�
 
 スクリーンショットは `trunk build && node scripts/shots.mjs` で撮り直す。端末（iPhone 15 Pro 相当）・standalone 起動・投入する記録を固定してあるので、UI を変えたら 3 枚まとめて同じ条件で更新できる。
 
+アイコン（`assets/icon-master.png`）を差し替えたときは `sh scripts/gen-icons.sh` と `sh scripts/gen-og.sh` を両方回す。後者は SNS のカードに出る OGP 画像（`public/og.png`）で、アイコンを 1200x630 のキャンバスに置いただけのもの。**クローラしか取りに来ないので Service Worker のオフラインシェルからは外してある**（[ADR-0048](adr/seo/0048-crawler-metadata-and-hardcoded-origin.md)）。URL がハッシュ無しの固定名なので、差し替えてリリースしたあとは Facebook の Sharing Debugger と X の Card Validator で再スクレイプさせないと各 SNS には古い絵が出続ける。
+
 ## 主な機能
 
 - **前回の参照とコピー** — 種目ごとに前回のセット数・レップ数・重量を表示する。その日のセットがまだ空のときだけ「前回をコピー」が出て、ワンタップで今日の入力欄にプリフィルできる。

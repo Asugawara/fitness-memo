@@ -85,6 +85,12 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0028](deploy/0028-force-merge-commit-only.md) | マージ方式を merge コミットのみに固定する | 採用 |
 | [0029](deploy/0029-ci-in-pre-commit.md) | CI を `.githooks/pre-commit` で回す | 採用 |
 
+### seo — 検索エンジンと SNS への見え方
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [0048](seo/0048-crawler-metadata-and-hardcoded-origin.md) | クローラ向けメタデータを本番 URL のハードコードで持ち、オフラインシェルから外す | 採用 |
+
 ### process — 進め方
 
 | # | タイトル | 状態 |

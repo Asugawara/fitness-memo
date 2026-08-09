@@ -935,6 +935,58 @@ test('動きを減らす設定ではシートが上下に動かない', async ({
   await expect(sheet).toHaveCSS('translate', 'none');
 });
 
+// ── タブ切替の View Transition（ADR-0051）────────────────────────────────────
+
+// `document.startViewTransition` を包んで、渡された types を記録する。
+// 向きの決定は今回入れたロジックそのものなので、そこだけを直接見る。
+async function recordViewTransitions(page) {
+  await page.addInitScript(() => {
+    window.__vt = [];
+    const orig = document.startViewTransition?.bind(document);
+    if (!orig) return;
+    document.startViewTransition = (opts) => {
+      window.__vt.push(opts?.types?.[0] ?? null);
+      return orig(opts);
+    };
+  });
+  await page.reload();
+  // 実装と同じ判定。types 形が無いブラウザでは遷移そのものを走らせない
+  return page.evaluate(() =>
+    CSS.supports('selector(:active-view-transition-type(forward))'),
+  );
+}
+
+test('タブ切替は並び順どおりの向きで遷移する', async ({ page }) => {
+  const supported = await recordViewTransitions(page);
+  test.skip(!supported, 'このブラウザは View Transition の types 形に未対応');
+
+  // 記録(0) → 種目(2) は前進
+  await page.getByTestId('tab-menu').click();
+  await expect(page.getByTestId('screen-menu')).toBeVisible();
+  // 種目(2) → 推移(1) は後退
+  await page.getByTestId('tab-progress').click();
+  await expect(page.getByTestId('screen-progress')).toBeVisible();
+
+  expect(await page.evaluate(() => window.__vt)).toEqual(['forward', 'backward']);
+});
+
+test('同じタブをもう一度押しても遷移は走らない', async ({ page }) => {
+  const supported = await recordViewTransitions(page);
+  test.skip(!supported, 'このブラウザは View Transition の types 形に未対応');
+
+  await page.getByTestId('tab-menu').click();
+  await expect(page.getByTestId('screen-menu')).toBeVisible();
+  await page.getByTestId('tab-menu').click();
+
+  // 素で set すると同値でも購読者へ通知が飛び、押すたびに画面が丸ごと動く
+  expect(await page.evaluate(() => window.__vt)).toEqual(['forward']);
+});
+
+test('タブバーと通知は root のスナップショットから外れている', async ({ page }) => {
+  // 付け忘れると画面全体と一緒にタブバーまで横へ流れる
+  await expect(page.getByTestId('bottom-tabs')).toHaveCSS('view-transition-name', 'bottom-tabs');
+});
+
 // ── 1 日丸ごとのメニューコピー ──────────────────────────────────────────────
 
 test('空の日にだけ過去メニューの候補が出て、1 タップで種目とセットが丸ごと入る', async ({ page }) => {

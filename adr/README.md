@@ -78,6 +78,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0046](ux/0046-set-delete-without-confirmation.md) | セット削除は確認を挟まない（カード削除の確認は残す） | 採用 |
 | [0047](ux/0047-declare-color-scheme-for-ua-widgets.md) | `color-scheme` を宣言し、クラスなしの `<button>` を作らない | 採用 |
 | [0050](ux/0050-native-dialog-for-sheets.md) | シートをネイティブ `<dialog>` にし、手動の重なり順から降りる | 採用 |
+| [0051](ux/0051-directional-tab-transitions.md) | タブ切替に方向つき View Transition を掛ける | 採用 |
 
 ### deploy — 配信とブランチ運用
 

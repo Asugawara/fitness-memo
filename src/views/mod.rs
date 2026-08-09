@@ -19,6 +19,7 @@ use wasm_bindgen::JsCast;
 use crate::core::Elapsed;
 use crate::model::{Db, SetEntry};
 use crate::storage;
+use crate::view_transition;
 
 use calendar::Calendar;
 use menu::Menu;
@@ -441,6 +442,17 @@ pub enum Tab {
     Menu,
 }
 
+impl Tab {
+    /// タブバーでの並び順。遷移の向きはこれの大小で決める。
+    fn order(self) -> u8 {
+        match self {
+            Tab::Record => 0,
+            Tab::Progress => 1,
+            Tab::Menu => 2,
+        }
+    }
+}
+
 /// 現在のタブ。
 #[derive(Clone, Copy)]
 pub struct TabCtx(pub RwSignal<Tab>);
@@ -453,7 +465,21 @@ impl TabCtx {
     /// 前日に記録される。明示的に選んだ過去日は `resync` が保つ。
     pub fn switch(&self, dates: DateCtx, to: Tab) {
         dates.resync();
-        self.0.set(to);
+
+        // 同じタブなら何もしない。set は同値でも購読者へ通知するので、素で書くと
+        // 押すたびに画面が丸ごとクロスフェードする
+        let from = self.0.get_untracked();
+        if from == to {
+            return;
+        }
+
+        let direction = if to.order() > from.order() {
+            view_transition::Direction::Forward
+        } else {
+            view_transition::Direction::Backward
+        };
+        let tab = self.0;
+        view_transition::run(direction, move || tab.set(to));
     }
 }
 

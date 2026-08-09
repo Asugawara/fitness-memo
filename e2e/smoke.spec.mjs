@@ -1502,6 +1502,67 @@ test('動きを減らす設定ではシートが上下に動かない', async ({
   await expect(sheet).toHaveCSS('translate', 'none');
 });
 
+// ★ 「シートを開くと ✕ に青枠が出る」の退行ガード（adr/ux/native-dialog-for-sheets.md）。
+//   show_modal() の dialog focusing steps は「中の最初のフォーカス可能要素」を選ぶので、
+//   放っておくと sheet-head の唯一のボタン = ✕ が初期フォーカスになる。**WebKit はその
+//   初期フォーカスを :focus-visible にマッチさせる**ため、指でタップして開いただけで
+//   閉じるボタンにリングが出る。利用者からは「何も押していないのに青い印が出る」と見える。
+//
+//   ★ これは **iPhone Safari 固有**（実測: WebKit は matches(':focus-visible') が true、
+//   Chromium は false）。**chromium だけで回しても守れていない**ので、この 3 本は
+//   iPhone 15 Pro プロジェクトでこそ意味がある。
+//
+//   見るのは 2 つ。(a) フォーカスの居場所（Rust 側 = dialog へ引き取れているか）と、
+//   (b) 実際に描かれる outline（CSS 側）。WebKit は今度は <dialog> 自身を
+//   :focus-visible にマッチさせるので、(a) だけでは (b) を担保できない。
+
+test('シートを開いた直後のフォーカスは ✕ ではなくシート自身に載る', async ({ page }) => {
+  await page.getByTestId('add-exercise').click();
+  const sheet = page.getByTestId('add-sheet');
+  await expect(sheet).toBeVisible();
+
+  await expect(sheet).toBeFocused();
+
+  const close = page.getByTestId('add-sheet-close');
+  await expect(close).not.toBeFocused();
+  // 守りたいのは「開いただけで青枠が出ないこと」なので、要件の言葉（outline）でも見る
+  await expect(close).toHaveCSS('outline-style', 'none');
+});
+
+test('シート自身にフォーカスが載ってもリングは描かれない', async ({ page }) => {
+  // ★ キーボード経路で開く。:focus-visible は直前の要素のリング状態を引き継ぐので、
+  //   リングが出る条件はクリック経路よりこちらが厳しい。厳しいほうで測る
+  const add = page.getByTestId('add-exercise');
+  await add.focus();
+  await add.press('Enter');
+  const sheet = page.getByTestId('add-sheet');
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toBeFocused();
+
+  // .sheet は inset: auto 0 0 / width: 100% なので、リングが出ると左右と下は画面端へ落ち、
+  // **上辺だけが横一文字の青線**として残る。<dialog> は操作対象ではないので消してある。
+  // ★ WebKit では実際に :focus-visible がマッチしている（Chromium はしない）。つまり
+  //   このアサーションが実質的に働くのは iPhone 15 Pro プロジェクトのほう
+  await expect(sheet).toHaveCSS('outline-style', 'none');
+});
+
+test('シートに入って最初の Tab で閉じるボタンにリングが戻る', async ({ page, browserName }) => {
+  // ★ WebKit は既定で Tab をボタンに止めない（Safari の「Tab キーでWebページ上の各項目を
+  //   ハイライト」がオフのときの挙動で、Playwright の WebKit もこれに従う）。守りたいのは
+  //   「tabindex="-1" が Tab 順を変えていないこと」なので、Tab がボタンに止まるエンジンで見る
+  test.skip(browserName !== 'chromium', 'WebKit の Tab 移動は full keyboard access 設定に依存する');
+
+  const add = page.getByTestId('add-exercise');
+  await add.focus();
+  await add.press('Enter');
+  await expect(page.getByTestId('add-sheet')).toBeVisible();
+
+  // ★ tabindex="-1" は Tab 順を変えない。初期フォーカスを外した代償として
+  //   「キーボードで閉じるボタンへ行けない」「行っても見えない」が起きていないか
+  await page.keyboard.press('Tab');
+  await expect(page.getByTestId('add-sheet-close')).toBeFocused();
+});
+
 // ── 見出しの階層とフォーカスリング（adr/ux/focus-ring-and-heading-order.md）──
 
 test('記録タブの h1 は 1 個だけで、選択日は h2 にぶら下がる', async ({ page }) => {
@@ -1548,6 +1609,40 @@ test('フォーカスリングが出て、塗りボタンでは地色側で抜�
     return v;
   }, accent);
   expect(ring.color).not.toBe(asRgb);
+});
+
+test('アイコンボタンのリングはグリフ側に出て、44px の標的からはみ出さない', async ({ page }) => {
+  // ★ 入場アニメーション中に測ると箱が下へ translate された状態で返る（背景タップの
+  //   テストと同じ理由）。動きを止めてから測る
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  // ★ キーボード経路で開いてから ✕ へ移す。クリックで開いて focus() を当てると
+  //   :focus-visible にマッチせず（直前の操作がポインタなので）、リングが出ていない状態を
+  //   「消えている」と読み違える。Tab で辿らないのは、WebKit が既定で Tab をボタンに
+  //   止めないため（full keyboard access 設定に依存する。Tab 順自体は別のテストで見る）
+  const add = page.getByTestId('add-exercise');
+  await add.focus();
+  await add.press('Enter');
+  await expect(page.getByTestId('add-sheet')).toBeVisible();
+  const close = page.getByTestId('add-sheet-close');
+  await close.focus();
+
+  const m = await close.evaluate((el) => {
+    const icon = el.querySelector('.icon');
+    const s = getComputedStyle(icon);
+    return {
+      btn: getComputedStyle(el).outlineStyle,
+      style: s.outlineStyle,
+      ring:
+        icon.getBoundingClientRect().height +
+        (parseFloat(s.outlineOffset) + parseFloat(s.outlineWidth)) * 2,
+      btnH: el.getBoundingClientRect().height,
+    };
+  });
+  // 44px の箱に沿わせると外形 52px になり、上辺がシートの角丸の外＝黒幕の上へ出る。
+  // グリフ（20px）基準なら外形 32px で、どの親に入れても標的の内側に収まる
+  expect(m.btn, 'ボタン側のリングは消してある').toBe('none');
+  expect(m.style, 'グリフ側にリングが出ている').toBe('solid');
+  expect(m.ring).toBeLessThanOrEqual(m.btnH - 8);
 });
 
 // ── タブ切替 ────────────────────────────────────────────────────────────────

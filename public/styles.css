@@ -1676,37 +1676,3 @@ html:active-view-transition-type(backward)::view-transition-new(root) {
   padding: 8px 0;
   border-top: 1px solid var(--line);
 }
-
-/* ── 他アプリから取り込む ───────────────────────────────────────────────── */
-
-/* 読み取り済みの入力欄。割り当ての行を見るのに毎回スクロールさせない */
-.json-box.compact {
-  min-height: 72px;
-}
-
-.howto {
-  margin: 6px 0 0;
-  padding-left: 20px;
-  font-size: 13px;
-  line-height: 1.7;
-}
-
-/* 日付が読めなかった分の着地日。★ height を明示するのは .target-select と同じ理由で、
-   WebKit の UA テーマが min-height を無視して 44px に届かないため */
-.date-input {
-  width: 100%;
-  min-height: 44px;
-  height: 44px;
-  margin: 6px 0 0;
-  padding: 0 10px;
-  color: inherit;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  box-sizing: border-box;
-}
-
-/* 割り当て行の中の <select>。行の中で潰れないよう上に余白を持たせる */
-.backup-list .target-select {
-  margin-top: 6px;
-}

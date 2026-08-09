@@ -206,8 +206,9 @@ pub fn copy_day(db: &mut Db, from: NaiveDate, to: NaiveDate, at: Option<i64>) ->
         copied.push(exercise_id);
         // ★ ExerciseLog を clone してはいけない。clone すると元の日の `at` を
         //   引き継ぎ、`at = None` にしたい過去日バックフィルに古い epoch が入る。
-        //   すると elapsed_matching が Exact を返し、「14日3時間」のような
-        //   捏造された精度が表示される（ADR-0006 が防いでいるのはこれ）
+        //   日数表示は日付キーから出るので日付が嘘になることはもう無いが（ADR-0054）、
+        //   「その日に実施した時刻」として存在しない値が残り、同じ暦日にコピーしたときの
+        //   時刻粒度が捏造される。記録の正直さは表示の都合とは別に守る（ADR-0006）
         session.logs.push(ExerciseLog {
             exercise_id,
             sets,
@@ -412,18 +413,59 @@ pub fn weight_band(lo_v: f64, hi_v: f64) -> (f64, f64) {
 
 // ── 経過時間 ────────────────────────────────────────────────────────────────
 
+/// 最後のトレーニングからの間隔。
+///
+/// ★ **日数はローカル暦の日差**であって「経過ミリ秒 / 24h」ではない。後者はトレした
+///   時刻の 24 時間後に繰り上がるローリング日数で、8/8 20:00 の記録が 8/9 08:00 に
+///   「今日」と出る（実際に出ていた。朝トレなら繰り上がりが UTC 深夜に来るので
+///   「アプリが UTC で計っている」ように見える）。`ms` を private にしてあるのは
+///   **この導出を型で書けなくする**ため。日数を読む経路は `days()` だけにする。
+///   ADR-0054 参照。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Elapsed {
-    /// 当日入力された `at` がある場合の経過ミリ秒
-    Exact(i64),
-    /// 過去日バックフィル（`at` が全て `None`）の場合の経過日数
-    Days(i64),
+pub struct Elapsed {
+    /// `today - 日付キー`。常に 0 以上
+    days: i64,
+    /// 当日入力の `at` があるときだけの経過ミリ秒。**日数の導出には使わない**
+    /// （`days == 0` のときの時刻粒度表示のためだけに持つ）。常に 0 以上
+    ms: Option<i64>,
 }
 
-/// `keep` に合致するログを持つ最新セッション（`today` 以前）から経過時間を出す。
+impl Elapsed {
+    /// **唯一の生成口。** 日数と時刻粒度を 1 箇所で同時に導出することで、
+    /// 「片方だけ渡して食い違わせる」余地を残さない。
+    pub fn since(today: NaiveDate, date: NaiveDate, last_at: Option<i64>, now_ms: i64) -> Self {
+        Self {
+            days: (today - date).num_days().max(0),
+            ms: last_at.map(|at| (now_ms - at).max(0)),
+        }
+    }
+
+    /// ローカル暦の日差。**画面が日数を出す唯一の経路。**
+    pub fn days(self) -> i64 {
+        self.days
+    }
+
+    #[cfg(test)]
+    fn days_only(days: i64) -> Self {
+        Self {
+            days: days.max(0),
+            ms: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_ms(days: i64, ms: i64) -> Self {
+        Self {
+            days: days.max(0),
+            ms: Some(ms.max(0)),
+        }
+    }
+}
+
+/// `keep` に合致するログを持つ最新セッション（`today` 以前）から間隔を出す。
 ///
-/// そのセッションのログに `Some(at)` があれば `Exact(now_ms - max(at))`、
-/// なければ `Days(today - 日付キー)`。
+/// 日数は必ず日付キーから出す。`now_ms` は**日数の計算には使われず**、そのセッションに
+/// `Some(at)` があるときの時刻粒度（同じ暦日の中でだけ表示に出る）にしか効かない。
 fn elapsed_matching(
     db: &Db,
     now_ms: i64,
@@ -450,10 +492,8 @@ fn elapsed_matching(
             if !trained {
                 return None;
             }
-            Some(match last_at {
-                Some(at) => Elapsed::Exact((now_ms - at).max(0)),
-                None => Elapsed::Days((today - date).num_days().max(0)),
-            })
+            // ★ 日数は必ず日付キーから。`at` があっても暦の日差が真実源
+            Some(Elapsed::since(today, date, last_at, now_ms))
         })
 }
 
@@ -476,32 +516,65 @@ pub fn elapsed_by_group(db: &Db, now_ms: i64, today: NaiveDate) -> HashMap<Group
     out
 }
 
-/// `Exact` → 「45分」「5時間」「2日5時間」、`Days` → 「今日 / 昨日 / N日前」。
+/// 日粒度の文言。「今日 / 昨日 / N日前」。
+pub fn humanize_days(days: i64) -> String {
+    match days.max(0) {
+        0 => "今日".to_string(),
+        1 => "昨日".to_string(),
+        n => format!("{n}日前"),
+    }
+}
+
+/// 日を跨いだら日数、同じ暦日なら時刻粒度。
+///
+/// ★ 「2日5時間」形式は廃止した。日数部分が経過ミリ秒 / 24h のローリング日数だったため、
+///   チップ（日粒度）とヒーロー（時刻粒度）が違う日を指すことがあった（ADR-0054）。
 pub fn humanize(e: Elapsed) -> String {
-    match e {
-        Elapsed::Exact(ms) => {
-            let minutes = ms.max(0) / 60_000;
-            if minutes < 1 {
-                return "たった今".to_string();
-            }
-            let hours = minutes / 60;
-            if hours < 1 {
-                return format!("{minutes}分");
-            }
-            let days = hours / 24;
-            if days < 1 {
-                return format!("{hours}時間");
-            }
-            match hours % 24 {
-                0 => format!("{days}日"),
-                rest => format!("{days}日{rest}時間"),
-            }
-        }
-        Elapsed::Days(d) => match d.max(0) {
-            0 => "今日".to_string(),
-            1 => "昨日".to_string(),
-            n => format!("{n}日前"),
-        },
+    if e.days > 0 {
+        return humanize_days(e.days);
+    }
+    // 同じ暦日。`at` があるときだけ時刻粒度まで出せる
+    let Some(ms) = e.ms else {
+        return humanize_days(0);
+    };
+    let minutes = ms / 60_000;
+    if minutes < 1 {
+        return "たった今".to_string();
+    }
+    if minutes < 60 {
+        return format!("{minutes}分");
+    }
+    let hours = minutes / 60;
+    // ★ 同じ暦日なのに 24 時間以上 = `at` と日付キーが矛盾している（壊れたバックアップの
+    //   取り込み、タイムゾーン移動、copy_day の `at` 漏れの退行）。日付キーを勝たせる。
+    //   ここが無いと「336時間」のような表示が出る
+    if hours < 24 {
+        format!("{hours}時間")
+    } else {
+        humanize_days(0)
+    }
+}
+
+/// 部位チップ用の短い表記。"3d" / "今日"
+///
+/// ★ `views` ではなくここに置く。元は `views/mod.rs` にあったが、そこは wasm32 の
+///   cfg gate の内側で `cargo test` が一度も触れず、`ms / 86_400_000` というバグが
+///   誰にも検出されないまま残っていた（ADR-0045 と同じ理由でロジックを core に置く）。
+pub fn short_elapsed(e: Elapsed) -> String {
+    match e.days() {
+        0 => "今日".to_string(),
+        d => format!("{d}d"),
+    }
+}
+
+/// チップの濃淡。**部位カラー × 経過濃淡の二重符号化を避けるため単色系に統一する。**
+pub fn recency_class(e: Option<Elapsed>) -> &'static str {
+    let Some(e) = e else { return "none" };
+    match e.days() {
+        0..=1 => "fresh",
+        2..=3 => "recent",
+        4..=6 => "stale",
+        _ => "old",
     }
 }
 
@@ -1626,7 +1699,8 @@ mod tests {
         copy_day(&mut db, d(2026, 8, 1), d(2026, 8, 6), None);
 
         let elapsed = elapsed_since_last(&db, now, d(2026, 8, 8)).expect("記録がある");
-        assert_eq!(elapsed, Elapsed::Days(2), "日付キーだけで測る");
+        assert_eq!(elapsed, Elapsed::days_only(2), "日付キーだけで測る");
+        assert_eq!(humanize(elapsed), "2日前");
     }
 
     #[test]
@@ -2074,7 +2148,7 @@ mod tests {
     // ── 経過時間 ────────────────────────────────────────────────────────────
 
     #[test]
-    fn elapsed_since_last_takes_the_exact_branch_when_at_is_some() {
+    fn elapsed_since_last_keeps_the_at_but_reports_calendar_days() {
         let mut db = test_db();
         let at = 1_800_000_000_000;
         put(
@@ -2085,19 +2159,19 @@ mod tests {
 
         let now = at + 2 * DAY_MS + 5 * HOUR_MS;
         let e = elapsed_since_last(&db, now, d(2026, 8, 8)).expect("記録がある");
-        assert_eq!(e, Elapsed::Exact(2 * DAY_MS + 5 * HOUR_MS));
-        assert_eq!(humanize(e), "2日5時間");
+        assert_eq!(e, Elapsed::with_ms(2, 2 * DAY_MS + 5 * HOUR_MS));
+        assert_eq!(e.days(), 2, "日数は日付キーから出す");
+        assert_eq!(humanize(e), "2日前");
     }
 
     #[test]
-    fn elapsed_since_last_takes_the_days_branch_when_every_at_is_none() {
+    fn elapsed_since_last_works_without_any_at() {
         let mut db = test_db();
         // 8/8 に 8/7 分をバックフィルした状態（at は入らない）
         put(&mut db, d(2026, 8, 7), vec![log(10, &[(60.0, 10)], None)]);
 
         let e = elapsed_since_last(&db, 1_800_000_000_000, d(2026, 8, 8)).expect("記録がある");
-        assert_eq!(e, Elapsed::Days(1));
-        // ★ ここが at: Option の要。now を入れていたら「たった今」になってしまう
+        assert_eq!(e, Elapsed::days_only(1));
         assert_eq!(humanize(e), "昨日");
     }
 
@@ -2115,7 +2189,9 @@ mod tests {
         );
 
         let e = elapsed_since_last(&db, at + 3 * HOUR_MS, d(2026, 8, 8)).expect("記録がある");
-        assert_eq!(e, Elapsed::Exact(3 * HOUR_MS));
+        assert_eq!(e, Elapsed::with_ms(0, 3 * HOUR_MS));
+        // 同じ暦日なので時刻粒度まで出る
+        assert_eq!(humanize(e), "3時間");
     }
 
     #[test]
@@ -2133,7 +2209,8 @@ mod tests {
         );
 
         let e = elapsed_since_last(&db, last + 30 * 60_000, d(2026, 8, 8)).expect("記録がある");
-        assert_eq!(e, Elapsed::Exact(30 * 60_000));
+        assert_eq!(e, Elapsed::with_ms(0, 30 * 60_000));
+        assert_eq!(humanize(e), "30分");
     }
 
     #[test]
@@ -2152,7 +2229,7 @@ mod tests {
         put(&mut db, d(2026, 8, 20), vec![log(10, &[(60.0, 10)], None)]); // 未来日
 
         let e = elapsed_since_last(&db, 1_800_000_000_000, d(2026, 8, 8)).expect("8/3 がある");
-        assert_eq!(e, Elapsed::Days(5));
+        assert_eq!(e, Elapsed::days_only(5));
 
         assert_eq!(
             elapsed_since_last(&test_db(), 1_800_000_000_000, d(2026, 8, 8)),
@@ -2175,46 +2252,149 @@ mod tests {
 
         assert_eq!(
             by_group.get(&g(1)),
-            Some(&Elapsed::Exact(2 * DAY_MS + 5 * HOUR_MS))
+            Some(&Elapsed::with_ms(2, 2 * DAY_MS + 5 * HOUR_MS))
         );
-        assert_eq!(by_group.get(&g(2)), Some(&Elapsed::Days(7)));
+        assert_eq!(by_group.get(&g(2)), Some(&Elapsed::days_only(7)));
         // 種目が無い部位・未実施の部位はキーごと出ない（画面が「—」を出す）
         assert_eq!(by_group.get(&g(3)), None);
         assert_eq!(by_group.len(), 2);
+    }
+
+    // ★ 以下 4 本は「経過日数はローカル暦の日差であって経過ミリ秒 / 24h ではない」ことを
+    //   固定する。旧実装は `Exact(ms)` しか持たず、日数が必要な views 側が
+    //   `ms / 86_400_000` を書いていたため、繰り上がりが暦の 0 時ではなくトレーニング
+    //   時刻の 24 時間後に起きていた（ADR-0054）。
+    //
+    //   旧テストがこれを捕まえられなかったのは、8/6 → 8/8 という「暦の日差 2」と
+    //   「ms / 86_400_000 = 2」が偶然一致する組み合わせしか使っていなかったから。
+    //   日を跨ぐのに 24 時間未満、というケースを必ず含めること。
+
+    #[test]
+    fn elapsed_reports_calendar_days_even_when_at_is_within_24_hours() {
+        let mut db = test_db();
+        let at = 1_800_000_000_000; // 8/8 20:00 のつもり
+        put(
+            &mut db,
+            d(2026, 8, 8),
+            vec![log(10, &[(60.0, 10)], Some(at))],
+        );
+
+        // 翌朝に見る。経過は 12 時間だが暦では 1 日
+        let e = elapsed_since_last(&db, at + 12 * HOUR_MS, d(2026, 8, 9)).expect("記録がある");
+        assert_eq!(e.days(), 1, "24 時間で割ったローリング日数にしない");
+        assert_eq!(humanize(e), "昨日");
+        assert_eq!(short_elapsed(e), "1d");
+        assert_eq!(recency_class(Some(e)), "fresh");
+    }
+
+    #[test]
+    fn elapsed_reports_yesterday_right_after_midnight() {
+        let mut db = test_db();
+        let at = 1_800_000_000_000; // 8/8 23:50 のつもり
+        put(
+            &mut db,
+            d(2026, 8, 8),
+            vec![log(10, &[(60.0, 10)], Some(at))],
+        );
+
+        // 経過 30 分でも日を跨いでいれば「昨日」。暦日セマンティクスの対称コスト
+        let e = elapsed_since_last(&db, at + 30 * 60_000, d(2026, 8, 9)).expect("記録がある");
+        assert_eq!(humanize(e), "昨日");
+    }
+
+    #[test]
+    fn elapsed_by_group_reports_calendar_days_for_at_bearing_logs() {
+        let mut db = test_db();
+        let at = 1_800_000_000_000;
+        put(
+            &mut db,
+            d(2026, 8, 8),
+            vec![log(10, &[(60.0, 10)], Some(at))],
+        ); // 胸 = g(1)
+        put(&mut db, d(2026, 8, 6), vec![log(20, &[(0.0, 60)], None)]); // 体幹 = g(2)
+
+        let by_group = elapsed_by_group(&db, at + 12 * HOUR_MS, d(2026, 8, 9));
+        assert_eq!(by_group.get(&g(1)).map(|e| e.days()), Some(1));
+        assert_eq!(by_group.get(&g(2)).map(|e| e.days()), Some(3));
+        assert_eq!(short_elapsed(by_group[&g(1)]), "1d");
+    }
+
+    #[test]
+    fn hero_and_chip_agree_on_the_day_count() {
+        // ヒーロー（humanize）とチップ（short_elapsed）が違う日を指してはいけない
+        for e in [
+            Elapsed::with_ms(1, 12 * HOUR_MS),
+            Elapsed::with_ms(2, 36 * HOUR_MS),
+            Elapsed::days_only(3),
+        ] {
+            let days = e.days();
+            assert_eq!(humanize(e), humanize_days(days));
+            assert_eq!(short_elapsed(e), format!("{days}d"));
+        }
     }
 
     // ── humanize ────────────────────────────────────────────────────────────
 
     #[test]
     fn humanize_covers_every_granularity() {
-        // 分
-        assert_eq!(humanize(Elapsed::Exact(45 * 60_000)), "45分");
-        assert_eq!(humanize(Elapsed::Exact(59 * 60_000 + 59_999)), "59分");
-        // 時間
-        assert_eq!(humanize(Elapsed::Exact(HOUR_MS)), "1時間");
+        // 同じ暦日 = 時刻粒度
+        assert_eq!(humanize(Elapsed::with_ms(0, 45 * 60_000)), "45分");
+        assert_eq!(humanize(Elapsed::with_ms(0, 59 * 60_000 + 59_999)), "59分");
+        assert_eq!(humanize(Elapsed::with_ms(0, HOUR_MS)), "1時間");
         assert_eq!(
-            humanize(Elapsed::Exact(23 * HOUR_MS + 59 * 60_000)),
+            humanize(Elapsed::with_ms(0, 23 * HOUR_MS + 59 * 60_000)),
             "23時間"
         );
-        // 日 + 時間
+        // at を持たない当日の記録（取り込んだデータ）は日粒度に落ちる
+        assert_eq!(humanize(Elapsed::days_only(0)), "今日");
+
+        // ★ 日を跨いだら必ず日粒度。「2日5時間」形式は廃止した
+        assert_eq!(humanize(Elapsed::with_ms(1, 12 * HOUR_MS)), "昨日");
         assert_eq!(
-            humanize(Elapsed::Exact(2 * DAY_MS + 5 * HOUR_MS)),
-            "2日5時間"
+            humanize(Elapsed::with_ms(2, 2 * DAY_MS + 5 * HOUR_MS)),
+            "2日前"
         );
-        assert_eq!(humanize(Elapsed::Exact(2 * DAY_MS)), "2日");
-        // 日粒度
-        assert_eq!(humanize(Elapsed::Days(0)), "今日");
-        assert_eq!(humanize(Elapsed::Days(1)), "昨日");
-        assert_eq!(humanize(Elapsed::Days(5)), "5日前");
+        assert_eq!(humanize(Elapsed::with_ms(2, 2 * DAY_MS)), "2日前");
+        assert_eq!(humanize(Elapsed::days_only(1)), "昨日");
+        assert_eq!(humanize(Elapsed::days_only(5)), "5日前");
     }
 
     #[test]
     fn humanize_clamps_negatives_and_sub_minute() {
-        assert_eq!(humanize(Elapsed::Exact(0)), "たった今");
-        assert_eq!(humanize(Elapsed::Exact(30_000)), "たった今");
+        assert_eq!(humanize(Elapsed::with_ms(0, 0)), "たった今");
+        assert_eq!(humanize(Elapsed::with_ms(0, 30_000)), "たった今");
         // 端末時計のズレでも壊れた表示にしない
-        assert_eq!(humanize(Elapsed::Exact(-5000)), "たった今");
-        assert_eq!(humanize(Elapsed::Days(-1)), "今日");
+        assert_eq!(humanize(Elapsed::with_ms(0, -5000)), "たった今");
+        assert_eq!(humanize(Elapsed::with_ms(-1, 5_000)), "たった今");
+        assert_eq!(humanize(Elapsed::days_only(-1)), "今日");
+    }
+
+    #[test]
+    fn humanize_falls_back_to_the_date_key_when_at_contradicts_it() {
+        // 同じ暦日なのに 2 週間分の経過 = 壊れたデータ。「336時間」を出さず日付キーを勝たせる
+        assert_eq!(humanize(Elapsed::with_ms(0, 14 * DAY_MS)), "今日");
+    }
+
+    #[test]
+    fn short_elapsed_and_recency_use_calendar_days() {
+        assert_eq!(short_elapsed(Elapsed::days_only(0)), "今日");
+        assert_eq!(short_elapsed(Elapsed::with_ms(1, 12 * HOUR_MS)), "1d");
+        assert_eq!(short_elapsed(Elapsed::days_only(10)), "10d");
+
+        assert_eq!(recency_class(None), "none");
+        assert_eq!(recency_class(Some(Elapsed::days_only(0))), "fresh");
+        assert_eq!(
+            recency_class(Some(Elapsed::with_ms(1, 12 * HOUR_MS))),
+            "fresh"
+        );
+        assert_eq!(
+            recency_class(Some(Elapsed::with_ms(2, 36 * HOUR_MS))),
+            "recent"
+        );
+        assert_eq!(recency_class(Some(Elapsed::days_only(3))), "recent");
+        assert_eq!(recency_class(Some(Elapsed::days_only(4))), "stale");
+        assert_eq!(recency_class(Some(Elapsed::days_only(6))), "stale");
+        assert_eq!(recency_class(Some(Elapsed::days_only(7))), "old");
     }
 
     // ── migrate ─────────────────────────────────────────────────────────────

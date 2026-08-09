@@ -71,6 +71,10 @@ async function flushToStorage(page) {
  *
  * `exerciseName` / `sets` は省略できる。`bodyWeight` だけ渡すと「計量しただけの日」
  * になる（体重は毎日、トレーニングは週数回、という実際の使い方を再現するため）。
+ *
+ * `atHour` / `atMinute` を渡すと「その日のその時刻に当日入力した」状態になる（`at` より
+ * 優先）。★ 日付キーと同じ日の時刻でないと意味のないデータになるので、生の epoch を渡す
+ * `at` ではなくこちらを使うこと。
  */
 async function seedPastLogs(page, entries) {
   await flushToStorage(page);
@@ -89,13 +93,23 @@ async function seedPastLogs(page, entries) {
       return `${y}-${m}-${day}`;
     };
 
-    for (const { daysAgo, exerciseName, sets, at = null, bodyWeight } of entries) {
+    // dateKey と同じ日のローカル hh:mm の epoch。dateKey と同じくブラウザの TZ で
+    // 計算されるので Local::now() と必ず揃う
+    const atOnDay = (daysAgo, hour, minute) => {
+      const d = new Date();
+      d.setDate(d.getDate() - daysAgo);
+      d.setHours(hour, minute, 0, 0);
+      return d.getTime();
+    };
+
+    for (const { daysAgo, exerciseName, sets, at = null, atHour, atMinute = 0, bodyWeight } of entries) {
       const key = dateKey(daysAgo);
+      const stamp = atHour === undefined ? at : atOnDay(daysAgo, atHour, atMinute);
       const session = db.sessions[key] ?? { logs: [], body_weight: null, note: '' };
       if (exerciseName !== undefined) {
         const ex = db.exercises.find((e) => e.name === exerciseName);
         if (!ex) throw new Error(`preset exercise not found: ${exerciseName}`);
-        session.logs.push({ exercise_id: ex.id, sets, at });
+        session.logs.push({ exercise_id: ex.id, sets, at: stamp });
       }
       if (bodyWeight !== undefined) session.body_weight = bodyWeight;
       db.sessions[key] = session;
@@ -152,13 +166,62 @@ test('3. hidden への visibilitychange を発火してからリロードして�
 });
 
 test('4. 前日にバックフィルした記録があると、経過表示が「昨日」になる', async ({ page }) => {
-  // at: null（バックフィル済み）で注入する。これが at: Some(now) だと
-  // 「たった今」になってしまい、要件「最後のトレーニングから」の出力が嘘になる
+  // at: null（バックフィル済み）で注入する。時刻を持たない記録でも日付キーから
+  // 日数が出ることの検証（4d が「at があっても日付キーが勝つ」側を見る）
   await seedPastLogs(page, [
     { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
   ]);
 
   await expect(page.getByTestId('elapsed')).toHaveText('昨日');
+});
+
+// ★ 4b〜4d は「経過日数はローカル暦の日差であって経過ミリ秒 / 24h ではない」ことを固定する。
+//   以前は views 側が Exact(ms) を 86_400_000 で割っていたため、繰り上がりが JST の 0 時では
+//   なくトレーニング時刻の 24 時間後に起きていた（朝トレなら UTC 深夜に日付が変わって見える）。
+//   4 と 7 が at: null のバックフィルしか作っていなかったのが、この穴を通した理由。
+
+test('4b. 昨夜 20:00 の記録を翌朝 8:00 に開くと「昨日」（経過 12 時間を「今日」にしない）', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }], atHour: 20 },
+  ]);
+
+  // 端末時計を「今日の 8:00」に固定する。経過 12 時間・暦では 1 日
+  const morning = new Date();
+  morning.setHours(8, 0, 0, 0);
+  await page.clock.install({ time: morning });
+  await page.reload();
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+
+  await expect(page.getByTestId('elapsed')).toHaveText('昨日');
+  const chest = page.getByTestId('group-chip').filter({ hasText: '胸' });
+  await expect(chest).toContainText('1d');
+  await expect(chest).toHaveAttribute('data-recency', 'fresh');
+});
+
+test('4c. 2 日前の夜の記録は「2日前」/「2d」で、チップの濃淡が recent に落ちる', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 2, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }], atHour: 20 },
+  ]);
+
+  const morning = new Date();
+  morning.setHours(8, 0, 0, 0);
+  await page.clock.install({ time: morning });
+  await page.reload();
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+
+  await expect(page.getByTestId('elapsed')).toHaveText('2日前');
+  const chest = page.getByTestId('group-chip').filter({ hasText: '胸' });
+  await expect(chest).toContainText('2d');
+  await expect(chest).toHaveAttribute('data-recency', 'recent');
+});
+
+test('4d. 日付キーが at に勝つ（at に now が漏れていても「昨日」のまま）', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 1, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }], at: Date.now() },
+  ]);
+
+  await expect(page.getByTestId('elapsed')).toHaveText('昨日');
+  await expect(page.getByTestId('group-chip').filter({ hasText: '胸' })).toContainText('1d');
 });
 
 test('5. セットが空のときだけ「前回をコピー」が出て、押すと前日のセットがプリフィルされる', async ({ page }) => {

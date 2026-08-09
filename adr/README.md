@@ -38,6 +38,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0037](data-model/0037-random-ids-for-safe-merge.md) | ID を 60 bit 乱数にし、プリセットには固定 ID を与える | 採用 |
 | [0033](data-model/0033-metric-is-a-view-setting.md) | 指標を種目の属性ではなくグラフの表示設定にする | 採用 |
 | [0054](data-model/0054-elapsed-in-local-calendar-days.md) | 経過日数をローカル暦の日差にし、時刻粒度を同じ日の中だけに閉じる | 採用 |
+| [0056](data-model/0056-text-import-is-merge-only.md) | テキスト取り込みは「足すだけ」に固定し、部位を増やさず `at` を書かない | 採用 |
 
 ### storage — 永続化
 
@@ -82,6 +83,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0050](ux/0050-native-dialog-for-sheets.md) | シートをネイティブ `<dialog>` にし、手動の重なり順から降りる | 採用 |
 | [0051](ux/0051-directional-tab-transitions.md) | タブ切替に方向つき View Transition を掛ける | 採用 |
 | [0052](ux/0052-focus-ring-and-heading-order.md) | フォーカスリングを明示し、記録タブの見出しを 1 本の階層にする | 採用 |
+| [0055](ux/0055-migrate-by-ocr-paste.md) | 他アプリからの移行はスクショの文字起こしを貼り付けて受ける | 採用 |
 
 ### deploy — 配信とブランチ運用
 

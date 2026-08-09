@@ -358,3 +358,106 @@ test('シート内のボタンは 44px のタップ標的を持つ', async ({ pa
     expect(box.height, `${id} のタップ標的が 44px 未満`).toBeGreaterThanOrEqual(44);
   }
 });
+
+// ── 他アプリから取り込む ────────────────────────────────────────────────────
+//
+// ★ ここで検証できるのは「読み取り結果の見せ方」と「取り込み後の DB」だけ。
+//   実際に iOS のテキスト認識が何を返すかは実機でしか分からない。
+//   書式ごとの読み分けは Rust 側（src/import_text.rs）のテストが持つ。
+
+/** 「他アプリから」ペインを開いてテキストを読み取らせる。 */
+async function readText(page, text) {
+  await page.getByTestId('backup-pane-text').click();
+  await page.getByTestId('text-import-input').fill(text);
+  await page.getByTestId('text-import-read').click();
+}
+
+test('スクショから起こしたテキストを読み取って足すだけで取り込める', async ({ page }) => {
+  await openSheet(page);
+  await readText(
+    page,
+    ['2026年8月7日(木)', 'ベンチプレス', '1 60kg × 10', '2 60kg × 8', '★★★ おつかれさま！'].join(
+      '\n',
+    ),
+  );
+
+  await expect(page.getByTestId('text-import-summary')).toContainText('種目 1');
+  await expect(page.getByTestId('text-import-summary')).toContainText('2 セット');
+  // 既存のプリセットに当たった種目は部位を選ばせない
+  await expect(page.getByTestId('text-import-rows')).toContainText('→ ベンチプレス');
+  // ★ 読み取れなかった行を黙って捨てない
+  await expect(page.getByTestId('text-import-ignored')).toContainText('おつかれさま');
+
+  await page.getByTestId('text-import-confirm').click();
+
+  // ★ テキスト由来では「置き換える」を出さない
+  await expect(page.getByTestId('backup-confirm')).toBeVisible();
+  await expect(page.getByTestId('backup-mode-replace')).toHaveCount(0);
+
+  await page.getByTestId('backup-apply').click();
+  await expect(page.getByTestId('backup-note')).toContainText('追加しました');
+
+  const saved = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
+  const bench = saved.exercises.find((e) => e.name === 'ベンチプレス').id;
+  const logs = saved.sessions['2026-08-07'].logs;
+  expect(logs).toHaveLength(1);
+  expect(logs[0].exercise_id, '既存のベンチプレスに繋がっていない').toBe(bench);
+  expect(logs[0].sets).toEqual([
+    { weight: 60, reps: 10 },
+    { weight: 60, reps: 8 },
+  ]);
+  // ★ 過去日のバックフィルなので時刻を持たない（ADR-0006）
+  expect(logs[0].at).toBeNull();
+  // 種目は 1 つも増えていない
+  expect(saved.exercises).toHaveLength(28);
+});
+
+test('知らない種目は部位を選ぶまで取り込まない', async ({ page }) => {
+  await openSheet(page);
+  await readText(page, ['2026/8/7', 'ヒップスラスト', '100kg x 10'].join('\n'));
+
+  await expect(page.getByTestId('text-import-rows')).toContainText('ヒップスラスト');
+
+  // 部位を選ばないまま進めると、取り込むものが無いと言われる
+  await page.getByTestId('text-import-confirm').click();
+  await expect(page.getByTestId('backup-note')).toContainText('部位を選ぶと取り込まれます');
+  await expect(page.getByTestId('backup-confirm')).toHaveCount(0);
+
+  await page.getByTestId('text-import-assign').selectOption({ label: '脚' });
+  await page.getByTestId('text-import-confirm').click();
+  await page.getByTestId('backup-apply').click();
+
+  const saved = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
+  const added = saved.exercises.find((e) => e.name === 'ヒップスラスト');
+  expect(added, '選んだ種目が作られていない').toBeTruthy();
+  expect(added.group_id).toBe(saved.groups.find((g) => g.name === '脚').id);
+  expect(saved.sessions['2026-08-07'].logs[0].exercise_id).toBe(added.id);
+});
+
+test('日付が読めない分は選んだ日に載る', async ({ page }) => {
+  await openSheet(page);
+  await readText(page, ['ベンチプレス', '60kg x 10'].join('\n'));
+
+  const picker = page.getByTestId('text-import-date');
+  await expect(picker).toBeVisible();
+  await picker.fill('2026-07-15');
+  await page.getByTestId('text-import-confirm').click();
+  await page.getByTestId('backup-apply').click();
+
+  const saved = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
+  expect(Object.keys(saved.sessions)).toContain('2026-07-15');
+});
+
+test('同じテキストを 2 回取り込んでもセットは増えない', async ({ page }) => {
+  await openSheet(page);
+  const text = ['2026/8/7', 'スクワット', '80kg x 10', '80kg x 8'].join('\n');
+
+  for (let i = 0; i < 2; i += 1) {
+    await readText(page, text);
+    await page.getByTestId('text-import-confirm').click();
+    await page.getByTestId('backup-apply').click();
+  }
+
+  const saved = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
+  expect(saved.sessions['2026-08-07'].logs[0].sets).toHaveLength(2);
+});

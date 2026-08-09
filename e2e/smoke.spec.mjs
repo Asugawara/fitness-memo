@@ -1058,18 +1058,59 @@ test('フォーカスリングが出て、塗りボタンでは地色側で抜�
 test('同じタブをもう一度押しても、確定前の入力が消えない', async ({ page }) => {
   await addExercise(page, 'ベンチプレス');
 
-  // 保存は 400ms debounce なので、打った直後の "62." はまだ signal の上にだけ在る
+  // ★ 回数は空のまま置く。commit() は parse_reps が通らない行を落とすので、この "62." は
+  //   Db に一度も載らず DayEditor のローカル signal の上にしか無い（いちばん脆い状態）
   await page.getByTestId('set-weight').first().fill('62.');
   await blurActive(page);
 
   await page.getByTestId('tab-record').click();
 
+  // ★ ガードを外すと DayEditor が Db から作り直され、載っていないカードごと消える。
+  //   「値が違う」ではなく「要素が無い」として出るので、先に枚数を見て失敗を読めるようにする
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
   await expect(page.getByTestId('set-weight').first()).toHaveValue('62.');
 });
 
-test('タブ切替に View Transition の痕跡が残っていない', async ({ page }) => {
-  // 撤去し損ねると 0.2s の横スライドが戻る
-  await expect(page.getByTestId('bottom-tabs')).toHaveCSS('view-transition-name', 'none');
+// ★ `view-transition-name` の値では見ない。`none` はこのプロパティの初期値なので、
+//   何も宣言しなければ常に `none` を返す＝**失敗しえないテストになる**（一度書いて気づいた）。
+//   おまけに見る向きが逆で、`view-transition-name: bottom-tabs` は「タブバーを root の
+//   スナップショットから外す」ための宣言だった。演出側だけが戻るとタブバーごと横に流れるのに、
+//   その形では緑のまま通ってしまう。演出が走るかは startViewTransition の呼び出しでしか分からない。
+test('タブを切り替えても View Transition は走らない', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__vt = 0;
+    const orig = document.startViewTransition?.bind(document);
+    if (orig) {
+      document.startViewTransition = (opts) => {
+        window.__vt++;
+        return orig(opts);
+      };
+    }
+  });
+  await page.reload();
+
+  await page.getByTestId('tab-menu').click();
+  await expect(page.getByTestId('screen-menu')).toBeVisible();
+  await page.getByTestId('tab-progress').click();
+  await expect(page.getByTestId('screen-progress')).toBeVisible();
+
+  expect(await page.evaluate(() => window.__vt)).toBe(0);
+
+  // CSS 側も残っていないこと。呼び出しだけ戻っても UA 既定のクロスフェードは出るので、
+  // 両側から塞ぐ（tab-slide-* の @keyframes と ::view-transition-* の規則）
+  const vtRules = await page.evaluate(
+    () =>
+      [...document.styleSheets]
+        .flatMap((s) => {
+          try {
+            return [...s.cssRules];
+          } catch {
+            return [];
+          }
+        })
+        .filter((r) => /view-transition|tab-slide/.test(r.cssText)).length,
+  );
+  expect(vtRules).toBe(0);
 });
 
 // ── 1 日丸ごとのメニューコピー ──────────────────────────────────────────────

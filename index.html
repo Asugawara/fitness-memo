@@ -59,6 +59,7 @@
   "name": "fitness-memo",
   "alternateName": "筋トレメモ",
   "url": "https://asugawara.github.io/fitness-memo/",
+  "image": "https://asugawara.github.io/fitness-memo/og.png",
   "description": "オフラインで動く筋トレ記録アプリ。種目ごとの前回のセット数・回数・重量を見返しながら記録する。アカウント登録もサーバ送信もなく、データは端末内だけに保存する。",
   "applicationCategory": "HealthApplication",
   "operatingSystem": "iOS, Android, Web",
@@ -81,16 +82,19 @@
 </head>
 <body>
 <!-- CSR なので配信される HTML の body にはテキストが 1 文字も無い。Googlebot は JS を
-     実行するので通常は問題にならないが、レンダリングが失敗・タイムアウトしたときに
-     素の HTML が完全な空になるのを避ける保険。
+     実行するので通常は問題にならないが、**JS を実行しないクローラ（LLM 系の多くを含む）
+     にとっては、ここがこのサイトの本文そのもの**になる。Googlebot のレンダリングが
+     失敗・タイムアウトしたときの保険でもある。だから断り書きだけでなく機能まで書く。
      ★ scripting が有効な文書では noscript の中身は要素に parse されず、UA スタイルで
        display:none になる。DOM にもレイアウトにも影響しないので、mount_to_body
        （append）と競合しない。静的コンテンツを body に直接置いて JS で消す方式は、
        wasm のロード完了まで実在してレイアウトシフトを起こすので採らない -->
 <noscript>
   <h1>fitness-memo（筋トレメモ）</h1>
-  <p>オフラインで動く筋トレ記録 PWA です。表示には JavaScript と WebAssembly が必要です。</p>
-  <p><a href="https://github.com/Asugawara/fitness-memo">GitHub のリポジトリ</a></p>
+  <p>iPhone のホーム画面から起動して完全オフラインで動く、筋トレ記録の PWA です。「前回何をどれだけやったかを見て、同じかそれ以上をやる」というループだけを最短手数で回すことに絞っています。</p>
+  <p>種目ごとに前回のセット数・回数・重量を表示し、その日のセットが空なら 1 タップでプリフィルできます。胸 / 背中 / 肩 / 腕 / 脚 / 体幹 の 6 部位 28 種目をプリセットとして持ち、部位も種目も追加・改名・並び替え・削除ができます。推移グラフは ボリューム / セット数 / 回数 を切り替えられ、記録した体重を右軸の破線として常に重ねます。</p>
+  <p>アカウント登録もサーバ通信もありません。記録は端末の localStorage にのみ保存し、JSON で書き出し・読み込みできます。</p>
+  <p>表示には JavaScript と WebAssembly が必要です。<a href="https://github.com/Asugawara/fitness-memo">GitHub のリポジトリ</a></p>
 </noscript>
 <script>
 if ('serviceWorker' in navigator) {

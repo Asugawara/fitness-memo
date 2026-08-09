@@ -21,6 +21,9 @@ test('description と canonical と OGP と Twitter Card が揃っている', as
   const description = await metaContent(page, 'meta[name="description"]');
   expect(description).toContain('筋トレ');
   expect(description.length).toBeGreaterThan(50);
+  // 日本語のスニペットはモバイルで全角 50〜60 字ほどで切られる。全部は出ない前提だが、
+  // 冒頭 1 文で「何のアプリか」が完結する長さに収める（上限が無いと際限なく伸びる）
+  expect(description.length).toBeLessThan(120);
 
   // ★ 絶対 URL であることが本題。相対に書き戻すとスクレイパが解決できない
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', SITE);
@@ -38,7 +41,8 @@ test('description と canonical と OGP と Twitter Card が揃っている', as
   expect(ogTitle).toContain('筋トレ');
 
   // og:description は「何のアプリか」ではなく中身を説明する担当（それは og:title が持つ）。
-  // カードは長い説明を途中で切るので、文が途切れない長さに収まっていることを見る
+  // Slack / LINE / Discord / Facebook のカードは長い説明を途中で切るので、文が途切れない
+  // 長さに収まっていることを見る（X は 2023 年以降そもそも説明文を描画しない）
   const ogDescription = await metaContent(page, 'meta[property="og:description"]');
   expect(ogDescription.length).toBeGreaterThan(30);
   expect(ogDescription.length).toBeLessThan(120);

@@ -42,6 +42,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [指標を種目の属性ではなくグラフの表示設定にする](data-model/metric-is-a-view-setting.md) | 採用 |
 | [経過日数をローカル暦の日差にし、時刻粒度を同じ日の中だけに閉じる](data-model/elapsed-in-local-calendar-days.md) | 採用 |
 | [テキスト取り込みは「足すだけ」に固定し、部位を増やさず `at` を書かない](data-model/text-import-is-merge-only.md) | 破棄（[取り込みごと撤去](ux/migrate-by-ocr-paste.md)） |
+| [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](data-model/notes-on-logs-and-sets.md) | 採用 |
 
 ### storage — 永続化
 
@@ -88,6 +89,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [フォーカスリングを明示し、記録タブの見出しを 1 本の階層にする](ux/focus-ring-and-heading-order.md) | 採用 |
 | [他アプリからの移行はスクショの文字起こしを貼り付けて受ける](ux/migrate-by-ocr-paste.md) | 破棄（読み取りが成立せず操作量も見合わないため撤去） |
 | [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](ux/menu-groups-as-single-open-accordion.md) | 採用 |
+| [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](ux/exercise-and-set-notes-behind-one-toggle.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

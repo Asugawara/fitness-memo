@@ -1130,6 +1130,287 @@ test('カード削除の入口は「+ セット」と同じ列に無い', async 
   expect(remove.height).toBeGreaterThanOrEqual(44);
 });
 
+// ── 種目メモ / セットメモ（adr/ux/exercise-and-set-notes-behind-one-toggle.md）──
+//
+// ★ src/lib.rs が views を wasm32 に cfg ゲートしているので `cargo test` はこの経路を
+//   通らない。**E2E がこの決定の唯一のカバレッジ**。
+
+/** メモ欄を開く。トグルなので開閉状態を見てから押す。 */
+async function openNotes(page, card) {
+  await blurActive(page);
+  const toggle = card.getByTestId('note-toggle');
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+}
+
+test('メモは既定で閉じていて、入口 1 つで種目メモと全セットのメモ欄が一斉に開く', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  const rows = card.getByTestId('set-row');
+  await rows.nth(0).getByTestId('set-reps').fill('10');
+  await card.getByTestId('add-set').click();
+  await rows.nth(1).getByTestId('set-reps').fill('8');
+  await blurActive(page);
+
+  // 既定は閉。入力欄はどこにも無い
+  const toggle = card.getByTestId('note-toggle');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(card.getByTestId('exercise-note')).toHaveCount(0);
+  await expect(card.getByTestId('set-note')).toHaveCount(0);
+
+  // 1 タップで種目メモ 1 本 + セット行と同数のメモ欄が出る
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(card.getByTestId('exercise-note')).toHaveCount(1);
+  await expect(card.getByTestId('set-note')).toHaveCount(await rows.count());
+
+  // もう一度押すと畳む
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(card.getByTestId('exercise-note')).toHaveCount(0);
+  await expect(card.getByTestId('set-note')).toHaveCount(0);
+});
+
+test('行ごとのメモのトグルは生えない（入口はカード 1 枚に 1 つ）', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-reps').first().fill('10');
+  await openNotes(page, card);
+
+  await expect(card.getByTestId('note-toggle')).toHaveCount(1);
+  // 行ごとの入口を足すと入口が N 倍になる。要件の退行検知
+  await expect(page.getByTestId('set-note-toggle')).toHaveCount(0);
+});
+
+test('メモは閉じても薄字で残り、リロードしても消えない', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  const rows = card.getByTestId('set-row');
+  await rows.nth(0).getByTestId('set-reps').fill('10');
+  await card.getByTestId('add-set').click();
+  await rows.nth(1).getByTestId('set-reps').fill('8');
+  await openNotes(page, card);
+
+  await card.getByTestId('exercise-note').fill('調子は普通');
+  await rows.nth(1).getByTestId('set-note').fill('3セット目で肩に違和感');
+  await blurActive(page);
+
+  // 閉じても読める
+  await card.getByTestId('note-toggle').click();
+  await expect(card.getByTestId('exercise-note-read')).toHaveText('調子は普通');
+  await expect(card.getByTestId('set-note-read')).toHaveText('3セット目で肩に違和感');
+
+  await flushToStorage(page);
+  await page.reload();
+  const again = page.getByTestId('exercise-card');
+  // ★ リロード後は既定で閉じる（ConditionRow の「値があれば開く」を継がない）
+  await expect(again.getByTestId('set-note')).toHaveCount(0);
+  await expect(again.getByTestId('exercise-note-read')).toHaveText('調子は普通');
+  await expect(again.getByTestId('set-note-read')).toHaveText('3セット目で肩に違和感');
+});
+
+test('メモの薄字は opacity ではなく色とサイズで作る', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-reps').first().fill('10');
+  await openNotes(page, card);
+  await card.getByTestId('set-note').first().fill('きつい');
+  await blurActive(page);
+  await card.getByTestId('note-toggle').click();
+
+  // ★ トークン値をベタ書きせず「前回の記録（.last-row）と同じ色か」で見る。
+  //   ライト / ダークどちらでも成立する
+  const style = await card.evaluate((el) => {
+    const read = getComputedStyle(el.querySelector('[data-testid=set-note-read]'));
+    return {
+      opacity: read.opacity,
+      color: read.color,
+      fontSize: read.fontSize,
+      lastRow: getComputedStyle(el.querySelector('.last-row')).color,
+    };
+  });
+  expect(style.opacity, 'opacity で薄さを作ると非テキストの 3:1 を割る').toBe('1');
+  expect(style.color, '前回の記録と同じ --muted であること').toBe(style.lastRow);
+  expect(style.fontSize).toBe('12px');
+});
+
+test('メモの薄字と入力欄は左端がそろう（開閉で文字が横に動かない）', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-reps').first().fill('10');
+  await openNotes(page, card);
+  await card.getByTestId('set-note').first().fill('きつい');
+  await blurActive(page);
+
+  const open = await card.getByTestId('set-note').first().boundingBox();
+  await card.getByTestId('note-toggle').click();
+  const closed = await card.getByTestId('set-note-read').first().boundingBox();
+
+  expect(Math.abs(open.x - closed.x), '開閉で文字の左端が動く').toBeLessThanOrEqual(1);
+});
+
+test('メモの入口はフッタにあり、外す導線とも合計とも重ならない', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-reps').first().fill('10');
+  await blurActive(page);
+
+  // フッタの中にある（ヘッダに戻したら落ちる）
+  await expect(card.locator('.card-foot [data-testid=note-toggle]')).toHaveCount(1);
+  await expect(card.locator('.card-head button')).toHaveCount(0);
+
+  const toggle = await card.getByTestId('note-toggle').boundingBox();
+  const close = await card.getByTestId('close-card').boundingBox();
+  const total = await card.getByTestId('today-metric').boundingBox();
+  expect(toggle.x, '外す導線と横位置が重なっている').toBeGreaterThan(close.x + close.width);
+  expect(toggle.x + toggle.width, '合計と横位置が重なっている').toBeLessThan(total.x);
+
+  // タップ標的は縮めない
+  expect(toggle.height).toBeGreaterThanOrEqual(44);
+  expect(toggle.width).toBeGreaterThanOrEqual(44);
+});
+
+test('メモを開いてもトグルがあった座標に破壊的操作が来ない', async ({ page }) => {
+  // フッタが下がることを受け入れた代わりに、押した場所に別の（しかも破壊的な）操作が
+  // 滑り込まないことを機械で固定する
+  const card = await addExercise(page, 'ベンチプレス');
+  const rows = card.getByTestId('set-row');
+  await rows.nth(0).getByTestId('set-reps').fill('10');
+  await card.getByTestId('add-set').click();
+  await rows.nth(1).getByTestId('set-reps').fill('8');
+  await blurActive(page);
+
+  const before = await card.getByTestId('note-toggle').boundingBox();
+  const point = { x: before.x + before.width / 2, y: before.y + before.height / 2 };
+  await card.getByTestId('note-toggle').click();
+
+  const hit = await page.evaluate(
+    ({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-testid]')?.dataset.testid ?? null,
+    point,
+  );
+  expect(['remove-set', 'close-card'], `トグルの座標に ${hit} が来た`).not.toContain(hit);
+});
+
+test('「+ セット」はメモをプリフィルしない（重量だけ引き継ぐ）', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  const rows = card.getByTestId('set-row');
+  await rows.nth(0).getByTestId('set-weight').fill('60');
+  await rows.nth(0).getByTestId('set-reps').fill('10');
+  await openNotes(page, card);
+  await rows.nth(0).getByTestId('set-note').fill('きつい');
+  await blurActive(page);
+
+  await card.getByTestId('add-set').click();
+
+  // 重量は計画値なので引き継ぐ。メモは観測値なので引き継がない
+  await expect(rows.nth(1).getByTestId('set-weight')).toHaveValue('60');
+  await expect(rows.nth(1).getByTestId('set-note')).toHaveValue('');
+});
+
+test('「前回をコピー」は前回のメモを持ち込まない', async ({ page }) => {
+  await seedPastLogs(page, [
+    {
+      daysAgo: 3,
+      exerciseName: 'ベンチプレス',
+      sets: [{ weight: 60, reps: 10, note: '肩に違和感' }],
+    },
+  ]);
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('copy-last').click();
+
+  // セットは複製されるがメモは来ない
+  await expect(card.getByTestId('set-row')).toHaveCount(1);
+  await expect(card.getByTestId('set-weight').first()).toHaveValue('60');
+  await expect(card.getByTestId('set-note-read')).toHaveCount(0);
+  await openNotes(page, card);
+  await expect(card.getByTestId('set-note').first()).toHaveValue('');
+});
+
+test('1 日分のメニューコピーもメモを持ち込まない', async ({ page }) => {
+  await seedPastLogs(page, [
+    {
+      daysAgo: 3,
+      exerciseName: 'ベンチプレス',
+      sets: [{ weight: 60, reps: 10, note: '肩に違和感' }],
+    },
+  ]);
+  await page.getByTestId('menu-candidate').first().click();
+
+  const card = page.getByTestId('exercise-card').first();
+  await expect(card.getByTestId('set-weight').first()).toHaveValue('60');
+  await expect(card.getByTestId('set-note-read')).toHaveCount(0);
+  await expect(card.getByTestId('exercise-note-read')).toHaveCount(0);
+});
+
+test('セットのメモは回数が無ければ保存されず、保存されない旨が行に出る', async ({ page }) => {
+  const card = await addExercise(page, 'ベンチプレス');
+  await openNotes(page, card);
+  await card.getByTestId('set-note').first().fill('メモだけ');
+
+  // 黙って捨てない
+  await expect(card.getByTestId('note-orphan')).toBeVisible();
+
+  // 回数を入れると保存対象になり、警告は消える
+  await card.getByTestId('set-reps').first().fill('10');
+  await expect(card.getByTestId('note-orphan')).toHaveCount(0);
+
+  // 回数を消すと再び出る。その状態でリロードするとメモは残らない
+  await card.getByTestId('set-reps').first().fill('');
+  await expect(card.getByTestId('note-orphan')).toBeVisible();
+  await blurActive(page);
+  await flushToStorage(page);
+  await page.reload();
+  await expect(page.getByTestId('set-note-read')).toHaveCount(0);
+});
+
+test('種目メモだけの種目もカードとして残り、外すときは確認を経由する', async ({ page }) => {
+  // ★ core::dedupe_logs のフィルタが `!sets.is_empty()` に戻ったらここで落ちる。
+  //   画面に出ているメモが次回起動で消える退行を捕まえる唯一の網
+  const card = await addExercise(page, 'ベンチプレス');
+  await openNotes(page, card);
+  await card.getByTestId('exercise-note').fill('肩が痛いのでやめた');
+  await blurActive(page);
+
+  await flushToStorage(page);
+  await page.reload();
+
+  const again = page.getByTestId('exercise-card');
+  await expect(again).toHaveCount(1);
+  await expect(again.getByTestId('exercise-note-read')).toHaveText('肩が痛いのでやめた');
+
+  // セットは 1 本も無いが、消えるものはある。確認なしに消してはいけない
+  await again.getByTestId('close-card').click();
+  await expect(again.getByTestId('close-card-warning')).toBeVisible();
+});
+
+test('メモ欄にフォーカスするとタブバーが隠れ、blur で戻る', async ({ page }) => {
+  // kb_focus / kb_blur の付け忘れ検知。メモ欄は IME 付きキーボードが出るので
+  // 付け忘れると実機でタブバーがキーボードの裏に残る
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-reps').first().fill('10');
+  await openNotes(page, card);
+
+  await card.getByTestId('set-note').first().focus();
+  await expect(page.locator('.app')).toHaveClass(/kb-open/);
+
+  await blurActive(page);
+  await expect(page.locator('.app')).not.toHaveClass(/kb-open/);
+
+  // 種目メモも同じ
+  await card.getByTestId('exercise-note').focus();
+  await expect(page.locator('.app')).toHaveClass(/kb-open/);
+  await blurActive(page);
+  await expect(page.locator('.app')).not.toHaveClass(/kb-open/);
+});
+
+test('メモを使っていないデータの保存 JSON に note キーが増えていない', async ({ page }) => {
+  // ★ skip_serializing_if の退行検知。ここが崩れると保存形式が全利用者ぶん変わり、
+  //   calendar.spec.mjs / backup.spec.mjs の toEqual([{weight, reps}]) も落ちる
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('set-weight').first().fill('60');
+  await card.getByTestId('set-reps').first().fill('10');
+  await blurActive(page);
+  await flushToStorage(page);
+
+  const raw = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
+  const session = Object.values(JSON.parse(raw).sessions)[0];
+  expect(session.logs[0].sets).toEqual([{ weight: 60, reps: 10 }]);
+  expect(session.logs[0]).not.toHaveProperty('note');
+});
+
 // 以下2件は計画の12ケースには無い追加の退行テスト。worker-d が実機相当の検証で見つけた
 // バグ（.bottom-tabs / backdrop / .sheet が全て position:fixed なのに z-index を
 // 省いていたため、DOM順で <nav class="bottom-tabs"> が前面に出ていた）の固定用。

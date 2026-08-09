@@ -622,16 +622,16 @@ test('11. 種目タブでの改名・部位変更・新規追加が記録タブ�
   await page.getByTestId('tab-menu').click();
   await page.getByTestId('exercise-name').filter({ hasText: exactText('テスト種目') }).click();
   await page.getByTestId('archive-exercise').click();
-  await expect(page.getByTestId('menu-sheet')).toHaveCount(0);
+  // ★ <dialog> は常時マウントなので消えない。「閉じている」は toBeHidden で見る
+  //   （閉じた dialog は UA の display:none が効く）
+  await expect(page.getByTestId('menu-sheet')).toBeHidden();
 
   await page.getByTestId('tab-record').click();
   await page.getByTestId('add-exercise').click();
   await expect(
     page.getByTestId('add-sheet').getByTestId('pick-exercise').filter({ hasText: exactText('テスト種目') }),
   ).toHaveCount(0);
-  // sheet-backdrop はビューポート全体を覆うが、クリック位置の中心はシート本体の
-  // 裏に隠れて弾かれる。「閉じる」ボタンには testid が無いので role+text で取る
-  await page.getByRole('button', { name: '閉じる' }).click();
+  await page.getByTestId('add-sheet-close').click();
 
   await page.getByTestId('tab-progress').click();
   const archivedOptions = page.getByTestId('target-select').locator('optgroup[label="アーカイブ済み"] option');
@@ -845,9 +845,14 @@ test('カード削除の入口は「+ セット」と同じ列に無い', async 
 });
 
 // 以下2件は計画の12ケースには無い追加の退行テスト。worker-d が実機相当の検証で見つけた
-// バグ（.bottom-tabs / .sheet-backdrop / .sheet が全て position:fixed なのに z-index を
+// バグ（.bottom-tabs / backdrop / .sheet が全て position:fixed なのに z-index を
 // 省いていたため、DOM順で <nav class="bottom-tabs"> が前面に出ていた）の固定用。
 // 目視でしか気づけない類の退行なので、force を付けないクリックで機械的に検出する。
+//
+// ★ ADR-0050 でシートを <dialog> + show_modal() に移したので、2 件とも今は UA が
+//   構造的に保証している（top layer は z-index の外・背景は inert）。それでも残すのは、
+//   「シートの下端が押せること」「シート表示中に裏のタブへ抜けないこと」が要件そのもので、
+//   実装をどう変えても守られるべきだから。手書きの重なり順に戻れば再び落ちる。
 
 test('「種目を追加」シート最下部（体幹の最後の種目）がタブバーに隠れずクリックできる', async ({ page }) => {
   await page.getByTestId('add-exercise').click();
@@ -864,16 +869,170 @@ test('「種目を追加」シート最下部（体幹の最後の種目）が�
   await expect(page.getByTestId('exercise-card')).toHaveCount(1);
 });
 
-test('「種目を追加」シート表示中はバックドロップがタブバーを覆い、誤タップで別タブへ遷移しない', async ({ page }) => {
+test('「種目を追加」シート表示中は背景が inert で、誤タップで別タブへ遷移しない', async ({ page }) => {
   await page.getByTestId('add-exercise').click();
   await expect(page.getByTestId('add-sheet')).toBeVisible();
 
-  // z-index が外れてバックドロップがタブバーを覆えなくなると、この click が素通りして
-  // 推移タブへ遷移してしまう（隠れた種目を狙ったタップが誤タブ遷移になり入力を見失う）
+  // show_modal() で開いた <dialog> の背景は UA が inert にする。ここが効かなくなると
+  // この click が素通りして推移タブへ遷移する（隠れた種目を狙ったタップが誤タブ遷移に
+  // なり入力を見失う）
   await expect(page.getByTestId('tab-progress').click({ timeout: 1000 })).rejects.toThrow();
 
   await expect(page.getByTestId('add-sheet')).toBeVisible();
   await expect(page.getByTestId('screen-progress')).toHaveCount(0);
+});
+
+// ネイティブ <dialog> に移して初めて成立した挙動（ADR-0050）。手書きの
+// <div role="dialog"> では Esc もフォーカス復帰も無かったので、退行したら気づけるようにする。
+
+test('シートは Esc で閉じ、閉じたあとフォーカスが開いたボタンへ戻る', async ({ page }) => {
+  const add = page.getByTestId('add-exercise');
+  // ★ キーボードで開く。WebKit（Safari）はボタンを**クリック**してもフォーカスを
+  //   与えない（実測で activeElement は BODY）ので、click で開くと「戻す先」が
+  //   そもそも存在しない。フォーカス復帰が意味を持つのはキーボード操作の経路なので、
+  //   その経路で検証する
+  await add.focus();
+  await add.press('Enter');
+  await expect(page.getByTestId('add-sheet')).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('add-sheet')).toBeHidden();
+
+  await expect(add).toBeFocused();
+
+  // ★ close request で閉じたときに Rust 側のシグナルが真のまま残ると
+  //   「閉じたのに二度と開かない」になる。開き直せることまで見る
+  await add.click();
+  await expect(page.getByTestId('add-sheet')).toBeVisible();
+});
+
+test('シートは背景タップで閉じ、シートの中を突いても閉じない', async ({ page }) => {
+  // ★ 入場アニメーション（0.22s）の最中に boundingBox を取ると、まだ下へ translate
+  //   された箱が返る（実測: 高さ 720 の画面で y=687 / height=562）。動きを止めて測る
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByTestId('add-exercise').click();
+  const sheet = page.getByTestId('add-sheet');
+  await expect(sheet).toBeVisible();
+
+  const box = await sheet.boundingBox();
+  // 中身（見出し帯）を突く。target が <dialog> 自身にならないので閉じない
+  await page.mouse.click(box.x + box.width / 2, box.y + 8);
+  await expect(sheet).toBeVisible();
+
+  // 箱の外＝::backdrop。ここだけが閉じる
+  await page.mouse.click(box.x + box.width / 2, box.y - 24);
+  await expect(sheet).toBeHidden();
+});
+
+test('動きを減らす設定ではシートが上下に動かない', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByTestId('add-exercise').click();
+  const sheet = page.getByTestId('add-sheet');
+  await expect(sheet).toBeVisible();
+
+  // 既定では translate: 0 0（= "0px"）で下から上がる。reduce では none に倒して
+  // 黒幕のフェードだけ残す
+  await expect(sheet).toHaveCSS('translate', 'none');
+});
+
+// ── 見出しの階層とフォーカスリング（ADR-0052）────────────────────────────────
+
+test('記録タブの h1 は 1 個だけで、選択日は h2 にぶら下がる', async ({ page }) => {
+  // カレンダーの月見出しが h1、選択日が h2、種目カードが h3。
+  // 両方 h1 にすると 1 画面に見出しの階層が 2 本立ち、アウトラインで前後が読めない
+  await expect(page.locator('main h1')).toHaveCount(1);
+  await expect(page.getByTestId('cal-title')).toHaveJSProperty('tagName', 'H1');
+  await expect(page.getByTestId('today-date')).toHaveJSProperty('tagName', 'H2');
+
+  await page.getByTestId('add-exercise').click();
+  await page.getByTestId('pick-exercise').first().click();
+  await expect(page.getByTestId('card-name').first()).toHaveJSProperty('tagName', 'H3');
+});
+
+test('他タブの h1 もそれぞれ 1 個', async ({ page }) => {
+  await page.getByTestId('tab-progress').click();
+  await expect(page.locator('main h1')).toHaveCount(1);
+  await page.getByTestId('tab-menu').click();
+  await expect(page.locator('main h1')).toHaveCount(1);
+});
+
+test('フォーカスリングが出て、塗りボタンでは地色側で抜く', async ({ page }) => {
+  const add = page.getByTestId('add-exercise'); // .primary（--accent のベタ塗り）
+  await add.focus();
+
+  const ring = await add.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { width: s.outlineWidth, style: s.outlineStyle, color: s.outlineColor };
+  });
+  // UA 既定任せにしない。--accent の塗りの上では既定のリングが沈む
+  expect(ring.style).toBe('solid');
+  expect(parseFloat(ring.width)).toBeGreaterThan(0);
+
+  // 塗りと同じ色のリングだと境界が消えるので、--accent-text 側で抜いている
+  const accent = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
+  );
+  const asRgb = await page.evaluate((c) => {
+    const d = document.createElement('div');
+    d.style.color = c;
+    document.body.appendChild(d);
+    const v = getComputedStyle(d).color;
+    d.remove();
+    return v;
+  }, accent);
+  expect(ring.color).not.toBe(asRgb);
+});
+
+// ── タブ切替の View Transition（ADR-0051）────────────────────────────────────
+
+// `document.startViewTransition` を包んで、渡された types を記録する。
+// 向きの決定は今回入れたロジックそのものなので、そこだけを直接見る。
+async function recordViewTransitions(page) {
+  await page.addInitScript(() => {
+    window.__vt = [];
+    const orig = document.startViewTransition?.bind(document);
+    if (!orig) return;
+    document.startViewTransition = (opts) => {
+      window.__vt.push(opts?.types?.[0] ?? null);
+      return orig(opts);
+    };
+  });
+  await page.reload();
+  // 実装と同じ判定。types 形が無いブラウザでは遷移そのものを走らせない
+  return page.evaluate(() =>
+    CSS.supports('selector(:active-view-transition-type(forward))'),
+  );
+}
+
+test('タブ切替は並び順どおりの向きで遷移する', async ({ page }) => {
+  const supported = await recordViewTransitions(page);
+  test.skip(!supported, 'このブラウザは View Transition の types 形に未対応');
+
+  // 記録(0) → 種目(2) は前進
+  await page.getByTestId('tab-menu').click();
+  await expect(page.getByTestId('screen-menu')).toBeVisible();
+  // 種目(2) → 推移(1) は後退
+  await page.getByTestId('tab-progress').click();
+  await expect(page.getByTestId('screen-progress')).toBeVisible();
+
+  expect(await page.evaluate(() => window.__vt)).toEqual(['forward', 'backward']);
+});
+
+test('同じタブをもう一度押しても遷移は走らない', async ({ page }) => {
+  const supported = await recordViewTransitions(page);
+  test.skip(!supported, 'このブラウザは View Transition の types 形に未対応');
+
+  await page.getByTestId('tab-menu').click();
+  await expect(page.getByTestId('screen-menu')).toBeVisible();
+  await page.getByTestId('tab-menu').click();
+
+  // 素で set すると同値でも購読者へ通知が飛び、押すたびに画面が丸ごと動く
+  expect(await page.evaluate(() => window.__vt)).toEqual(['forward']);
+});
+
+test('タブバーと通知は root のスナップショットから外れている', async ({ page }) => {
+  // 付け忘れると画面全体と一緒にタブバーまで横へ流れる
+  await expect(page.getByTestId('bottom-tabs')).toHaveCSS('view-transition-name', 'bottom-tabs');
 });
 
 // ── 1 日丸ごとのメニューコピー ──────────────────────────────────────────────
@@ -955,7 +1114,7 @@ test('コピーできる種目が残っていない日は候補に出ない（�
   await page.getByTestId('tab-menu').click();
   await page.getByTestId('exercise-name').filter({ hasText: exactText('スクワット') }).click();
   await page.getByTestId('archive-exercise').click();
-  await expect(page.getByTestId('menu-sheet')).toHaveCount(0);
+  await expect(page.getByTestId('menu-sheet')).toBeHidden();
 
   await page.getByTestId('tab-record').click();
   await expect(page.getByTestId('menu-copy')).toHaveCount(0);

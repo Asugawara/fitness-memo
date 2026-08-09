@@ -84,6 +84,32 @@ input {
   font-size: 16px;
 }
 
+/* ★ フォーカスリングを明示する。`outline: none` はどこにも書いていないので UA 既定は
+   出るが、既定のリングは「地の色に対して見えること」しか保証しない。このアプリには
+   --accent でベタ塗りしたコントロール（.primary / .opt.on / .seg-btn.active）があり、
+   その上では既定のリングが塗りに沈む。
+
+   :focus ではなく :focus-visible にするのは、指でタップしただけの要素にリングを出さない
+   ため（Safari はボタンをタップしてもフォーカスを与えないが、Chromium は与える）。
+
+   :where() で包んで詳細度を 0 にしてある。個別の上書き（下の 3 つ）が
+   クラス 1 個で勝てるようにするため。 */
+:where(button, a:any-link, input, select, textarea):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 塗りの上ではリングを地色側で抜く。--accent-text は「強い塗りの上に載せる色」として
+   モード間で反転するトークン（.notice のコメントに実測値がある）。
+   offset を負にして塗りの内側へ入れるのは、外側に出すと --accent 同士が接して
+   境界が消えるため */
+.primary:focus-visible,
+.opt.on:focus-visible,
+.seg-btn.active:focus-visible {
+  outline-color: var(--accent-text);
+  outline-offset: -4px;
+}
+
 h1,
 h2,
 h3 {
@@ -105,22 +131,23 @@ h3 {
 
 /* ── ボトムタブ ─────────────────────────────────────────────────────────── */
 
-/* ★ .bottom-tabs / .sheet-backdrop / .sheet は 3 つとも position: fixed。
-   z-index を省くと重なり順が **DOM 順** で決まり、後に来る <nav class="bottom-tabs">
-   がシートより前面に出る。実際にそれで 2 つ壊れていた:
+/* ★ position: fixed / sticky の要素は z-index を省くと重なり順が **DOM 順**で決まる。
+   後に来る <nav class="bottom-tabs"> が前面に出て、実際に 2 つ壊れていた:
    1. シート下端がタブバーに隠れ、「種目を追加」の最後の種目（レッグレイズ）が
       押せない。利用者には「体幹の種目は 3 つしかない」ように見える
-   2. inset:0 の .sheet-backdrop もタブバーを覆えず、シート表示中にタブが押せる。
+   2. inset:0 の backdrop もタブバーを覆えず、シート表示中にタブが押せる。
       隠れた種目を狙ったタップが別タブへの遷移になり、入力を見失う（こちらが重症）
-   タブバーにも明示的に値を置く。シート側だけ正の値にしても直るが、タブバーが auto
-   のままだと将来 fixed 要素を足したときに同じ事故が再発する。
-   （menu.rs のシートはインラインで z-index を持っていたため無事だった = 原因の裏付け）
+
+   シートは ADR-0050 でネイティブ <dialog> + show_modal() に移したので、この綱渡りから
+   降りている。top layer は z-index の外側にあって常に通常フローより前面に出るし、
+   背景は UA が inert にするので 2 の「裏のタブが押せる」も構造的に起きない。
+   残る fixed / sticky にだけ明示的に値を置く。将来また fixed 要素を足すときは、
+   まずこの一覧に並べて順序を決めること。
 
    現在の重なり順:
-     .add-wrap（sticky）   9  … タブバーより下。シート表示中は backdrop に覆われる
+     .add-wrap（sticky）   9  … タブバーより下
      .bottom-tabs         10
-     .sheet-backdrop      19
-     .sheet               20 */
+     .sheet（<dialog>）   top layer … z-index を持たない（持っても効かない） */
 .bottom-tabs {
   position: fixed;
   left: 0;
@@ -153,6 +180,82 @@ h3 {
    入力フォーカス中はタブバーごと隠す。DevTools では再現しない項目。 */
 .kb-open .bottom-tabs {
   display: none;
+}
+
+/* ── タブ切替のトランジション ───────────────────────────────────────────────
+   方向（forward / backward）は `src/view_transition.rs` が `types` で渡し、CSS は
+   `:active-view-transition-type()` で受ける。並びは 記録 → 推移 → 種目。
+
+   ★ タブバーと通知は root のスナップショットから外す。既定では画面全体が 1 枚の
+     `root` として撮られるので、付けないと**タブバーまで一緒に横へ流れる**。
+     名前は前後で 1 個ずつでなければならない（同名が 2 個以上あると遷移が丸ごと
+     無効化され、アニメーション無しで即座に差し替わる）。
+   詳細は ADR-0051 */
+
+.bottom-tabs {
+  view-transition-name: bottom-tabs;
+}
+
+.notice {
+  view-transition-name: notice;
+}
+
+/* ★ animation-* は継承しないので、old / new にも明示する。
+   group だけに置くと中身が UA 既定のクロスフェード時間で動く */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.2s;
+  animation-timing-function: ease-out;
+  animation-fill-mode: both;
+}
+
+/* ★ inset ではなく translate を動かす（レイアウトを起こさない） */
+@keyframes tab-slide-out-left {
+  to {
+    translate: -100% 0;
+  }
+}
+
+@keyframes tab-slide-in-right {
+  from {
+    translate: 100% 0;
+  }
+}
+
+@keyframes tab-slide-out-right {
+  to {
+    translate: 100% 0;
+  }
+}
+
+@keyframes tab-slide-in-left {
+  from {
+    translate: -100% 0;
+  }
+}
+
+html:active-view-transition-type(forward)::view-transition-old(root) {
+  animation-name: tab-slide-out-left;
+}
+
+html:active-view-transition-type(forward)::view-transition-new(root) {
+  animation-name: tab-slide-in-right;
+}
+
+html:active-view-transition-type(backward)::view-transition-old(root) {
+  animation-name: tab-slide-out-right;
+}
+
+html:active-view-transition-type(backward)::view-transition-new(root) {
+  animation-name: tab-slide-in-left;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
 }
 
 /* ── 通知・注意書き ─────────────────────────────────────────────────────── */
@@ -246,11 +349,12 @@ h3 {
   gap: 8px;
 }
 
-.day-head h1 {
+/* h1 ではなく h2。1 画面に載るカレンダーの月見出しが h1 を持つ（ADR-0052） */
+.day-head h2 {
   font-size: 18px;
 }
 
-.day-head.past h1 {
+.day-head.past h2 {
   color: var(--warn);
 }
 
@@ -384,7 +488,7 @@ h3 {
   gap: 8px;
 }
 
-.card-head h2 {
+.card-head h3 {
   flex: 1;
   font-size: 16px;
 }
@@ -603,7 +707,7 @@ h3 {
    探して下スクロールする途中にカードの削除導線があるので、追加しようとして
    削除する事故が起きていた。sticky で常に画面内へ留める。
 
-   z-index はタブバー(10) より下・バックドロップ(19) より下の 9。
+   z-index はタブバー(10) より下の 9。シートは top layer なので勝ち負けの相手にならない。
    （styles.css 冒頭の重なり順コメントを参照。position:fixed / sticky 要素は
    z-index を省くと DOM 順で重なりが決まり、過去に押せない要素を作っている） */
 .add-wrap {
@@ -653,31 +757,89 @@ h3 {
   padding: 0;
 }
 
-/* ── 種目を追加シート ───────────────────────────────────────────────────── */
+/* ── ボトムシート ───────────────────────────────────────────────────────── */
 
-/* .bottom-tabs(10) より前面。シート表示中にタブを押せなくするのが役目 */
-.sheet-backdrop {
+/* ★ ネイティブ <dialog> を show_modal() で開く（ADR-0050）。top layer に載るので
+   z-index は持たない。黒幕は ::backdrop が UA 側で生えるため、かつての
+   <div class="sheet-backdrop"> は不要になった。
+
+   ここは「閉じている状態」の定義も兼ねる。**display は [open] 側にだけ置くこと。**
+   ここに display:flex を書くと UA の `dialog:not([open]) { display: none }` を
+   打ち消してしまい、閉じているはずのシートが出たままになる。 */
+.sheet {
+  /* UA 既定（margin:auto / width:fit-content / max-width / border:2px groove /
+     padding:1em / color:canvastext）を倒して下端に貼る */
   position: fixed;
-  inset: 0;
-  z-index: 19;
-  background: rgba(0, 0, 0, 0.35);
+  inset: auto 0 0;
+  width: 100%;
+  max-width: none;
+  max-height: 78vh;
+  margin: 0;
+  padding: 0 0 env(safe-area-inset-bottom);
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 14px 14px 0 0;
+  background: var(--surface);
+  color: var(--text);
+  /* 退場アニメーション。display と overlay は離散プロパティなので allow-discrete が要る
+     （transition-behavior はショートハンドより後ろに置く）。overlay は Safari / Firefox
+     未対応だが、未知の値として無視されるだけで害はない。Chromium では退出中にシートが
+     top layer から早々に外れてクリップされるのを防ぐ */
+  translate: 0 100%;
+  transition-property: translate, display, overlay;
+  transition-duration: 0.22s;
+  transition-timing-function: ease-out;
+  transition-behavior: allow-discrete;
 }
 
-/* backdrop(19) より前面。ここまで来ればシートがタブバーの上に完全に載るので、
-   padding-bottom は既存の env(safe-area-inset-bottom) だけで足りる */
-.sheet {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 20;
-  max-height: 78vh;
+.sheet[open] {
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border-radius: 14px 14px 0 0;
-  border-top: 1px solid var(--line);
-  padding-bottom: env(safe-area-inset-bottom);
+  translate: 0 0;
+}
+
+/* 入場の開始値。★ .sheet[open] より後ろに置く（同詳細度なのでソース順で決まる） */
+@starting-style {
+  .sheet[open] {
+    translate: 0 100%;
+  }
+}
+
+.sheet::backdrop {
+  background-color: rgba(0, 0, 0, 0);
+  transition-property: background-color, display, overlay;
+  transition-duration: 0.22s;
+  transition-behavior: allow-discrete;
+}
+
+.sheet[open]::backdrop {
+  background-color: rgba(0, 0, 0, 0.35);
+}
+
+@starting-style {
+  .sheet[open]::backdrop {
+    background-color: rgba(0, 0, 0, 0);
+  }
+}
+
+/* ★ 動きを減らす設定では上下動をやめ、黒幕のフェードだけ残す。
+   @starting-style 側も none にしないと入場だけ跳ねる */
+@media (prefers-reduced-motion: reduce) {
+  .sheet,
+  .sheet[open] {
+    translate: none;
+    transition-duration: 0.1s;
+  }
+
+  .sheet::backdrop {
+    transition-duration: 0.1s;
+  }
+
+  @starting-style {
+    .sheet[open] {
+      translate: none;
+    }
+  }
 }
 
 /* 右端の閉じるは .icon-btn（44px 角）なので、縦の余白はボタン自身が持つ。

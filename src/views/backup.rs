@@ -419,7 +419,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                         <details>
                             <summary>"うまくいかないとき"</summary>
                             <div class="sheet-actions">
-                                // ★ クラスなしの <button> を作らない（[ADR-0047]）。
+                                // ★ クラスなしの <button> を作らない（adr/ux/declare-color-scheme-for-ua-widgets.md）。
                                 //   UA 既定の chrome に任せるとダークで文字が消え、
                                 //   タップ標的も 44px に届かない
                                 <button
@@ -571,7 +571,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                     </Show>
 
                     // ── 退避データ ──
-                    // ADR-0012 が「退避データを UI から読む手段がない」と自認していた穴。
+                    // adr/storage/quarantine-on-parse-failure.md が「退避データを UI から読む手段がない」と自認していた穴。
                     // ここが無いと、破損時に退避したデータは iPhone 単体では救出できない
                     <Show when=move || !backups.get().is_empty()>
                         <details data-testid="backup-quarantine">

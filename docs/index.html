@@ -20,12 +20,12 @@
 <link rel="apple-touch-icon" href="./icons/icon-192.png">
 <link rel="manifest" href="./manifest.webmanifest">
 
-<!-- ── クローラ向けメタデータ（ADR-0048）──────────────────────────────────
+<!-- ── クローラ向けメタデータ（adr/seo/crawler-metadata-and-hardcoded-origin.md）──
      ★ canonical / og:url / og:image だけは本番 URL のハードコード。ここを読むのは
        検索エンジンと SNS のスクレイパだけで、どちらも本番しか見に来ない。trunk の
        --public-url が書き換えるのは trunk 自身が生成した行だけなので、置換機構
        （stamp-sw.sh に続く 2 本目）を足すと「置換漏れで壊れる経路」が増える。
-       manifest を相対に統一した ADR-0020 とは対象が違う（あちらはブラウザが
+       manifest を相対に統一した adr/pwa/manifest-relative-urls.md とは対象が違う（あちらはブラウザが
        ローカルでも本番でも読むので、相対でないと両方では成立しない）。
        相対に書き戻すと X / Slack / LINE でカードが出なくなる。
      ★ <title> は fitness-memo のまま。ホーム画面のアイコン下に出る名前を決める
@@ -72,7 +72,58 @@
 </script>
 <!-- ──────────────────────────────────────────────────────────────────── -->
 
-<link rel="stylesheet" href="/fitness-memo/styles-36f8162655f18d31.css" integrity="sha384-bAkO/Kzk8nCcKWiKLP8lr765te5xQTxGns3jSiNZij68vyFy+tAh/xDZf1LxdGlj"/>
+<!-- ────────────────────────────────────────────────────────────────────
+     サードパーティ表記。画面のアイコンは lucide (https://lucide.dev) の SVG で、
+     include_str! で wasm の中に埋め込まれて配信される。リポジトリの
+     assets/icons/LICENSE は data-trunk 宣言に無いので dist/ には入らない
+     （SW のプリキャッシュ一覧を増やさないための意図的な配置。
+     adr/architecture/lucide-icons-as-included-svg.md）。
+     ISC / MIT はどちらも「全ての複製に著作権表示と許諾文を添える」ことを求めるので、
+     配信物に必ず入るここに全文を置く。
+
+     lucide — ISC License
+
+     Copyright (c) 2026 Lucide Icons and Contributors
+
+     Permission to use, copy, modify, and/or distribute this software for any
+     purpose with or without fee is hereby granted, provided that the above
+     copyright notice and this permission notice appear in all copies.
+
+     THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+     WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+     MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+     ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+     WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+     ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+     OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+     収録アイコンのうち chevron-left / chevron-right / x は Feather 由来なので
+     MIT も適用される。
+
+     Feather — The MIT License (MIT)
+
+     Copyright (c) 2013-present Cole Bemis
+
+     Permission is hereby granted, free of charge, to any person obtaining a copy
+     of this software and associated documentation files (the "Software"), to deal
+     in the Software without restriction, including without limitation the rights
+     to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+     copies of the Software, and to permit persons to whom the Software is
+     furnished to do so, subject to the following conditions:
+
+     The above copyright notice and this permission notice shall be included in all
+     copies or substantial portions of the Software.
+
+     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+     IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+     AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+     SOFTWARE.
+     ──────────────────────────────────────────────────────────────────── -->
+
+<link rel="stylesheet" href="/fitness-memo/styles-632054c1e85d94d1.css" integrity="sha384-le8+ak/oVpTqb1S7foe38kJ3ElvF47QuxCrNyOKEmVMDUyyYFTNae0cTY6+Us8jN"/>
 
 
 <!-- og:image の実体。クローラ専用なので stamp-sw.sh が SW のシェルから除外している -->
@@ -80,8 +131,8 @@
 
 
 <script type="module">
-import init, * as bindings from '/fitness-memo/fitness-memo-dc68df06c56be126.js';
-const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-dc68df06c56be126_bg.wasm' });
+import init, * as bindings from '/fitness-memo/fitness-memo-f14eb384984e811f.js';
+const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-f14eb384984e811f_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -90,7 +141,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-<link rel="modulepreload" href="/fitness-memo/fitness-memo-dc68df06c56be126.js" crossorigin="anonymous" integrity="sha384-Ri8gzLVaD7owA1Bxi0OeHM4gj3XqAVGebKou/5a+FH1jWtd7k7UAS+fed/nN/1DJ"><link rel="preload" href="/fitness-memo/fitness-memo-dc68df06c56be126_bg.wasm" crossorigin="anonymous" integrity="sha384-e8iM1yHA8ZjItm3KHoGhpCmto+0xVgmfyE/cV3lqLwpKzZYDvr+NSPl7sYVK6Mm9" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/fitness-memo/fitness-memo-f14eb384984e811f.js" crossorigin="anonymous" integrity="sha384-1LZH+RmtgW7cvqRvYWtHbAIcMh9LW50pQtVTAiBtU110km2TI3VfBy1Dlz99X2e8"><link rel="preload" href="/fitness-memo/fitness-memo-f14eb384984e811f_bg.wasm" crossorigin="anonymous" integrity="sha384-JpBj3fOrFmDT2xMSWkfKJi6GstkbJRJaUycS5RgZzprkxGQn82kWAnwwz+2td56Q" as="fetch" type="application/wasm"></head>
 <body>
 <!-- CSR なので配信される HTML の body にはテキストが 1 文字も無い。Googlebot は JS を
      実行するので通常は問題にならないが、**JS を実行しないクローラ（LLM 系の多くを含む）
@@ -103,7 +154,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 <noscript>
   <h1>fitness-memo（筋トレメモ）</h1>
   <p>iPhone のホーム画面から起動して完全オフラインで動く、筋トレ記録の PWA です。「前回何をどれだけやったかを見て、同じかそれ以上をやる」というループだけを最短手数で回すことに絞っています。</p>
-  <p>種目ごとに前回のセット数・回数・重量を表示し、その日のセットが空なら 1 タップでプリフィルできます。胸 / 背中 / 肩 / 腕 / 脚 / 体幹 の 6 部位 28 種目をプリセットとして持ち、部位も種目も追加・改名・並び替え・削除ができます。推移グラフは ボリューム / セット数 / 回数 を切り替えられ、記録した体重を右軸の破線として常に重ねます。</p>
+  <p>種目ごとに前回のセット数・回数・重量を表示し、その日のセットが空なら 1 タップでプリフィルできます。胸 / 背中 / 肩 / 腕 / 脚 / 体幹 の 6 部位 28 種目をプリセットとして持ち、部位も種目も追加・改名・削除ができます。推移グラフは ボリューム / セット数 / 回数 を切り替えられ、記録した体重を右軸の破線として常に重ねます。</p>
   <p>アカウント登録もサーバ通信もありません。記録は端末の localStorage にのみ保存し、JSON で書き出し・読み込みできます。</p>
   <p>表示には JavaScript と WebAssembly が必要です。<a href="https://github.com/Asugawara/fitness-memo">GitHub のリポジトリ</a></p>
 </noscript>

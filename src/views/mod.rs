@@ -16,7 +16,6 @@ use leptos::prelude::*;
 // シートを閉じたときのフォーカス復帰で Element → HtmlElement に落とすのに使う
 use wasm_bindgen::JsCast;
 
-use crate::core::Elapsed;
 use crate::model::{Db, SetEntry};
 use crate::storage;
 use crate::view_transition;
@@ -227,34 +226,6 @@ pub fn fmt_set(s: &SetEntry) -> String {
         format!("{}×{}", fmt_weight(s.weight), s.reps)
     } else {
         format!("{}", s.reps)
-    }
-}
-
-/// 部位チップ用の短い表記。"3d" / "今日"
-pub fn short_elapsed(e: Elapsed) -> String {
-    let days = match e {
-        Elapsed::Exact(ms) => ms / 86_400_000,
-        Elapsed::Days(d) => d,
-    };
-    if days == 0 {
-        "今日".to_string()
-    } else {
-        format!("{days}d")
-    }
-}
-
-/// チップの濃淡。**部位カラー × 経過濃淡の二重符号化を避けるため単色系に統一する。**
-pub fn recency_class(e: Option<Elapsed>) -> &'static str {
-    let Some(e) = e else { return "none" };
-    let days = match e {
-        Elapsed::Exact(ms) => ms / 86_400_000,
-        Elapsed::Days(d) => d,
-    };
-    match days {
-        0..=1 => "fresh",
-        2..=3 => "recent",
-        4..=6 => "stale",
-        _ => "old",
     }
 }
 

@@ -6,6 +6,7 @@
 
 pub mod chart_layout;
 pub mod core;
+pub mod import_text;
 pub mod model;
 pub mod presets;
 

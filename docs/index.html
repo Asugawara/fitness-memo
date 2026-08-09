@@ -72,7 +72,7 @@
 </script>
 <!-- ──────────────────────────────────────────────────────────────────── -->
 
-<link rel="stylesheet" href="/fitness-memo/styles-6deb80fe8fa25d8e.css" integrity="sha384-ax/92DXR2SweFOILjjrup737MpI6HGcP+pRurQkygk2LmH/cgnssKws+Ep+eRs/N"/>
+<link rel="stylesheet" href="/fitness-memo/styles-36f8162655f18d31.css" integrity="sha384-bAkO/Kzk8nCcKWiKLP8lr765te5xQTxGns3jSiNZij68vyFy+tAh/xDZf1LxdGlj"/>
 
 
 <!-- og:image の実体。クローラ専用なので stamp-sw.sh が SW のシェルから除外している -->
@@ -80,8 +80,8 @@
 
 
 <script type="module">
-import init, * as bindings from '/fitness-memo/fitness-memo-d0dcd1b4cff223af.js';
-const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-d0dcd1b4cff223af_bg.wasm' });
+import init, * as bindings from '/fitness-memo/fitness-memo-dc68df06c56be126.js';
+const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-dc68df06c56be126_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -90,7 +90,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-<link rel="modulepreload" href="/fitness-memo/fitness-memo-d0dcd1b4cff223af.js" crossorigin="anonymous" integrity="sha384-D4o3xnFAYZ8j/v+/dJRDUsgs5zO5PSnGShMD6ou8fDMCW72tvFyBm0XZVckQMdFS"><link rel="preload" href="/fitness-memo/fitness-memo-d0dcd1b4cff223af_bg.wasm" crossorigin="anonymous" integrity="sha384-bmpXK0+r/xfjYgc2qAdpwXZNbM3+cIjAJUw2r9OKnvw5s7pet2fe9Kf1d1SqHwtF" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/fitness-memo/fitness-memo-dc68df06c56be126.js" crossorigin="anonymous" integrity="sha384-Ri8gzLVaD7owA1Bxi0OeHM4gj3XqAVGebKou/5a+FH1jWtd7k7UAS+fed/nN/1DJ"><link rel="preload" href="/fitness-memo/fitness-memo-dc68df06c56be126_bg.wasm" crossorigin="anonymous" integrity="sha384-e8iM1yHA8ZjItm3KHoGhpCmto+0xVgmfyE/cV3lqLwpKzZYDvr+NSPl7sYVK6Mm9" as="fetch" type="application/wasm"></head>
 <body>
 <!-- CSR なので配信される HTML の body にはテキストが 1 文字も無い。Googlebot は JS を
      実行するので通常は問題にならないが、**JS を実行しないクローラ（LLM 系の多くを含む）

@@ -30,13 +30,15 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | # | タイトル | 状態 |
 |---|---|---|
 | [0005](data-model/0005-session-keyed-by-local-date.md) | セッションをローカル日付文字列で BTreeMap に持つ | 採用 |
-| [0006](data-model/0006-at-optional-same-day-only.md) | `at` を `Option<i64>` にし当日入力時のみ埋める | 採用 |
+| [0006](data-model/0006-at-optional-same-day-only.md) | `at` を `Option<i64>` にし当日入力時のみ埋める | 採用（表示規則は [0054](data-model/0054-elapsed-in-local-calendar-days.md) で改訂） |
 | [0007](data-model/0007-exercise-kind-explicit.md) | 指標の種類を種目の明示属性にする（推論しない） | 置換済み → [0033](data-model/0033-metric-is-a-view-setting.md) |
 | [0008](data-model/0008-one-log-per-exercise-per-day.md) | 「1日1種目1ログ」を不変条件にする | 採用 |
 | [0009](data-model/0009-group-metric-is-set-count.md) | 部位別の指標を volume ではなくセット数にする | 置換済み → [0033](data-model/0033-metric-is-a-view-setting.md) |
 | [0010](data-model/0010-sequential-ids-no-uuid.md) | ID を `next_id` の連番にし uuid を使わない | 置換済み → [0037](data-model/0037-random-ids-for-safe-merge.md) |
 | [0037](data-model/0037-random-ids-for-safe-merge.md) | ID を 60 bit 乱数にし、プリセットには固定 ID を与える | 採用 |
 | [0033](data-model/0033-metric-is-a-view-setting.md) | 指標を種目の属性ではなくグラフの表示設定にする | 採用 |
+| [0054](data-model/0054-elapsed-in-local-calendar-days.md) | 経過日数をローカル暦の日差にし、時刻粒度を同じ日の中だけに閉じる | 採用 |
+| [0056](data-model/0056-text-import-is-merge-only.md) | テキスト取り込みは「足すだけ」に固定し、部位を増やさず `at` を書かない | 採用 |
 
 ### storage — 永続化
 
@@ -81,6 +83,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [0050](ux/0050-native-dialog-for-sheets.md) | シートをネイティブ `<dialog>` にし、手動の重なり順から降りる | 採用 |
 | [0051](ux/0051-directional-tab-transitions.md) | タブ切替に方向つき View Transition を掛ける | 採用 |
 | [0052](ux/0052-focus-ring-and-heading-order.md) | フォーカスリングを明示し、記録タブの見出しを 1 本の階層にする | 採用 |
+| [0055](ux/0055-migrate-by-ocr-paste.md) | 他アプリからの移行はスクショの文字起こしを貼り付けて受ける | 採用 |
 
 ### deploy — 配信とブランチ運用
 

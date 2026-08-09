@@ -17,7 +17,7 @@ use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, SetEntry};
 
 use super::{
     Sheet, fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms, parse_reps,
-    parse_weight, recency_class, scroll_to_id, short_elapsed, use_dates, use_db, use_kb,
+    parse_weight, scroll_to_id, use_dates, use_db, use_kb,
 };
 
 /// 選択日に並べているカード 1 枚。
@@ -210,6 +210,10 @@ pub fn DayEditor() -> impl IntoView {
     //   今日のセッションを外した snapshot に core の関数をそのまま当てることで、
     //   1 セット入れた瞬間に「たった今」へ化けて意味を失うのを防ぐ。
     //   Memo なので今日のキー入力では下流が再評価されない。
+    //
+    //   この snapshot は今日のキーを持たないので、見つかるセッションは必ず昨日以前になる。
+    //   つまり `Elapsed::days()` は常に 1 以上で、ヒーローもチップもローカル暦の日数で
+    //   表示される（`humanize` の時刻粒度の分岐はここからは踏まない）。ADR-0054 参照。
     let before_today = Memo::new(move |_| {
         let today = dates.today.get();
         db.with(|d| {
@@ -317,11 +321,12 @@ pub fn DayEditor() -> impl IntoView {
                                 .get()
                                 .into_iter()
                                 .map(|(name, e)| {
-                                    let label = e.map_or_else(|| "—".to_string(), short_elapsed);
+                                    let label = e
+                                        .map_or_else(|| "—".to_string(), core::short_elapsed);
                                     view! {
                                         <span
                                             class="chip"
-                                            data-recency=recency_class(e)
+                                            data-recency=core::recency_class(e)
                                             data-testid="group-chip"
                                         >
                                             <b>{name}</b>
@@ -811,7 +816,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                     None => view! { <span class="muted" data-testid="last-log">"前回 —"</span> }.into_any(),
                     Some((date, log)) => {
                         let days = (dates.selected.get() - date).num_days();
-                        let when = core::humanize(core::Elapsed::Days(days));
+                        let when = core::humanize_days(days);
                         let sets = log.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  ");
                         let metric = fmt_metric(core::log_value(Metric::Volume, &log));
                         view! {

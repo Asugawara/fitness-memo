@@ -90,6 +90,9 @@ input {
 
    :focus ではなく :focus-visible にするのは、指でタップしただけの要素にリングを出さない
    ため（Safari はボタンをタップしてもフォーカスを与えないが、Chromium は与える）。
+   ★ ただし <dialog> の show_modal() だけは例外で、UA が能動的に中の先頭へフォーカスを
+   与える。**WebKit はそれを :focus-visible と判定する**ので、指で開いただけのシートに
+   リングが出ていた（adr/ux/native-dialog-for-sheets.md に実測表がある）。
 
    :where() で包んで詳細度を 0 にしてある。個別の上書き（下の各ブロック）が
    クラス 1 個で勝てるようにするため。
@@ -885,8 +888,9 @@ h3 {
 }
 
 /* ★ views::Sheet が show_modal() の直後に <dialog> 自身へ focus() を当てるので、ここに
-   リングが載りうる（:focus-visible はプログラム的なフォーカス移動のとき「直前の要素が
-   リングを出していたか」を引き継ぐ。移動先を変えるだけではリングは消せない）。
+   リングが載る。**WebKit では実際に載る**（Playwright / iPhone 15 Pro 実測で
+   `.sheet:matches(':focus-visible')` が true。Chromium は false）。フォーカスの移動先を
+   変えるだけでは「✕ の青枠」が「シート上辺の青線」に化けるだけなので、CSS 側が対で要る。
 
    消す理由は 2 つ。
    1. <dialog> は操作するものではない。リングが出ても「どこを押せるか」を何も伝えない

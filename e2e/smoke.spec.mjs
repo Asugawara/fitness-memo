@@ -1504,13 +1504,17 @@ test('動きを減らす設定ではシートが上下に動かない', async ({
 
 // ★ 「シートを開くと ✕ に青枠が出る」の退行ガード（adr/ux/native-dialog-for-sheets.md）。
 //   show_modal() の dialog focusing steps は「中の最初のフォーカス可能要素」を選ぶので、
-//   放っておくと sheet-head の唯一のボタン = ✕ が初期フォーカスになる。Chromium はその
-//   初期フォーカスを :focus-visible にマッチさせるため、**指でタップして開いただけで**
+//   放っておくと sheet-head の唯一のボタン = ✕ が初期フォーカスになる。**WebKit はその
+//   初期フォーカスを :focus-visible にマッチさせる**ため、指でタップして開いただけで
 //   閉じるボタンにリングが出る。利用者からは「何も押していないのに青い印が出る」と見える。
 //
+//   ★ これは **iPhone Safari 固有**（実測: WebKit は matches(':focus-visible') が true、
+//   Chromium は false）。**chromium だけで回しても守れていない**ので、この 3 本は
+//   iPhone 15 Pro プロジェクトでこそ意味がある。
+//
 //   見るのは 2 つ。(a) フォーカスの居場所（Rust 側 = dialog へ引き取れているか）と、
-//   (b) 実際に描かれる outline（CSS 側）。:focus-visible はプログラム的なフォーカス移動で
-//   「直前の要素のリング状態」を引き継ぐので、(a) だけでは (b) を担保できない。
+//   (b) 実際に描かれる outline（CSS 側）。WebKit は今度は <dialog> 自身を
+//   :focus-visible にマッチさせるので、(a) だけでは (b) を担保できない。
 
 test('シートを開いた直後のフォーカスは ✕ ではなくシート自身に載る', async ({ page }) => {
   await page.getByTestId('add-exercise').click();
@@ -1536,7 +1540,9 @@ test('シート自身にフォーカスが載ってもリングは描かれな�
   await expect(sheet).toBeFocused();
 
   // .sheet は inset: auto 0 0 / width: 100% なので、リングが出ると左右と下は画面端へ落ち、
-  // **上辺だけが横一文字の青線**として残る。<dialog> は操作対象ではないので消してある
+  // **上辺だけが横一文字の青線**として残る。<dialog> は操作対象ではないので消してある。
+  // ★ WebKit では実際に :focus-visible がマッチしている（Chromium はしない）。つまり
+  //   このアサーションが実質的に働くのは iPhone 15 Pro プロジェクトのほう
   await expect(sheet).toHaveCSS('outline-style', 'none');
 });
 

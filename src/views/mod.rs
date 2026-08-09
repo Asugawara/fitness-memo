@@ -327,8 +327,8 @@ pub fn scroll_into_view_if_needed(element_id: String) {
 ///   「追加済み」表示がこれで壊れかけた）。中身は素直に追跡する形で書くこと。
 ///
 /// ★ **開いたときのフォーカスは `<dialog>` 自身に置く。** `show_modal()` は中の最初の
-///   フォーカス可能要素（= ✕）を選ぶが、そこへ残すと「タップしただけで青枠が出る」に
-///   なるので `tabindex="-1"` の dialog へ引き取っている。
+///   フォーカス可能要素（= ✕）を選ぶが、そこへ残すと **iPhone Safari で**「タップした
+///   だけで青枠が出る」になるので `tabindex="-1"` の dialog へ引き取っている。
 ///   **中身の入力欄にフォーカスは当てない。** iOS は `focus()` でキーボードを出すので、
 ///   シートを開いた瞬間に画面の下半分が埋まる（adr/pwa/hide-tabs-when-keyboard-open.md）。
 ///   呼び出し側で「開いたら入力欄へ」をやりたくなったら、まずここを読むこと。
@@ -379,9 +379,15 @@ pub fn Sheet(
                 // ★ 初期フォーカスを <dialog> 自身へ引き取る（WAI-ARIA APG の
                 //   「モーダルを開いたらダイアログにフォーカス」）。放っておくと
                 //   dialog focusing steps が「中の最初のフォーカス可能要素」＝ ✕ を選び、
-                //   **指でタップして開いただけで閉じるボタンに青枠が出る**
-                //   （Chromium は dialog の初期フォーカスを :focus-visible にマッチさせる）。
+                //   **指でタップして開いただけで閉じるボタンに青枠が出る**。
                 //   利用者からは「何も押していないのに印が出た」と見える。
+                //
+                //   ★ これは **iPhone Safari で起きる**。Playwright 実測（iPhone 15 Pro /
+                //   Desktop Chrome / Pixel 7）で、フォーカスが ✕ に移るのは両エンジン共通だが、
+                //   `:focus-visible` にマッチするのは **WebKit だけ**（Chromium は false で
+                //   リングが出ない）。「Safari はボタンをタップしてもフォーカスを与えない」
+                //   （下の opener のコメント）とは別の経路で、show_modal() の初期フォーカスは
+                //   UA が能動的に与えるものであり、WebKit はそれをキーボード相当と判定する。
                 //
                 //   ★ show_modal() と**同じタスクの中**で移すこと。dialog focusing steps は
                 //   show_modal() の一部として同期に走り、描画はタスク終了後なので、
@@ -390,9 +396,9 @@ pub fn Sheet(
                 //   遅らせると本当に 1 フレーム出る。
                 //
                 //   ★ フォーカスがここに載ることと、リングが**描かれない**ことは別の話。
-                //   :focus-visible は「直前の要素がリングを出していたか」を引き継ぐので、
-                //   これだけでは担保にならない。リングは styles.css の
-                //   `.sheet:focus-visible { outline: none }` が受け持つ
+                //   実測では WebKit が今度は **<dialog> 自身**を :focus-visible にマッチさせる
+                //   ので、これだけでは「✕ の青枠」が「シート上辺の青線」に化けるだけになる。
+                //   リングは styles.css の `.sheet:focus-visible { outline: none }` が受け持つ
                 let _ = d.focus();
             }
         } else if d.open() {

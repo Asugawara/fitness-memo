@@ -30,7 +30,7 @@ use leptos::prelude::*;
 
 use crate::storage;
 
-use super::{is_standalone, storage_may_split};
+use super::{Sheet, is_standalone, storage_may_split};
 
 const STEP1_SVG: &str = include_str!("../../assets/help/step1-share.svg");
 const STEP2_SVG: &str = include_str!("../../assets/help/step2-add.svg");
@@ -126,43 +126,18 @@ pub fn InstallHelpLink() -> impl IntoView {
     }
 }
 
-/// 手順シート。`super::day` の「種目を追加」シートと同じ組み方にする。
-///
-/// z-index は `public/styles.css` が持つのでインライン `style` は書かない
-/// （`super::menu` は歴史的にインラインで持っているが、あれは今は冗長）。
+/// 手順シート。枠（`<dialog>` / 見出し / ✕ / 本文の器）は `super::Sheet` が持つ。
 #[component]
 fn InstallHelpSheet(open: RwSignal<bool>) -> impl IntoView {
     view! {
-        {move || {
-            open.get()
-                .then(|| {
-                    view! {
-                        <div
-                            class="sheet-backdrop"
-                            data-testid="install-sheet-backdrop"
-                            on:click=move |_| open.set(false)
-                        ></div>
-                        <div
-                            class="sheet"
-                            role="dialog"
-                            aria-label="ホーム画面に追加"
-                            data-testid="install-sheet"
-                        >
-                            <header class="sheet-head">
-                                <strong>"ホーム画面に追加"</strong>
-                                // aria-label は残す。見た目は ✕ でも支援技術と
-                                // E2E の role+name には「閉じる」で届く必要がある
-                                <button
-                                    class="icon-btn"
-                                    aria-label="閉じる"
-                                    data-testid="install-sheet-close"
-                                    on:click=move |_| open.set(false)
-                                >
-                                    "✕"
-                                </button>
-                            </header>
-                            <div class="sheet-body">
-                                <div class="warn-box">
+        <Sheet
+            open=open
+            on_close=Callback::new(move |_| open.set(false))
+            title="ホーム画面に追加".to_string()
+            testid="install-sheet"
+            close_testid="install-sheet-close"
+        >
+            <div class="warn-box">
                                     <p>
                                         "iPhone では、Safari のタブとホーム画面のアプリで記録の保存場所が分かれています。"
                                     </p>
@@ -219,10 +194,6 @@ fn InstallHelpSheet(open: RwSignal<bool>) -> impl IntoView {
                                         "ホーム画面に追加してから書き出そうとしても、そちらは空なので意味がありません。順番に注意してください。"
                                     </p>
                                 </section>
-                            </div>
-                        </div>
-                    }
-                })
-        }}
+        </Sheet>
     }
 }

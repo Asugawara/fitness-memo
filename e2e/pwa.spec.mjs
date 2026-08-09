@@ -507,8 +507,9 @@ test.describe('ストレージが分かれうる環境（iPhone の UA）', () =
     await expect(sheet).toBeHidden();
 
     await page.getByTestId('install-hint-open').click();
-    // backdrop は inset:0 なので中央はシート本体に覆われている。左上を突く
-    await page.getByTestId('install-sheet-backdrop').click({ position: { x: 8, y: 8 } });
+    // backdrop は <dialog> の ::backdrop になったので DOM ノードが無く、testid で掴めない。
+    // シートは下端に貼ってあるので、左上を直接突けば箱の外＝背景のクリックになる
+    await page.mouse.click(8, 8);
     await expect(sheet).toBeHidden();
   });
 

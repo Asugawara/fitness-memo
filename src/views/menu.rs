@@ -23,7 +23,7 @@ use crate::model::{Db, Exercise, ExerciseId, Group, GroupId};
 use crate::storage;
 
 use super::help::InstallHelpLink;
-use super::{kb_blur, kb_focus, use_db, use_kb};
+use super::{Sheet, kb_blur, kb_focus, use_db, use_kb};
 
 /// 部位を追加するときの既定色。プリセットの 6 色を順に回す。
 const COLOR_CHOICES: [&str; 6] = [
@@ -242,6 +242,20 @@ enum Editor {
     NewExercise(GroupId),
 }
 
+/// シートの見出し。閉じている（`None`）ときは空文字。
+///
+/// ★ シートは常時マウントなので、閉じている間もこれが呼ばれる。空文字で構わない
+/// （`aria-label` も見出しも、閉じた `<dialog>` は支援技術から辿れない）。
+fn editor_title(target: Option<Editor>) -> &'static str {
+    match target {
+        Some(Editor::Group(_)) => "部位を編集",
+        Some(Editor::NewGroup) => "部位を追加",
+        Some(Editor::Exercise(_)) => "種目を編集",
+        Some(Editor::NewExercise(_)) => "種目を追加",
+        None => "",
+    }
+}
+
 /// 選択肢ボタン 1 個。今は部位の選択にだけ使う。
 fn opt_button(
     label: String,
@@ -327,65 +341,34 @@ pub fn Menu() -> impl IntoView {
 
             <super::backup::BackupSheet open=backup_open />
 
-            {move || {
-                editor
-                    .get()
-                    .map(|target| {
-                        let (title, body) = match target {
+            // 見出しと中身はどちらも `editor` から引く。★ シートは常時マウントなので、
+            // 閉じている間（`editor` が None）は見出しが空文字・中身が無しになる
+            <Sheet
+                open=Signal::derive(move || editor.get().is_some())
+                on_close=Callback::new(move |_| editor.set(None))
+                title=Signal::derive(move || editor_title(editor.get()).to_string())
+                testid="menu-sheet"
+                close_testid="menu-sheet-close"
+            >
+                {move || {
+                    editor
+                        .get()
+                        .map(|target| match target {
                             Editor::Group(id) => {
-                                ("部位を編集", view! { <GroupEditor id=id editor=editor /> }.into_any())
+                                view! { <GroupEditor id=id editor=editor /> }.into_any()
                             }
                             Editor::NewGroup => {
-                                ("部位を追加", view! { <NewGroupEditor editor=editor /> }.into_any())
+                                view! { <NewGroupEditor editor=editor /> }.into_any()
                             }
                             Editor::Exercise(id) => {
-                                ("種目を編集", view! { <ExerciseEditor id=id editor=editor /> }.into_any())
+                                view! { <ExerciseEditor id=id editor=editor /> }.into_any()
                             }
                             Editor::NewExercise(group) => {
-                                (
-                                    "種目を追加",
-                                    view! { <NewExerciseEditor group=group editor=editor /> }
-                                        .into_any(),
-                                )
+                                view! { <NewExerciseEditor group=group editor=editor /> }.into_any()
                             }
-                        };
-                        view! {
-                            // ★ z-index はインライン。`.sheet` / `.bottom-tabs` はどちらも
-                            //   position: fixed; bottom: 0 で z-index が auto なので、DOM 順で
-                            //   後に来る <nav class="bottom-tabs"> がシートの下端 56px を覆い、
-                            //   シート最下部のボタン（削除・追加）が押せなくなる。
-                            //   styles.css に `.sheet { z-index: 20 }` が入れば重複するだけで無害。
-                            <div
-                                class="sheet-backdrop"
-                                style="z-index:19"
-                                data-testid="menu-sheet-backdrop"
-                                on:click=move |_| editor.set(None)
-                            ></div>
-                            <div
-                                class="sheet"
-                                style="z-index:20"
-                                role="dialog"
-                                aria-label=title
-                                data-testid="menu-sheet"
-                            >
-                                <header class="sheet-head">
-                                    <strong>{title}</strong>
-                                    // 種目追加シート（day.rs）と同じ形にする。
-                                    // 同じアプリの中でシートの閉じ方が 2 種類あるのは避ける
-                                    <button
-                                        class="icon-btn"
-                                        aria-label="閉じる"
-                                        data-testid="menu-sheet-close"
-                                        on:click=move |_| editor.set(None)
-                                    >
-                                        "✕"
-                                    </button>
-                                </header>
-                                <div class="sheet-body">{body}</div>
-                            </div>
-                        }
-                    })
-            }}
+                        })
+                }}
+            </Sheet>
         </section>
     }
 }

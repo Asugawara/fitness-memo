@@ -8,17 +8,24 @@
 //! 追加したら畳む排他表示にしていたが、上にカレンダーが載って画面が縦に伸びた今は
 //! 大きいヒーローを置く余地が無く、出し分ける意味も無くなった。
 
+use std::cell::Cell;
+use std::time::Duration;
+
 use chrono::NaiveDate;
 use leptos::prelude::*;
+// pointerdown の target を Element に落として setPointerCapture するのに使う
+use wasm_bindgen::JsCast;
+use web_sys::PointerEvent;
 
 use crate::core;
 use crate::core::Metric;
 use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, SetEntry};
+use crate::reorder::{self, Slots};
 
 use super::icon::{self, icon};
 use super::{
-    Sheet, fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms, parse_reps,
-    parse_weight, scroll_to_id, use_dates, use_db, use_kb,
+    Sheet, fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, measure_slots, now_ms,
+    parse_reps, parse_weight, scroll_to_id, scroll_y, use_dates, use_db, use_kb,
 };
 
 /// 選択日に並べているカード 1 枚。
@@ -58,6 +65,220 @@ impl Row {
 
 fn card_dom_id(ex: ExerciseId) -> String {
     format!("card-{ex}")
+}
+
+/// セット行の DOM id。掴んだときに並び全体の箱を測るのに使う。
+///
+/// `ex` は「1 日 1 種目 1 ログ」（adr/data-model/one-log-per-exercise-per-day.md）なので
+/// カードを跨いで衝突せず、`key` はカードの中で単調増加（`next_key`）なので行を跨いでも
+/// 衝突しない。
+fn set_dom_id(ex: ExerciseId, key: u32) -> String {
+    format!("set-{ex}-{key}")
+}
+
+// ── ドラッグで並び替える（adr/ux/drag-to-reorder-in-record-tab.md）────────────
+
+/// 長押し待ちの間に指がこれ以上動いたら、そのジェスチャは捨てる。
+const PRESS_SLOP_PX: f64 = 10.0;
+
+/// 画面端に指があるときのスクロール速度（px/frame）。60fps で約 840px/s。
+///
+/// カードは 5〜8 枚 × 150〜400px で、可視域（約 660px）に収まらない。これが無いと
+/// 1 枚目を末尾へ運ぶのに「動かす → 指を離す → スクロール」を数回繰り返すことになる。
+/// セット行には要らない（1 カード最大 8 行 × 約 50px で、カードが見えていれば全部入る）。
+const EDGE_STEP_PX: f64 = 14.0;
+
+thread_local! {
+    /// 端の自動スクロールのループが走っているか。**再入防止。**
+    /// 同時に掴めるハンドルは 1 つなので 1 本で足りる（`views::mod` の `KB_TIMER` と同じ形）。
+    static EDGE_SCROLLING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// `.card-head` を押してからカードのドラッグが効き始めるまで。
+///
+/// ★ セット行（`.set-no`）は 0 で、カードだけ待つ。同じにしないのは幅が違うから。
+/// `touch-action: none` を当てた要素からはページをスクロールできないので、**全幅の
+/// `.card-head` を即時開始にすると縦フリック 1 回で種目の順が変わる**（閾値は隣の
+/// カードの半分 ≈ 87px、フリックは 100〜300px 動く）。しかも画面が動かないので
+/// 「スクロールが効かなかった」と「並びが変わった」が同時に起きる。250ms 待てば
+/// フリックは**何も起きない**で終わる。`.set-no` は約 29px 幅なので、そこを起点に
+/// 縦フリックが始まる確率が低く、待たせるほうが損になる。
+const PRESS_DELAY_CARD: Duration = Duration::from_millis(250);
+
+/// 長押し待ち。**まだ何も動かさない**ので signal ではなく `StoredValue` に置く。
+#[derive(Clone, Copy, Debug)]
+struct Press {
+    pointer_id: i32,
+    down_y: f64,
+    last_y: f64,
+    /// `None` は「slop を超えたので死んだ」。`pointerup` まで生き返らせない
+    /// （じわじわ動かして後から armed になるのを防ぐ）
+    timer: Option<TimeoutHandle>,
+}
+
+/// ドラッグ中の状態。**掴んだ瞬間のスナップショット**で、指を離すまで測り直さない。
+///
+/// ★ ドラッグ中に `rows` / `cards` の `Vec` を入れ替えない。`translateY(dy)` の基準は
+/// 「掴んだ瞬間のレイアウト位置」なので、`<For>` が DOM を move した瞬間に基準が
+/// 1 スロット飛び、高さがバラバラだと進み幅と戻り幅が一致せず振動が収束しない。
+/// 加えて tachys の keyed diff は `insertBefore` で入れ直すので pointer capture を
+/// 落としうるうえ、入れ替えの 2 つのうちどちらが move されるかは指定できない。
+#[derive(Clone, Debug, PartialEq)]
+struct Drag {
+    /// 掴んだポインタ。2 本目の指の `pointermove` を弾く
+    pointer_id: i32,
+    /// 掴んだ要素の、掴んだ時点での位置
+    from: usize,
+    /// 今指を離したら入る位置。`from` と同じなら何も確定しない
+    to: usize,
+    /// ドラッグが効き始めた瞬間の指の位置（document 座標）
+    start_y: f64,
+    /// 直近の指の位置（**viewport 座標**）。画面端の自動スクロールが読む
+    client_y: f64,
+    /// 掴んだ要素に当てる `translateY`
+    lift: f64,
+    slots: Slots,
+}
+
+impl Drag {
+    fn start(pointer_id: i32, from: usize, client_y: f64, slots: Slots) -> Self {
+        Self {
+            pointer_id,
+            from,
+            to: from,
+            start_y: client_y + scroll_y(),
+            client_y,
+            lift: 0.0,
+            slots,
+        }
+    }
+
+    /// 指が動いたぶんを反映する。**レイアウトを読まない**（掴んだときの箱だけで決まる）。
+    ///
+    /// ページがスクロールしただけでも呼ぶ（`client_y` は据え置きで `scroll_y()` が動く）。
+    fn advance(&mut self, client_y: f64) {
+        self.client_y = client_y;
+        let dy = client_y + scroll_y() - self.start_y;
+        self.to = self.slots.drop_index(self.from, dy);
+        self.lift = self.slots.lift(self.from, dy);
+    }
+
+    /// 模型上 `i` 番目の要素が、いま画面で何番目に見えているか。
+    fn seen_at(&self, i: usize) -> usize {
+        reorder::visual_index(self.from, self.to, i)
+    }
+
+    /// 並びの `i` 番目に当てる `transform`。動かないときは `None`。
+    ///
+    /// `None` を返すとインラインスタイルごと消えるので、静止時の DOM に 1 文字も残らない。
+    fn transform(&self, i: usize) -> Option<String> {
+        let px = if i == self.from {
+            self.lift
+        } else {
+            self.slots.offset(self.from, self.to, i)?
+        };
+        Some(format!("translateY({px}px)"))
+    }
+}
+
+/// 掴む資格を確かめ、ポインタを捕まえる。
+///
+/// ★ `current_target()` ではなく `target()` を使う。leptos の `delegation` feature は
+/// 今 OFF（`csr` に含まれない）なのでハンドラは要素へ直付けされるが、ON になると
+/// `current_target` は黙って壊れる。capture 先が子要素（`.card-head` の中の `<h3>`）に
+/// なっても、`pointermove` はハンドラのある親まで bubble するので実害が無い。
+///
+/// ★ capture できなければ掴まない。capture 無しで始めると、指がハンドルの外へ出た
+/// 瞬間に `pointermove` も `pointerup` も届かなくなり、**持ち上がったまま固まる**。
+///
+/// ★ `prevent_default()` は呼ばない。スクロールを止めるのは `touch-action: none` の
+/// 仕事で、`pointerdown` の preventDefault では iOS のスクロールは止まらない。むしろ
+/// 互換 `mousedown` を抑止してフォーカス移動まで止めるので、入力欄から blur して
+/// ほしいのに残る。
+fn capture(ev: &PointerEvent) -> bool {
+    ev.is_primary()
+        && ev.button() == 0
+        && ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+            .is_some_and(|el| el.set_pointer_capture(ev.pointer_id()).is_ok())
+}
+
+/// このポインタが掴んでいる最中か。
+fn holds(drag: RwSignal<Option<Drag>>, ev: &PointerEvent) -> bool {
+    drag.with_untracked(|d| d.as_ref().is_some_and(|d| d.pointer_id == ev.pointer_id()))
+}
+
+/// ドラッグを畳む。既に畳んでいれば何もしない（`lostpointercapture` は
+/// 通常の `pointerup` の後にも飛ぶので、冪等でないと余計な再描画が走る）。
+fn release(drag: RwSignal<Option<Drag>>) {
+    if drag.with_untracked(Option::is_some) {
+        drag.set(None);
+    }
+}
+
+/// `Alt` + ↑↓ を「1 つ上へ / 1 つ下へ」に読む。
+///
+/// ★ ドラッグの代わりの経路。掴む場所（`.set-no` / `.card-head`）を `<button>` に
+/// できないので（`<header>` は `<h3>` を含む・行番号はコントロールではない）、既に
+/// フォーカスできる要素にこれを足す。WCAG 2.5.7 が求める非ドラッグ経路であると同時に、
+/// E2E で「並び替えが `Db` に落ちること」を座標に依存せず書ける経路でもある。
+///
+/// ★ `Alt` 付きにするのは、素の ↑↓ が入力欄のカーソル操作と衝突するから。
+fn alt_arrow(ev: &web_sys::KeyboardEvent) -> Option<bool> {
+    if !ev.alt_key() {
+        return None;
+    }
+    match ev.key().as_str() {
+        "ArrowUp" => Some(true),
+        "ArrowDown" => Some(false),
+        _ => None,
+    }
+}
+
+/// 端の自動スクロールの 1 フレーム。`drag` が畳まれたら自分で止まる。
+///
+/// ★ `pointermove` では成立しない。**指が止まっていてもスクロールし続ける**必要がある
+/// （画面外のカードまで運ぶのが目的なので、指は端に置いたまま待つのが普通の使い方）。
+///
+/// ★ 下端の帯は `innerHeight - EDGE_BAND`。`--tabbar` を読まないのは、タブバー
+/// （56px）の上端でちょうど最大速度になる位置に帯が来るため。指がタブバーの上まで
+/// 行っても pointer capture が効いているので、そこは「最大速度の続き」で正しい。
+fn edge_scroll_tick(drag: RwSignal<Option<Drag>>) {
+    let Some(d) = drag.get_untracked() else {
+        EDGE_SCROLLING.set(false);
+        return;
+    };
+    let height = window()
+        .inner_height()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let step = reorder::edge_scroll_step(
+        d.client_y,
+        reorder::EDGE_BAND,
+        height - reorder::EDGE_BAND,
+        EDGE_STEP_PX,
+    );
+    if step != 0.0 {
+        window().scroll_by_with_x_and_y(0.0, step);
+        // スクロールしたぶん dy が変わる。指が 1px も動いていなくても追随させる
+        drag.update(|d| {
+            if let Some(d) = d {
+                d.advance(d.client_y);
+            }
+        });
+    }
+    request_animation_frame(move || edge_scroll_tick(drag));
+}
+
+/// 端の自動スクロールを回し始める。**既に回っていれば何もしない。**
+///
+/// 再入すると 2 本のループが同じ `scroll_by` を呼んで倍の速さで流れる。
+fn start_edge_scroll(drag: RwSignal<Option<Drag>>) {
+    if !EDGE_SCROLLING.replace(true) {
+        edge_scroll_tick(drag);
+    }
 }
 
 /// 候補リストに並べる上限。
@@ -208,6 +429,11 @@ pub fn DayEditor() -> impl IntoView {
     let dates = use_dates();
 
     let cards: RwSignal<Vec<CardRef>> = RwSignal::new(Vec::new());
+    // カードのドラッグ。全カードが押しのけ量を読むので `DayEditor` が持つ。
+    // 長押し待ちは何も描画しないので signal ではなく `StoredValue`（同時に押せる
+    // ハンドルは 1 つなので 1 本で足りる）。
+    let card_drag: RwSignal<Option<Drag>> = RwSignal::new(None);
+    let card_press: StoredValue<Option<Press>> = StoredValue::new(None);
     let sheet = RwSignal::new(false);
 
     // カードを Db から引き直す。
@@ -408,11 +634,23 @@ pub fn DayEditor() -> impl IntoView {
                     view! { <ConditionRow /> }
                 }}
 
-                <div class="cards">
+                <div
+                    class="cards"
+                    data-dragging=move || card_drag.with(|d| d.is_some().then_some("true"))
+                >
                     <For
                         each=move || cards.get()
                         key=|c| (c.date.clone(), c.ex)
-                        children=move |c| view! { <ExerciseCard ex=c.ex cards=cards /> }
+                        children=move |c| {
+                            view! {
+                                <ExerciseCard
+                                    ex=c.ex
+                                    cards=cards
+                                    card_drag=card_drag
+                                    card_press=card_press
+                                />
+                            }
+                        }
                     />
                 </div>
 
@@ -621,7 +859,12 @@ fn ConditionRow() -> impl IntoView {
 }
 
 #[component]
-fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView {
+fn ExerciseCard(
+    ex: ExerciseId,
+    cards: RwSignal<Vec<CardRef>>,
+    card_drag: RwSignal<Option<Drag>>,
+    card_press: StoredValue<Option<Press>>,
+) -> impl IntoView {
     let db = use_db();
     let dates = use_dates();
     let kb = use_kb();
@@ -691,6 +934,8 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
 
     // 「+ セット」で足した行。この行の回数欄へフォーカスを移したら None に戻す。
     let focus_key: RwSignal<Option<u32>> = RwSignal::new(None);
+    // セット行のドラッグ。カードの中で閉じるので `ExerciseCard` が持つ。
+    let row_drag: RwSignal<Option<Drag>> = RwSignal::new(None);
     // この種目をこの日から外す確認を出しているか。
     let confirm_close = RwSignal::new(false);
     // メモ欄（種目メモ + 全セット行のメモ）を開いているか。
@@ -745,7 +990,19 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
         let note = ex_note.get_untracked();
         let date = dates.selected.get_untracked();
         let is_today = date == dates.today.get_untracked();
-        db.update(|d| write_log(d, date, ex, sets, note, is_today));
+        // ★ 画面の並びを唯一の真実にする。`write_log` の新規枝は `logs.push` なので、
+        //   **並び替えたあと「まだログの無いカード」に 1 文字目を打つと、そのログだけ
+        //   末尾に生える**。書き込みのたびに揃え直すことで「`logs` の順 == `cards` の順」が
+        //   不変条件になる（adr/ux/drag-to-reorder-in-record-tab.md）。
+        //   `CardRef.date` で絞るのは、日付を切り替えた直後の 1 tick で `cards` が
+        //   前日のままでも別の日の ID が混ざらないようにするため
+        let key = core::date_key(date);
+        let order: Vec<ExerciseId> =
+            cards.with_untracked(|cs| cs.iter().filter(|c| c.date == key).map(|c| c.ex).collect());
+        db.update(|d| {
+            write_log(d, date, ex, sets, note, is_today);
+            core::reorder_logs(d, date, &order);
+        });
     };
 
     let fresh_key = move || {
@@ -788,6 +1045,22 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
             let key = fresh_key();
             rows.update(|rs| rs.push(Row::blank(key)));
         }
+        commit();
+    };
+
+    // ★ 行を動かすのは `rows` の入れ替え + いつもの `commit()` だけ。
+    //   `log.sets` を添字で並べ替える経路は**作らない** — `commit` は
+    //   `parse_reps` が None の行（空行・メモだけの行）を落とすので、`rows` と
+    //   `log.sets` は添字が対応しない（adr/ux/drag-to-reorder-in-record-tab.md）。
+    //
+    // ★ `Row.key` を振り直さないこと。キーが変わらなければ tachys の keyed diff が
+    //   既存 DOM を move するので、入力欄の値・IME の変換中の文字・`focus_key` の
+    //   Effect が全部生きたまま行だけが動く。
+    let move_row = move |from: usize, to: usize| {
+        if from == to {
+            return;
+        }
+        rows.update(|rs| reorder::move_item(rs, from, to));
         commit();
     };
 
@@ -864,14 +1137,164 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
         })
     };
 
+    // ── カードのドラッグ ──────────────────────────────────────────────────
+    //
+    // 掴む場所は見出し行（`.card-head`）。ここにはボタンが 1 つも無く
+    // （adr/ux/destructive-affordance-quiet-at-rest.md）、カード幅いっぱいの帯なので
+    // 新しい要素を足さずに掴める。
+
+    // このカードの、`cards` の中での位置。
+    let card_slot = move || cards.with(|cs| cs.iter().position(|c| c.ex == ex));
+
+    // ★ 画面を動かしてから `Db` を揃える。`cards` が真実源で、`reorder_logs` は
+    //   そこに追いつくだけ（`commit()` からも同じことを呼ぶので冪等）。
+    //   ★ ドロップ側と `commit` の**両方**が要る — ドロップだけだと未 commit の
+    //     カードが後で末尾に生え、`commit` だけだと 1 文字も打たない並び替えが
+    //     保存されない
+    let move_card = move |from: usize, to: usize| {
+        if from == to {
+            return;
+        }
+        cards.update(|cs| reorder::move_item(cs, from, to));
+        let date = dates.selected.get_untracked();
+        let key = core::date_key(date);
+        let order: Vec<ExerciseId> =
+            cards.with_untracked(|cs| cs.iter().filter(|c| c.date == key).map(|c| c.ex).collect());
+        db.update(|d| {
+            core::reorder_logs(d, date, &order);
+        });
+    };
+
+    // 長押しが満了したら、**そのときの指の位置**を基準に掴む。
+    //
+    // ★ 押した瞬間の位置を基準にしないこと。待っている間の 0〜10px ぶん、掴んだ
+    //   瞬間にカードが跳ねる。測るのもここ（押した瞬間ではない）。
+    let arm_card = move || {
+        let Some(p) = card_press.get_value() else {
+            return;
+        };
+        let (ids, here) = cards.with_untracked(|cs| {
+            (
+                cs.iter().map(|c| card_dom_id(c.ex)).collect::<Vec<_>>(),
+                cs.iter().position(|c| c.ex == ex),
+            )
+        });
+        let (Some(from), Some(slots)) = (here, measure_slots(&ids)) else {
+            return;
+        };
+        card_drag.set(Some(Drag::start(p.pointer_id, from, p.last_y, slots)));
+        start_edge_scroll(card_drag);
+    };
+
+    let grab_card = move |ev: PointerEvent| {
+        if card_drag.with_untracked(Option::is_some)
+            || card_press.with_value(Option::is_some)
+            || !capture(&ev)
+        {
+            return;
+        }
+        // ★ capture は**待つ前に**取る。取らないと、待っている 250ms の間に指が
+        //   ハンドルの外へ出たとき `pointermove` が届かず slop を判定できない
+        let y = f64::from(ev.client_y());
+        let timer = set_timeout_with_handle(arm_card, PRESS_DELAY_CARD).ok();
+        card_press.set_value(Some(Press {
+            pointer_id: ev.pointer_id(),
+            down_y: y,
+            last_y: y,
+            timer,
+        }));
+    };
+
+    let track_card = move |ev: PointerEvent| {
+        if holds(card_drag, &ev) {
+            card_drag.update(|d| {
+                if let Some(d) = d {
+                    d.advance(f64::from(ev.client_y()));
+                }
+            });
+            return;
+        }
+        // まだ長押し待ち。動きすぎたらこのジェスチャは捨てる
+        card_press.update_value(|p| {
+            let Some(p) = p.as_mut().filter(|p| p.pointer_id == ev.pointer_id()) else {
+                return;
+            };
+            p.last_y = f64::from(ev.client_y());
+            if (p.last_y - p.down_y).abs() > PRESS_SLOP_PX
+                && let Some(timer) = p.timer.take()
+            {
+                timer.clear();
+            }
+        });
+    };
+
+    /// 長押し待ちを畳む。`timer` が生きていれば止める。
+    fn end_press(card_press: StoredValue<Option<Press>>) {
+        if let Some(p) = card_press.get_value() {
+            if let Some(timer) = p.timer {
+                timer.clear();
+            }
+            card_press.set_value(None);
+        }
+    }
+
+    let drop_card = move |ev: PointerEvent| {
+        end_press(card_press);
+        let Some(d) = card_drag.get_untracked() else {
+            return;
+        };
+        if d.pointer_id != ev.pointer_id() {
+            return;
+        }
+        card_drag.set(None);
+        move_card(d.from, d.to);
+    };
+
+    let cancel_card = move |_: PointerEvent| {
+        end_press(card_press);
+        release(card_drag);
+    };
+
+    // ドラッグの代わり。カードの中のどこにフォーカスがあっても効く（行の入力欄は
+    // 自分で `stop_propagation` するので、ここへは届かない）
+    let nudge_card = move |ev: web_sys::KeyboardEvent| {
+        let Some(up) = alt_arrow(&ev) else { return };
+        ev.prevent_default();
+        let Some(from) = card_slot() else { return };
+        let len = cards.with_untracked(Vec::len);
+        move_card(from, reorder::neighbor(from, up, len));
+    };
+
     view! {
-        <article class="card" id=card_dom_id(ex) data-testid="exercise-card">
+        <article
+            class="card"
+            id=card_dom_id(ex)
+            data-testid="exercise-card"
+            data-drag=move || {
+                card_drag.with(|d| (d.as_ref()?.from == card_slot()?).then_some("lift"))
+            }
+            style:transform=move || card_drag.with(|d| d.as_ref()?.transform(card_slot()?))
+            on:keydown=nudge_card
+        >
             // ★ 見出しに削除ボタンを置かない。カードの一番上・右端は
             //   「種目を追加」を探して下スクロールする指が最初に触る位置で、
             //   追加しようとして種目ごと消す事故が起きていた。導線はフッタの左端へ
             //   （カードの右端は「行の ✕ → + セット → sticky の種目を追加」が並ぶ列なので、
             //   そこには置かない。詳細は adr/ux/destructive-affordance-quiet-at-rest.md）
-            <header class="card-head">
+            // ★ 掴む場所。`<button>` にはできない — `<button>` の content model は
+            //   phrasing content なので `<h3>` を入れると不正な HTML になり、`role="button"`
+            //   にすると children presentational で見出しが a11y ツリーから消えて
+            //   adr/ux/focus-ring-and-heading-order.md の見出し階層が壊れる。
+            //   キーボードからの並び替えは下の `on:keydown`（Alt + ↑↓）が受ける。
+            <header
+                class="card-head"
+                data-testid="card-handle"
+                on:pointerdown=grab_card
+                on:pointermove=track_card
+                on:pointerup=drop_card
+                on:pointercancel=cancel_card
+                on:lostpointercapture=cancel_card
+            >
                 // 選択日（h2）の下にぶら下がる種目なので h3
                 <h3 data-testid="card-name">{move || name.get()}</h3>
                 <span class="group-name">{move || group_name.get()}</span>
@@ -911,14 +1334,30 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                     })
             }}
 
-            <div class="sets-editor">
+            // ★ transition は「ドラッグ中の親」にだけ生やす（styles.css の該当節）。
+            //   ここが常に付いていると、指を離した瞬間に「<For> の DOM move」と
+            //   「transform の除去」が同時に起きて、行が 1 スロット飛んでから滑って戻る
+            <div
+                class="sets-editor"
+                data-dragging=move || row_drag.with(|d| d.is_some().then_some("true"))
+            >
                 <For
                     each=move || rows.get()
                     key=|r| r.key
                     children=move |row| {
                         let key = row.key;
+                        // 並びの中での位置。`slot` は 0 起点で模型上の位置、`index` は
+                        // 1 起点の表示用。
+                        //
+                        // ★ 表示は**画面で見えている位置**を出す。ドラッグ中は `Vec` を
+                        //   入れ替えないので模型の添字とずれ、そのまま描くと「2 番目に
+                        //   見えている行に 1 と書いてある」状態になる。番号をハンドルに
+                        //   した理由（番号 ＝ 順番）が指を離すまで嘘になるので通す。
+                        //   落ちる先が中点を越えた瞬間に番号が変わり、先読みもできる
+                        let slot = move || rows.with(|rs| rs.iter().position(|r| r.key == key));
                         let index = move || {
-                            rows.with(|rs| rs.iter().position(|r| r.key == key).map_or(0, |i| i + 1))
+                            let Some(i) = slot() else { return 0 };
+                            row_drag.with(|d| d.as_ref().map_or(i, |d| d.seen_at(i))) + 1
                         };
                         // 重量を使う種目で reps だけ入っている行は「入力忘れ」の可能性が高い。
                         // 黙って指標を変えず、行にヒントを出して保持する
@@ -967,9 +1406,102 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                 focus_key.set(None);
                             }
                         });
+                        // ★ 掴む場所は左端のセット番号。新しいボタンを足さないための
+                        //   選択で、「番号 ＝ 順番」なので意味も一致する
+                        //   （adr/ux/drag-to-reorder-in-record-tab.md）
+                        let grab = move |ev: PointerEvent| {
+                            if row_drag.with_untracked(Option::is_some) || !capture(&ev) {
+                                return;
+                            }
+                            // ★ id の並びと `from` は同じ 1 回の読み出しから作る。
+                            //   別々に読むと、その間に行が増減したとき添字がずれる
+                            let (ids, here) = rows
+                                .with_untracked(|rs| {
+                                    (
+                                        rs.iter().map(|r| set_dom_id(ex, r.key)).collect::<Vec<_>>(),
+                                        rs.iter().position(|r| r.key == key),
+                                    )
+                                });
+                            let (Some(from), Some(slots)) = (here, measure_slots(&ids)) else {
+                                // 測れないまま始めると、押しのけ量が 1 つずれた並びが
+                                // それらしく動いてしまう。掴まないほうがまし
+                                return;
+                            };
+                            row_drag
+                                .set(
+                                    Some(
+                                        Drag::start(
+                                            ev.pointer_id(),
+                                            from,
+                                            f64::from(ev.client_y()),
+                                            slots,
+                                        ),
+                                    ),
+                                );
+                        };
+                        let track = move |ev: PointerEvent| {
+                            if !holds(row_drag, &ev) {
+                                return;
+                            }
+                            row_drag
+                                .update(|d| {
+                                    if let Some(d) = d {
+                                        d.advance(f64::from(ev.client_y()));
+                                    }
+                                });
+                        };
+                        // ドラッグの代わり。入力欄にフォーカスがあるまま行を動かせる
+                        let nudge_row = move |ev: web_sys::KeyboardEvent| {
+                            let Some(up) = alt_arrow(&ev) else { return };
+                            ev.prevent_default();
+                            // ★ カード側の同じハンドラに届かせない。届くと 1 打鍵で
+                            //   行とカードが同時に動く
+                            ev.stop_propagation();
+                            let Some(from) = rows
+                                .with_untracked(|rs| rs.iter().position(|r| r.key == key))
+                            else {
+                                return;
+                            };
+                            let len = rows.with_untracked(Vec::len);
+                            move_row(from, reorder::neighbor(from, up, len));
+                        };
+                        let drop_row = move |ev: PointerEvent| {
+                            let Some(d) = row_drag.get_untracked() else { return };
+                            if d.pointer_id != ev.pointer_id() {
+                                return;
+                            }
+                            row_drag.set(None);
+                            // ★ 落ちた先が元の位置なら signal にも db にも触らない。
+                            //   触ると打鍵していないのに保存の debounce が再武装される。
+                            //   タップで並びが変わらないのは閾値ではなくこの分岐が保証する
+                            move_row(d.from, d.to);
+                        };
                         view! {
-                            <div class="set-row" data-testid="set-row">
-                                <span class="set-no">{index}</span>
+                            <div
+                                class="set-row"
+                                id=set_dom_id(ex, key)
+                                data-testid="set-row"
+                                data-drag=move || {
+                                    row_drag
+                                        .with(|d| {
+                                            (d.as_ref()?.from == slot()?).then_some("lift")
+                                        })
+                                }
+                                style:transform=move || {
+                                    row_drag.with(|d| d.as_ref()?.transform(slot()?))
+                                }
+                            >
+                                <span
+                                    class="set-no"
+                                    data-testid="set-handle"
+                                    on:pointerdown=grab
+                                    on:pointermove=track
+                                    on:pointerup=drop_row
+                                    on:pointercancel=move |_| release(row_drag)
+                                    on:lostpointercapture=move |_| release(row_drag)
+                                >
+                                    {index}
+                                </span>
                                 // 重量欄は常に出す。空のままなら重量 1 として数えられるので、
                                 // 自重種目でも時間種目でも「入れなければよい」で成立する
                                 <input
@@ -980,6 +1512,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                     value=row.weight.clone()
                                     aria-label="重量"
                                     data-testid="set-weight"
+                                    on:keydown=nudge_row
                                     on:focusin=move |_| kb_focus(kb)
                                     on:focusout=move |_| kb_blur(kb)
                                     on:input=move |ev| {
@@ -1002,6 +1535,7 @@ fn ExerciseCard(ex: ExerciseId, cards: RwSignal<Vec<CardRef>>) -> impl IntoView 
                                     aria-label="回数"
                                     data-testid="set-reps"
                                     node_ref=reps_ref
+                                    on:keydown=nudge_row
                                     on:focusin=move |_| kb_focus(kb)
                                     on:focusout=move |_| kb_blur(kb)
                                     on:input=move |ev| {

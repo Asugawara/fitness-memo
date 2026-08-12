@@ -97,6 +97,27 @@ fn same_sets(a: &[SetEntry], b: &[SetEntry]) -> bool {
             .all(|(x, y)| x.weight == y.weight && x.reps == y.reps)
 }
 
+/// 並びを無視したセット列の一致。**メモも無視する。**
+///
+/// ★ [`same_sets`] は `zip` で位置を比べるので、**セットを並べ替えただけの同じ記録**を
+/// 食い違い扱いにする（adr/ux/drag-to-reorder-in-record-tab.md でセットの D&D を入れた）。
+/// [`merge_db`] でそのまま落ちると [`log_rank`] の第 3 要素が位置依存の辞書順なので、
+/// 勝ち負けが実質任意に決まり、負けた側のセットメモが `*existing = log` で消える。
+/// **並びは端末ごとの好みであってデータではない**ので、ここで先に掬う。
+///
+/// 重量は非負なので `to_bits` の順序が値の順序と一致する（[`log_rank`] と同じ理由）。
+fn same_sets_unordered(a: &[SetEntry], b: &[SetEntry]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let key = |s: &[SetEntry]| {
+        let mut v: Vec<(u32, u32)> = s.iter().map(|x| (x.weight.to_bits(), x.reps)).collect();
+        v.sort_unstable();
+        v
+    };
+    key(a) == key(b)
+}
+
 /// メモの合流。**同じ文が既に入っていれば足さない。** 足したら `true`。
 ///
 /// ★ 無条件に連結すると、同じファイルを 2 回取り込んでメモが 2 倍になる。
@@ -163,6 +184,52 @@ pub fn last_log_before(
                 .find(|l| l.exercise_id == ex && !l.sets.is_empty())?;
             Some((parse_date_key(key)?, log))
         })
+}
+
+// ── 並び替え ────────────────────────────────────────────────────────────────
+
+/// `date` のログを `order` の並びに揃える。**ログの中身には一切触らない。**
+///
+/// 記録タブのドラッグで呼ぶ（adr/ux/drag-to-reorder-in-record-tab.md）。カード 1 枚が
+/// `ExerciseLog` 1 本なので、並び替えは `logs` の順を入れ替えるだけで表現できる。
+///
+/// ★ **`sets` / `note` / `at` を 1 バイトも動かさない。** `at` は「その日に実施した時刻」で
+/// （adr/data-model/at-optional-same-day-only.md）、並べ替えは実施ではない。ここで押すと
+/// **触ってもいない他種目のログ**に「たった今トレした」証拠を捏造することになる。
+/// セット並び替えのほうは `views::day` の `commit()` を通るので `at` が更新されるが、
+/// あちらは自分のログ 1 本だけで、しかも同じ暦日を出ない。
+///
+/// 畳み方の規則（この 3 本が不変条件）:
+/// - **`order` にあってログが無い ID は飛ばす。** 「種目を追加」で出しただけで 1 度も
+///   commit されていないカードがここに来る（`views::day` の `pick` は画面の集合にしか
+///   足さず、`write_log` はセットもメモも空なら書かない）
+/// - **`order` に無いログは末尾へ、元の相対順のまま残す。落としてはいけない。**
+///   [`merge_db`] は開いている日にもログを増やせるので、画面の集合を真実源にして
+///   `logs` を作り直す実装にすると、取り込んだばかりのログが黙って消える
+/// - `order` の重複は最初の 1 回だけ効かせる
+///
+/// 返り値は「並びが変わったか」。
+pub fn reorder_logs(db: &mut Db, date: NaiveDate, order: &[ExerciseId]) -> bool {
+    // ★ `entry().or_default()` を使わないこと。並べ替えの副作用で空のセッションが生まれると、
+    //   何も記録していない日がカレンダーとバックアップに残る（`write_log` はわざわざ
+    //   末尾で空セッションを掃除している）
+    let Some(session) = db.sessions.get_mut(&date_key(date)) else {
+        return false;
+    };
+    let before: Vec<ExerciseId> = session.logs.iter().map(|l| l.exercise_id).collect();
+    let mut rest = std::mem::take(&mut session.logs);
+    let mut out = Vec::with_capacity(rest.len());
+    for id in order {
+        // ★ `swap_remove` ではなく `remove`。残りの相対順を壊すと規則の 2 本目が破れる。
+        //   1 日の種目は多くて 10 なので O(n²) で足りる
+        if let Some(i) = rest.iter().position(|l| l.exercise_id == *id) {
+            out.push(rest.remove(i));
+        }
+    }
+    out.extend(rest);
+    let changed = out.iter().map(|l| l.exercise_id).ne(before.iter().copied());
+    session.logs = out;
+    changed
 }
 
 // ── メニューのコピー ────────────────────────────────────────────────────────
@@ -971,6 +1038,11 @@ fn merge_same_day(dst: &mut Session, src: Session) {
 }
 
 /// 「1 日 1 種目 1 ログ」への正規化。初出の順序は保つ。
+///
+/// ★ **「初出の順序は保つ」は仕様である。** `logs` の並びは利用者がドラッグで決めた
+/// その日の種目順そのもので（adr/ux/drag-to-reorder-in-record-tab.md）、ここは
+/// 読み込みのたびに通る。並べ替える実装に変えると、**次回起動でユーザーの並びが
+/// 黙って戻る**。
 fn dedupe_logs(s: &mut Session) {
     let mut order: Vec<ExerciseId> = Vec::new();
     let mut merged: HashMap<ExerciseId, ExerciseLog> = HashMap::new();
@@ -1359,6 +1431,16 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
                 }
                 continue;
             }
+            // ★ 中身は同じで**並びだけ**違う ＝ 食い違いではない。取り込み先の並びを残す。
+            //   ここで掬わないと下の rank 比較に落ち、第 3 要素が位置依存なので勝ち負けが
+            //   実質任意に決まって、並びが黙って戻るうえ負けた側のセットメモが消える
+            //   （adr/ux/drag-to-reorder-in-record-tab.md）。`Conflict` も出さない —
+            //   利用者から見て食い違っていないものを食い違いとして報告するのは嘘になる。
+            //   セットメモの位置補完もしない（位置が対応しないので、別のセットに
+            //   メモが付くほうが害が大きいという上の枝と同じ判断）
+            if same_sets_unordered(&existing.sets, &log.sets) {
+                continue;
+            }
             // 取り込む側が強いときだけ差し替える。逆向きは黙って捨てる
             // （記録すると、同じファイルを 2 回入れたとき同じ食い違いを毎回報告する）
             if log_rank(&log) > log_rank(existing) {
@@ -1626,6 +1708,226 @@ mod tests {
 
         let (date, _) = last_log_before(&db, e(10), d(2026, 8, 8)).expect("8/1 まで遡る");
         assert_eq!(date, d(2026, 8, 1));
+    }
+
+    // ── 並び替え ────────────────────────────────────────────────────────────
+
+    /// その日のログの種目 ID を並び順のまま取り出す。
+    fn log_order(db: &Db, date: NaiveDate) -> Vec<ExerciseId> {
+        db.sessions
+            .get(&date_key(date))
+            .map(|s| s.logs.iter().map(|l| l.exercise_id).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn reorder_logs_follows_the_given_order() {
+        let mut db = test_db();
+        let day = d(2026, 8, 10);
+        put(
+            &mut db,
+            day,
+            vec![
+                log(10, &[(60.0, 10)], None),
+                log(11, &[(0.0, 20)], None),
+                log(20, &[(0.0, 60)], None),
+            ],
+        );
+
+        assert!(reorder_logs(&mut db, day, &[e(20), e(10), e(11)]));
+        assert_eq!(log_order(&db, day), vec![e(20), e(10), e(11)]);
+    }
+
+    #[test]
+    fn reorder_logs_skips_ids_that_have_no_log_yet() {
+        // 「種目を追加」で出しただけで 1 度も commit されていないカード。画面の集合には
+        // 居るが `logs` には居ないので、位置を表現しようがない
+        let mut db = test_db();
+        let day = d(2026, 8, 10);
+        put(
+            &mut db,
+            day,
+            vec![log(10, &[(60.0, 10)], None), log(11, &[(0.0, 20)], None)],
+        );
+
+        reorder_logs(&mut db, day, &[e(11), e(20), e(10)]);
+        assert_eq!(log_order(&db, day), vec![e(11), e(10)]);
+    }
+
+    #[test]
+    fn reorder_logs_keeps_logs_missing_from_the_order_at_the_end() {
+        // ★ 取り込み（merge_db）は開いている日にもログを増やせる。画面の集合を真実源にして
+        //   作り直す実装だと、そのログが黙って消える
+        let mut db = test_db();
+        let day = d(2026, 8, 10);
+        put(
+            &mut db,
+            day,
+            vec![
+                log(10, &[(60.0, 10)], None),
+                log(11, &[(0.0, 20)], None),
+                log(20, &[(0.0, 60)], None),
+            ],
+        );
+
+        reorder_logs(&mut db, day, &[e(20)]);
+        assert_eq!(
+            log_order(&db, day),
+            vec![e(20), e(10), e(11)],
+            "order に無い 2 本は元の相対順のまま末尾へ"
+        );
+    }
+
+    #[test]
+    fn reorder_logs_never_drops_or_duplicates_a_log() {
+        let day = d(2026, 8, 10);
+        let seed = vec![
+            log(10, &[(60.0, 10)], None),
+            log(11, &[(0.0, 20)], None),
+            log(20, &[(0.0, 60)], None),
+        ];
+        for order in [vec![], vec![e(20), e(11), e(10)], vec![e(11)], vec![e(99)]] {
+            let mut db = test_db();
+            put(&mut db, day, seed.clone());
+            reorder_logs(&mut db, day, &order);
+
+            let mut got = log_order(&db, day);
+            got.sort_unstable();
+            assert_eq!(got, vec![e(10), e(11), e(20)], "order = {order:?}");
+        }
+    }
+
+    #[test]
+    fn reorder_logs_does_not_touch_at_sets_or_notes() {
+        // ★ `at` 決定の回帰テスト。カードの並び替えは触っていない他種目を巻き込むので、
+        //   ここで now を押すと「並べ替えただけの種目を今やった」という捏造になる
+        let mut db = test_db();
+        let day = d(2026, 8, 10);
+        let before = vec![
+            noted_log(
+                10,
+                "肩に違和感",
+                &[(60.0, 10, "1本目キツい"), (60.0, 8, "")],
+                Some(1_000_000),
+            ),
+            noted_log(11, "", &[(0.0, 20, "フォーム意識")], None),
+            noted_log(20, "サボり気味", &[], Some(2_000_000)),
+        ];
+        put(&mut db, day, before.clone());
+
+        reorder_logs(&mut db, day, &[e(20), e(11), e(10)]);
+
+        let after = &db.sessions[&date_key(day)].logs;
+        for want in &before {
+            let got = after
+                .iter()
+                .find(|l| l.exercise_id == want.exercise_id)
+                .expect("ログは消えない");
+            assert_eq!(got, want, "{:?} の中身が動いた", want.exercise_id);
+        }
+    }
+
+    #[test]
+    fn reorder_logs_ignores_duplicate_ids_in_the_order() {
+        let mut db = test_db();
+        let day = d(2026, 8, 10);
+        put(
+            &mut db,
+            day,
+            vec![log(10, &[(60.0, 10)], None), log(11, &[(0.0, 20)], None)],
+        );
+
+        reorder_logs(&mut db, day, &[e(10), e(10), e(11)]);
+        assert_eq!(log_order(&db, day), vec![e(10), e(11)]);
+    }
+
+    #[test]
+    fn reorder_logs_on_a_missing_date_does_nothing_and_creates_no_session() {
+        // ★ entry().or_default() を使うと、記録の無い日が「実施した日」として
+        //   カレンダーとバックアップに残る
+        let mut db = test_db();
+        assert!(!reorder_logs(&mut db, d(2026, 8, 10), &[e(10)]));
+        assert!(db.sessions.is_empty(), "空のセッションを作らない");
+    }
+
+    #[test]
+    fn reorder_logs_reports_whether_it_changed_and_is_idempotent() {
+        let mut db = test_db();
+        let day = d(2026, 8, 10);
+        put(
+            &mut db,
+            day,
+            vec![log(10, &[(60.0, 10)], None), log(11, &[(0.0, 20)], None)],
+        );
+
+        let order = [e(11), e(10)];
+        assert!(reorder_logs(&mut db, day, &order), "1 回目は変わる");
+        assert!(!reorder_logs(&mut db, day, &order), "2 回目は変わらない");
+        assert_eq!(log_order(&db, day), vec![e(11), e(10)]);
+    }
+
+    #[test]
+    fn a_reordered_day_survives_an_export_import_round_trip() {
+        // ★ dedupe_logs の「初出順を保つ」が本機能の前提であることを釘付けにする。
+        //   ここを並べ替える実装に変えると、次回起動で利用者の並びが黙って戻る
+        let mut db = test_db();
+        let day = d(2026, 8, 10);
+        put(
+            &mut db,
+            day,
+            vec![
+                log(10, &[(60.0, 10), (60.0, 8), (60.0, 6)], None),
+                log(11, &[(0.0, 20)], None),
+                log(20, &[(0.0, 60)], None),
+            ],
+        );
+        reorder_logs(&mut db, day, &[e(20), e(11), e(10)]);
+        // セット側も入れ替えておく（views::day の commit が書く形と同じ結果）
+        db.sessions
+            .get_mut(&date_key(day))
+            .expect("その日")
+            .logs
+            .iter_mut()
+            .find(|l| l.exercise_id == e(10))
+            .expect("ベンチプレス")
+            .sets
+            .swap(0, 2);
+
+        let raw = export_json(&db);
+        let back = parse_import(&raw, &mut ids()).expect("読み戻せる");
+
+        assert_eq!(log_order(&back, day), vec![e(20), e(11), e(10)]);
+        let sets = &back.sessions[&date_key(day)]
+            .logs
+            .iter()
+            .find(|l| l.exercise_id == e(10))
+            .expect("ベンチプレス")
+            .sets;
+        assert_eq!(
+            sets.iter().map(|s| s.reps).collect::<Vec<_>>(),
+            vec![6, 8, 10],
+            "セットの並びも保たれる"
+        );
+    }
+
+    #[test]
+    fn copy_day_copies_the_reordered_order() {
+        let mut db = test_db();
+        let from = d(2026, 8, 10);
+        put(
+            &mut db,
+            from,
+            vec![
+                log(10, &[(60.0, 10)], None),
+                log(11, &[(0.0, 20)], None),
+                log(20, &[(0.0, 60)], None),
+            ],
+        );
+        reorder_logs(&mut db, from, &[e(20), e(10), e(11)]);
+
+        let copied = copy_day(&mut db, from, d(2026, 8, 11), None);
+        assert_eq!(copied, vec![e(20), e(10), e(11)]);
+        assert_eq!(log_order(&db, d(2026, 8, 11)), vec![e(20), e(10), e(11)]);
     }
 
     // ── メニューのコピー ────────────────────────────────────────────────────
@@ -3747,6 +4049,59 @@ mod tests {
         assert_eq!(sets.len(), 2);
         assert_eq!(sets[0].note, "あちらの 1");
         assert_eq!(sets[1].note, "あちらの 2");
+    }
+
+    #[test]
+    fn merge_keeps_my_set_order_when_the_other_side_is_the_same_sets_reordered() {
+        // ★ セットの D&D（adr/ux/drag-to-reorder-in-record-tab.md）が開けた穴の回帰。
+        //   same_sets は位置で比べるので、並べ替えただけの同じ記録が食い違い扱いになり、
+        //   log_rank の位置依存な辞書順で勝ち負けが決まって**こちらのセットメモが消える**
+        let (mut mine, theirs) = noted_pair(
+            &[(60.0, 10, "1本目"), (62.5, 8, "2本目"), (65.0, 6, "3本目")],
+            &[(65.0, 6, ""), (60.0, 10, ""), (62.5, 8, "")],
+        );
+
+        let report = merge_db(&mut mine, theirs);
+
+        let sets = &merged_log(&mine).sets;
+        assert_eq!(
+            sets.iter().map(|s| s.reps).collect::<Vec<_>>(),
+            vec![10, 8, 6],
+            "並びは端末ごとの好みなので、取り込み先のものを残す"
+        );
+        assert_eq!(
+            sets.iter().map(|s| s.note.as_str()).collect::<Vec<_>>(),
+            vec!["1本目", "2本目", "3本目"],
+            "セットメモが行から剥がれていない"
+        );
+        assert!(
+            report.conflicts.is_empty(),
+            "食い違っていないものを食い違いとして報告した: {report:?}"
+        );
+        assert_eq!(
+            merged_log(&mine).note,
+            "わたしのメモ\nあちらのメモ",
+            "種目メモの合流は今までどおり効く"
+        );
+    }
+
+    #[test]
+    fn merge_still_reports_a_divergence_when_the_sets_really_differ() {
+        // 本数が同じで中身が違うときまで「並べ替えただけ」に見えては困る
+        let (mut mine, theirs) = noted_pair(
+            &[(60.0, 10, ""), (60.0, 8, "")],
+            &[(62.0, 10, ""), (62.0, 8, "")],
+        );
+
+        let report = merge_db(&mut mine, theirs);
+
+        assert_eq!(merged_log(&mine).sets[0].weight, 62.0, "強いほうを採る");
+        assert!(
+            report
+                .conflicts
+                .iter()
+                .any(|c| matches!(c, Conflict::SetsDiverged { .. }))
+        );
     }
 
     #[test]

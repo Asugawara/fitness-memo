@@ -195,6 +195,8 @@ h3 {
    まずこの一覧に並べて順序を決めること。
 
    現在の重なり順:
+     [data-drag="lift"]    1  … ドラッグ中のカード / セット行。兄弟より前へ出るだけで
+                                sticky の「種目を追加」より下なのが正しい
      .add-wrap（sticky）   9  … タブバーより下
      .bottom-tabs         10
      .sheet（<dialog>）   top layer … z-index を持たない（持っても効かない） */
@@ -513,11 +515,27 @@ h3 {
   padding: 3px 0;
 }
 
+/* ★ この番号が行を掴むハンドルでもある（adr/ux/drag-to-reorder-in-record-tab.md）。
+   専用のグリップを足さないための選択で、「番号 ＝ 順番」なので意味も一致する。
+   見た目は 1px も変えていない — 変えると 3 行ぶんの装飾が入力欄と競合する。 */
 .set-no {
+  position: relative;
   width: 1.4em;
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+/* ★ 1.4em @12px = 16.8px は指で掴むには細い。**レイアウトを 1px も動かさずに**
+   ヒット領域だけ広げる（position:relative は flex アイテムの配置に影響しない）。
+   左 -8px はカードの内側余白側、右 -4px は gap 6px（.set-row）の内側なので重量欄に
+   食い込まない。上下 -14px は、行が 44px の入力欄で決まる高さの中で中央に来ている
+   ぶんを外へ広げる。.warn / .set-note が 2 行目へ折り返しても、この箱は .set-no
+   自身が基準なので隣の行のハンドルとは重ならない。 */
+.set-no::before {
+  content: "";
+  position: absolute;
+  inset: -14px -4px -14px -8px;
 }
 
 .set-row .num {
@@ -638,6 +656,88 @@ h3 {
 .card-foot strong {
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+
+/* ── ドラッグで並び替える（adr/ux/drag-to-reorder-in-record-tab.md）───────────
+   掴む場所はセット行の番号（.set-no）と種目カードの見出し行（.card-head）。
+   どちらも既にある要素で、新しいボタンは 1 つも足していない。 */
+
+/* ★ この 4 つは**ハンドルにだけ**当てる。入力欄まで広げないこと。
+   - touch-action: none … これが無いとドラッグの途中でブラウザがスクロールを始める。
+     styles.css 冒頭の `button, input { touch-action: manipulation }` とは対象が違う
+     （こちらは <span> と <header>）ので競合しない。**代償として、この 2 か所からは
+     ページのスクロールを始められなくなる**。全幅の .card-head を即時ドラッグ開始に
+     しないのはそのため（day.rs の PRESS_DELAY_CARD）
+   - -webkit-touch-callout: none … 無いと長押しで「コピー / 調べる」が出て
+     pointercancel が飛び、掴んだ手が離れる
+   - user-select … 掴んで動かすたびに種目名が選択されるのを止める。継承するので
+     .card-head 1 か所で <h3> と .group-name まで効く
+   - tap-highlight … 掴むたびに青い矩形が光るのを消す */
+.set-no,
+.card-head {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* マウスのある環境にだけ掴めることを見せる。指には何も伝わらないので、
+   これ以上の装飾は足さない（静止時のカードは今までと 1px も変わらない） */
+@media (hover: hover) {
+  .set-no,
+  .card-head {
+    cursor: grab;
+  }
+
+  .set-no:active,
+  .card-head:active {
+    cursor: grabbing;
+  }
+}
+
+/* ★ transition は「ドラッグ中の親」にだけ生やす。無条件に .card / .set-row へ置くと、
+   指を離した瞬間に「<For> の DOM move」と「transform の除去」が同時に起きて、
+   要素が 1 スロット飛んでから 120ms かけて滑って戻る（FLIP のジャンプ）。
+   親の data-dragging は同じ反応フラッシュで外れるので、変化後のスタイルに
+   transition-property が無く、遷移がそもそも開始されない。 */
+   ★ **掴んでいる要素を :not() で外す。** `.set-row[data-drag="lift"] { transition: none }`
+   を別に書く形では詰む — 親側のセレクタ（クラス 2 + 属性 1 = 詳細度 0,3,0）のほうが
+   強いので打ち消せず、掴んだ要素まで 120ms 遅れて指について来る。ここで**そもそも
+   一致させない**のが正しい。滑るのは押しのけられる側だけ、という意味がそのまま出る。 */
+.sets-editor[data-dragging="true"] > .set-row:not([data-drag]),
+.cards[data-dragging="true"] > .card:not([data-drag]) {
+  transition: transform 120ms ease-out;
+}
+
+/* ★ position + z-index が要る。transform だけでは兄弟の描画順は DOM 順のままなので、
+   上へ動かすと直前のカードの下に潜る。値はこのファイル冒頭の重なり順の一覧を参照。 */
+.set-row[data-drag="lift"],
+.card[data-drag="lift"] {
+  position: relative;
+  z-index: 1;
+}
+
+/* 掴んでいることを見せる。**指が止まっていても掴めたと分かる**必要があるので、
+   長押しで効き始める .card-head には必須（day.rs の PRESS_DELAY_CARD）。
+   影ではなく地色で作るのは、このファイルに box-shadow が 1 つも無いため */
+.card[data-drag="lift"] {
+  border-color: var(--accent);
+}
+
+.set-row[data-drag="lift"] {
+  background: var(--bg);
+  border-radius: 8px;
+}
+
+/* ★ 動きを減らす設定では押しのけを瞬時にする。.sheet の 0.1s に揃えないのは、
+   あちらが上下動をやめても黒幕のフェードが残るのに対し、こちらは**動きそのものが
+   全部**だから。0s なら中点を越えた瞬間に入れ替わり、情報は何も失われない */
+@media (prefers-reduced-motion: reduce) {
+  .sets-editor[data-dragging="true"] > .set-row:not([data-drag]),
+  .cards[data-dragging="true"] > .card:not([data-drag]) {
+    transition-duration: 0s;
+  }
 }
 
 /* 「今日 1,080」を 1 かたまりにして、フッタ左端を外す導線に空ける */
@@ -1439,8 +1539,12 @@ h3 {
 }
 
 /* 開いている間だけ下向きにする。chevron-down を別ファイルで持たないための回転。
-   ★ transition は付けない。この CSS には animation / transition が 1 つも無く
-     prefers-reduced-motion のガードも置いていないので、1 つ入れると全部要る */
+   ★ transition は付けない。ここは**押した結果が即座に出るべき状態表示**で、
+     120ms でも「開いたか」が読めない時間ができる。
+   （このコメントは以前「この CSS には transition が 1 つも無い」と書いていたが、
+     .sheet の出入り 0.22s とドラッグの押しのけ 120ms が入った時点で嘘になっていた。
+     prefers-reduced-motion のガードも両方に置いてある。付けない理由は
+     「前例が無いから」ではなく、この要素にとって不要だから） */
 .grp-toggle[aria-expanded="true"] > .icon {
   transform: rotate(90deg);
 }

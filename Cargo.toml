@@ -36,9 +36,10 @@ web-sys = { version = "0.3", features = [
     "MouseEvent",         # 背景タップ判定の client_x / client_y
     "DomRect",            # Element::get_bounding_client_rect（背景タップ判定の箱 / 並び替えの実測）
     # ── 並び替え（adr/ux/drag-to-reorder-in-record-tab.md）──
-    # ★ tachys が自分で有効化しているので宣言しなくてもコンパイルは通るが、その「偶然」に
-    #   寄りかからない（このファイル冒頭の方針）。set_pointer_capture / scroll_by は
-    #   Element / Window の側にあるので、増えるのはこの 1 つだけ
+    # ★ どちらも tachys が自分で有効化しているので宣言しなくてもコンパイルは通るが、
+    #   その「偶然」に寄りかからない（このファイル冒頭の方針）。増えるのはこの 2 つだけで、
+    #   set_pointer_capture / scroll_by / get_bounding_client_rect は
+    #   Element / Window / DomRect の側にあるので既存の宣言で足りている
     "PointerEvent",       # pointerdown/move/up の pointer_id / client_y / is_primary
     "KeyboardEvent",      # ドラッグの代わりの Alt + ↑↓（alt_key / key）
     "Crypto",          # Window::crypto → getRandomValues（ID の種）

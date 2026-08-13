@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-13
 - **カテゴリ**: ux
-- **関連**: [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](menu-groups-as-single-open-accordion.md), [「1日1種目1ログ」を不変条件にする](../data-model/one-log-per-exercise-per-day.md), [`at` を `Option<i64>` にし当日入力時のみ埋める](../data-model/at-optional-same-day-only.md), [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md), [セット削除は確認を挟まない（カード削除の確認は残す）](set-delete-without-confirmation.md), [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [localStorage の単一キーに JSON 全体を持つ](../storage/localstorage-single-key-json.md), [グラフの座標計算を `chart_layout` に切り出してテスト可能にする](../architecture/chart-layout-as-a-testable-module.md)
+- **関連**: [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](menu-groups-as-single-open-accordion.md), [「1日1種目1ログ」を不変条件にする](../data-model/one-log-per-exercise-per-day.md), [`at` を `Option<i64>` にし当日入力時のみ埋める](../data-model/at-optional-same-day-only.md), [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md), [セット削除は確認を挟まない（カード削除の確認は残す）](set-delete-without-confirmation.md), [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [localStorage の単一キーに JSON 全体を持つ](../storage/localstorage-single-key-json.md), [グラフの座標計算を `chart_layout` に切り出してテスト可能にする](../architecture/chart-layout-as-a-testable-module.md), [キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md)
 
 ## 背景
 
@@ -141,6 +141,33 @@ transform だけで見せる形なら、測るのは掴んだ 1 回だけで済�
 viewport 基準のスナップショットは陳腐化する。document 基準なら毎 `pointermove` で
 `scrollY` を足し直すだけで整合が保てる。画面端の自動スクロールが成立するのも同じ理由。
 
+### `pointerdown` で `prevent_default()` を呼び、フォーカスは自分で外す
+
+WebKit だけ、**指が通り過ぎた入力欄にフォーカスが移る**（選択ドラッグ）。実測
+（iPhone 15 Pro）:
+
+| 段階 | `.app` | `activeElement` |
+|---|---|---|
+| ドラッグ前 | `app` | BODY |
+| `pointerdown` 後 | `app` | BODY |
+| **指を動かした後** | **`app kb-open`** | **`set-reps`** |
+| 指を離した後 | `app kb-open` | BODY |
+
+最後の行が致命的で、`<For>` が DOM を move した拍子にフォーカスが **`focusout` を
+出さずに**消えるため `kb_blur` が走らない。`.kb-open` が立ちっぱなしになり、
+[キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md) の
+`display: none` で**タブバーが消えたまま戻らなくなる**。Chromium では再現しない。
+
+`pointerdown` の `prevent_default()` で WebKit の選択ドラッグごと止める。**これは
+スクロール対策ではない**（それは `touch-action: none` の仕事で、`pointerdown` の
+preventDefault では iOS のスクロールは止まらない）。互換 `mousedown` が止まるぶん
+フォーカスが外れなくなるので、掴んだ時点で自分で `blur()` する — 掴んだら
+キーボードは引っ込むべきなので、挙動としてもこちらが正しい。
+
+★ **これも実装後のレビューで見つけた。** 当初は「preventDefault は入力欄から blur して
+ほしいので呼ばない」と書いていたが、根拠が逆立ちしていた（blur は自分で呼べる。
+呼ばないと WebKit の選択ドラッグが残る）。
+
 ### ドラッグ中の番号は「見えている位置」を描く
 
 `Vec` を入れ替えないので模型の添字と見えている位置がずれる。そのまま描くと
@@ -168,6 +195,12 @@ transition: none }` を別に書く形では詰む — 親側のセレクタ（�
 `prefers-reduced-motion` では `0s` にする。`.sheet` の 0.1s に揃えないのは、あちらが
 上下動をやめても黒幕のフェードが残るのに対し、こちらは**動きそのものが全部**だから。
 
+★ この節の 2 つの落とし穴は**どちらも実装後のレビューで見つかった**。詳細度のほうに加えて、
+コメントの閉じ忘れでルールごと構文エラーになり**トランジションが 1 度も動いていなかった**
+時期がある。並びは正しくなるので E2E は全部通ってしまう。`getComputedStyle` の
+`transitionProperty` を直接見る E2E を足して塞いだ — **見た目だけの CSS は、見た目を
+assert しない限り死んでいても気づけない。**
+
 ## 結果（トレードオフ）
 
 - **`.set-no` と `.card-head` からは画面のスクロールを始められなくなった**
@@ -192,7 +225,11 @@ transition: none }` を別に書く形では詰む — 親側のセレクタ（�
   セットを並べ替えただけの同じ記録が食い違い扱いになり、`log_rank` の第 3 要素が位置依存な
   ぶん勝ち負けが実質任意に決まって、**並びが黙って戻るうえ負けた側のセットメモが消える**。
   **この機能が新しく開けた穴**なので同じ変更で塞いだ。中身が同じで並びだけ違うときは
-  取り込み先を残し、`Conflict` も出さず、位置が対応しないのでセットメモの補完もしない
+  取り込み先を残し、`Conflict` も出さない。**セットメモは位置ではなく「重量・回数が
+  同じセット同士」で合流させる**（`merge_set_notes_unordered`）。ここで捨てると、片方の
+  端末で 1 度並べ替えただけで**もう片方のセットメモが二度と合流しなくなる** — 以後
+  `same_sets` の枝に永久に入らないため。同じ重量・回数の行が複数あるときどちらに付くかは
+  決められないが、記録が同じ行同士なので、捨てるより害が小さい
 - **`core::dedupe_logs` の「初出順を保つ」が仕様になった。** 読み込みのたびに通る場所なので、
   ここを並べ替える実装に変えると次回起動で利用者の並びが黙って戻る。doc にその旨を書き、
   書き出し → 読み込みの round-trip テストで釘付けにした
@@ -208,6 +245,14 @@ transition: none }` を別に書く形では詰む — 親側のセレクタ（�
 - **キーボード経路の発見可能性が無い。** `help.rs` はホーム画面追加の案内専用で一般的な
   ヘルプ面が無く、`aria-keyshortcuts` を入力欄に付けると打鍵のたびに読み上げが伸びる
   （トレ中のホットパス）。E2E の安定した経路としての価値のほうが大きいと判断した
+- **タブを切り替えると記録タブごと破棄されるので、掴んだままの切替を明示的に畳む。**
+  `mod.rs` の `match tab.get()` の枝なので、ドラッグや長押しの途中でタブを押すと
+  `DayEditor` が消え、生き残った rAF ループとタイマーが破棄済みの signal を触って
+  **wasm が unreachable に落ちる**（アプリが白くなる）。`on_cleanup` で畳み、rAF 側も
+  `try_with_untracked` で受け止める。長押しの待ちを `StoredValue` ではなく所有者を持たない
+  `thread_local` に置いたのもこのため。加えて `pointerdown` は前の待ちが残っていても
+  弾かずに畳んで立て直す — 「残っていたら何もしない」形にすると、`pointerup` を 1 度でも
+  取りこぼしたとき以後カードが二度と掴めない
 - **`data-drag` / `data-dragging` が CSS のフックであり E2E の待機条件でもある。**
   `aria-expanded` を回転のフックにした
   [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](menu-groups-as-single-open-accordion.md)
@@ -270,7 +315,13 @@ transition: none }` を別に書く形では詰む — 親側のセレクタ（�
 種目の順を変える。一貫性より、黙って壊れないことを採る。却下。
 
 **画面端の自動スクロールを入れない**: rAF ループと再入防止が要らず、実装がいちばん小さい。
-しかしカードは 5〜8 枚 × 150〜400px に対し可視域が約 660px で、**画面内では端まで届かない
-ケースが構造的に存在する**。1 枚目を末尾へ運ぶのに「動かす → 離す → スクロール」を数回
-繰り返すことになる。却下（セット行には入れていない — 1 カード最大 8 行 × 約 50px なので
-カードが見えていればリスト全体が入る）。
+しかし**カードにもセット行にも、画面内では端まで届かないケースが構造的に存在する**。
+カードは 5〜8 枚 × 150〜400px に対し可視域が約 660px。セット行は閉じていれば
+8 行 × 約 50px で収まるが、**メモ欄を開くと 1 行 96px になり 8 行で 768px**（実測）で、
+1 本目を 8 本目まで運ぶ指が画面の外に出る。無いと「動かす → 離す → スクロール」を数回
+繰り返すことになる。却下。
+
+（★ 当初はセット行を除外し「1 カード最大 8 行 × 約 50px なのでカードが見えていれば
+リスト全体が入る」と書いていた。メモを開いた状態を数えておらず、実装後のレビューで
+実測して訂正した。**この機能はメモ欄と同じカードの中にあるので、あちらの高さが
+こちらの前提になる。**）

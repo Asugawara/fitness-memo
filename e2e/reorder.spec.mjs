@@ -141,6 +141,10 @@ function expectWeights(card, values) {
  *   指が 1px も動かないので、slop（10px）で捨てられることもない。
  */
 async function dragBy(page, handle, lifted, dy) {
+  // ★ 測る前に画面へ入れる。boundingBox() はスクロールしないので、画面外の要素の
+  //   座標をそのまま mouse へ渡すと**別の要素を掴む**（タブを往復するとスクロールが
+  //   戻るので、往復後のカードは高確率で画面外にいる）
+  await handle.scrollIntoViewIfNeeded();
   const box = await handle.boundingBox();
   expect(box, 'ハンドルが画面に出ていること').not.toBeNull();
   const x = box.x + box.width / 2;
@@ -238,6 +242,7 @@ test('★ ドラッグ中も番号は上から 1,2,3 で、掴んだ行は落ち
   const tops = () => rows.evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
   const before = await tops();
 
+  await card.getByTestId('set-handle').nth(0).scrollIntoViewIfNeeded();
   const box = await card.getByTestId('set-handle').nth(0).boundingBox();
   const rowHeight = (await rows.nth(0).boundingBox()).height;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -262,6 +267,38 @@ test('★ ドラッグ中も番号は上から 1,2,3 で、掴んだ行は落ち
   await page.mouse.up();
   await expectWeights(card, ['62.5', '60', '65']);
   await expect(card.getByTestId('set-handle')).toHaveText(['1', '2', '3']);
+});
+
+test('★ 押しのけられる行にトランジションが効いていて、掴んだ行には効いていない', async ({
+  page,
+}) => {
+  // ★ CSS の構文エラーでルールごと捨てられていても、並びは正しくなるので他の
+  //   テストは全部通る。**computed style を直接見るのがこの退行を捕まえる唯一の方法**
+  //   （実際にコメントの閉じ忘れで丸ごと無効になっていた）
+  const card = await benchWithThreeSets(page);
+  const rows = card.getByTestId('set-row');
+  await card.getByTestId('set-handle').nth(0).scrollIntoViewIfNeeded();
+  const box = await card.getByTestId('set-handle').nth(0).boundingBox();
+  const rowHeight = (await rows.nth(0).boundingBox()).height;
+
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + rowHeight, { steps: 4 });
+
+  const transitions = await rows.evaluateAll((els) =>
+    els.map((e) => getComputedStyle(e).transitionProperty),
+  );
+  expect(transitions[0], '掴んだ行は指に遅れず付いてくる').toBe('all');
+  expect(transitions[1], '押しのけられる行は滑る').toBe('transform');
+  expect(
+    await rows.nth(1).evaluate((e) => getComputedStyle(e).transitionDuration),
+  ).toBe('0.12s');
+
+  await page.mouse.up();
+  // 静止時はどちらにも効いていない（親の data-dragging が外れる）
+  await expect
+    .poll(() => rows.evaluateAll((els) => els.map((e) => getComputedStyle(e).transitionProperty)))
+    .toEqual(['all', 'all', 'all']);
 });
 
 test('セットメモは行について回る', async ({ page }) => {
@@ -321,6 +358,22 @@ test('Alt + ↑↓ でもセット行が動く（ドラッグの代わりの経�
     [65, 6, ''],
     [62.5, 8, ''],
   ]);
+});
+
+test('★ セットメモ欄の中でも Alt + ↑↓ は行を動かす（カードは動かない）', async ({ page }) => {
+  // ★ 行の入力欄のどれか 1 つでも on:keydown を漏らすと、そこからカード側へ
+  //   bubble して「行を動かしたつもりがカードごと動く」。ドラッグを使えない人に
+  //   とっては唯一の経路なので、入力欄ごとに見る
+  const bench = await benchWithThreeSets(page);
+  const push = await addExercise(page, 'プッシュアップ');
+  await fillSet(push, 0, { reps: 20 });
+  await blurActive(page);
+  await bench.getByTestId('note-toggle').click();
+
+  await nudge(page, bench.getByTestId('set-note').nth(2), true);
+
+  await expectWeights(bench, ['60', '65', '62.5']);
+  await expectCards(page, ['ベンチプレス', 'プッシュアップ']);
 });
 
 test('保存されない空行を動かしても、保存済みセットの並びは壊れない', async ({ page }) => {
@@ -443,6 +496,7 @@ test('見出しをタップしただけ / 素早くフリックしただけで�
   await blurActive(page);
 
   const head = push.getByTestId('card-handle');
+  await head.scrollIntoViewIfNeeded();
   const box = await head.boundingBox();
   const x = box.x + box.width / 2;
   const y = box.y + box.height / 2;
@@ -463,6 +517,80 @@ test('見出しをタップしただけ / 素早くフリックしただけで�
   await expectCards(page, ['ベンチプレス', 'プッシュアップ']);
   await flushToStorage(page);
   expect(await savedOrder(page)).toEqual(['ベンチプレス', 'プッシュアップ']);
+});
+
+test('★ ドラッグしてもタブバーが消えず、掴むとキーボードは引っ込む', async ({ page }) => {
+  // ★ WebKit だけの経路。指の下の入力欄に**フォーカスが移ってしまい**（選択ドラッグ）、
+  //   その後 <For> が DOM を move した拍子に focusout を出さずにフォーカスが消えるので、
+  //   `.kb-open` が立ちっぱなしになる ＝ **タブバーが消えたまま戻らない**。
+  //   Chromium では再現しないが、テストは全 project で回す（塞いだ側を守る）
+  const bench = await addExercise(page, 'ベンチプレス');
+  await fillSet(bench, 0, { weight: 60, reps: 10 });
+  const push = await addExercise(page, 'プッシュアップ');
+  await fillSet(push, 0, { reps: 20 });
+
+  // 入力欄にフォーカスを残したまま掴む（トレ中はこれが普通）
+  await push.getByTestId('set-reps').focus();
+  await expect(page.getByTestId('tab-record')).toBeHidden();
+
+  await dragCard(page, 'プッシュアップ', -((await bench.boundingBox()).height + 40));
+
+  await expectCards(page, ['プッシュアップ', 'ベンチプレス']);
+  await expect(page.getByTestId('tab-record'), 'タブバーが消えたまま戻らない').toBeVisible();
+  expect(
+    await page.evaluate(() => document.querySelector('.app').className),
+    '掴んだらキーボード状態は解除される',
+  ).not.toContain('kb-open');
+});
+
+test('★ 掴んだままタブを切り替えてもアプリが落ちない', async ({ page }) => {
+  // ★ 記録タブは mod.rs の `match tab.get()` の枝なので、タブを切り替えると
+  //   DayEditor ごと破棄される。生き残った rAF ループと長押しタイマーが破棄済みの
+  //   signal を触ると wasm が unreachable に落ちてアプリが死ぬ（画面が白くなる）。
+  //   ★ タブは dispatchEvent で押す。pointer capture 中は本物のクリックが
+  //     掴んでいる要素へ吸われるので、実機の「2 本目の指でタブを押す」を再現できない
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  const bench = await addExercise(page, 'ベンチプレス');
+  await fillSet(bench, 0, { weight: 60, reps: 10 });
+  const push = await addExercise(page, 'プッシュアップ');
+  await fillSet(push, 0, { reps: 20 });
+  await blurActive(page);
+
+  // (1) 長押しの待ち時間の途中で切り替える（タイマーだけが生き残る経路）
+  const head = push.getByTestId('card-handle');
+  await head.scrollIntoViewIfNeeded();
+  let box = await head.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.getByTestId('tab-menu').dispatchEvent('click');
+  await expect(page.getByTestId('screen-menu')).toBeVisible();
+  await page.mouse.up();
+
+  await page.getByTestId('tab-record').dispatchEvent('click');
+  await expectCards(page, ['ベンチプレス', 'プッシュアップ']);
+
+  // (2) 掴んだ状態で切り替える（rAF ループが生き残る経路）
+  await push.getByTestId('card-handle').scrollIntoViewIfNeeded();
+  box = await push.getByTestId('card-handle').boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect(push).toHaveAttribute('data-drag', 'lift');
+  await page.getByTestId('tab-menu').dispatchEvent('click');
+  await expect(page.getByTestId('screen-menu')).toBeVisible();
+  await page.mouse.up();
+
+  await page.getByTestId('tab-record').dispatchEvent('click');
+  await expectCards(page, ['ベンチプレス', 'プッシュアップ']);
+
+  // ★ 戻ってきたあともドラッグが効く（EDGE_SCROLLING が立ちっぱなしだと
+  //   自動スクロールだけが二度と動かなくなる。掴めること自体はここで見る）
+  const again = cardOf(page, 'プッシュアップ');
+  await dragBy(page, again.getByTestId('card-handle'), again, -((await bench.boundingBox()).height + 40));
+  await expectCards(page, ['プッシュアップ', 'ベンチプレス']);
+
+  expect(errors, 'ページ内で例外が起きた').toEqual([]);
 });
 
 test('Alt + ↑↓ でもカードが動き、端では何も起きない', async ({ page }) => {

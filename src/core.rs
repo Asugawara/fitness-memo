@@ -97,7 +97,7 @@ fn same_sets(a: &[SetEntry], b: &[SetEntry]) -> bool {
             .all(|(x, y)| x.weight == y.weight && x.reps == y.reps)
 }
 
-/// 並びを無視したセット列の一致。**メモも無視する。**
+/// 並びを無視したセット列の一致。**メモは見ない。**
 ///
 /// ★ [`same_sets`] は `zip` で位置を比べるので、**セットを並べ替えただけの同じ記録**を
 /// 食い違い扱いにする（adr/ux/drag-to-reorder-in-record-tab.md でセットの D&D を入れた）。
@@ -116,6 +116,36 @@ fn same_sets_unordered(a: &[SetEntry], b: &[SetEntry]) -> bool {
         v
     };
     key(a) == key(b)
+}
+
+/// 重量・回数が同じセット同士を突き合わせてメモを合流させる。足した数を返す。
+///
+/// [`same_sets`] のときの「位置で埋める」を、**並びが違うとき用に一般化したもの**。
+/// 同じ重量・回数のセットが複数あるときは出現順に 1 対 1 で組む（どちらに付くかは
+/// 決められないが、**捨てるよりは良い** — 同じ記録の同じ重量・回数の行なので、
+/// メモが隣の行に付いても意味の壊れ方は位置ずれと同程度）。
+///
+/// ★ これが無いと、片方の端末でセットを並べ替えた瞬間に**もう片方のセットメモが
+/// 二度と合流しなくなる**（並び替えが `same_sets` を false にするため）。
+fn merge_set_notes_unordered(mine: &mut [SetEntry], theirs: &[SetEntry]) -> usize {
+    let mut used = vec![false; mine.len()];
+    let mut added = 0;
+    for t in theirs.iter().filter(|t| !t.note.trim().is_empty()) {
+        let found = mine
+            .iter()
+            .enumerate()
+            .find(|(i, m)| {
+                !used[*i] && m.weight.to_bits() == t.weight.to_bits() && m.reps == t.reps
+            })
+            .map(|(i, _)| i);
+        if let Some(i) = found {
+            used[i] = true;
+            if append_note(&mut mine[i].note, &t.note) {
+                added += 1;
+            }
+        }
+    }
+    added
 }
 
 /// メモの合流。**同じ文が既に入っていれば足さない。** 足したら `true`。
@@ -1436,9 +1466,13 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             //   実質任意に決まって、並びが黙って戻るうえ負けた側のセットメモが消える
             //   （adr/ux/drag-to-reorder-in-record-tab.md）。`Conflict` も出さない —
             //   利用者から見て食い違っていないものを食い違いとして報告するのは嘘になる。
-            //   セットメモの位置補完もしない（位置が対応しないので、別のセットに
-            //   メモが付くほうが害が大きいという上の枝と同じ判断）
+            //   ★ **メモは位置ではなく「重量・回数が同じセット同士」で合流させる。**
+            //     ここで捨てると、片方の端末で 1 度並べ替えただけで**もう片方の
+            //     セットメモが二度と合流しなくなる**（上の `same_sets` の枝に
+            //     二度と入らないため）。並びが違うだけで記録は同じなのだから、
+            //     メモを落とす理由が無い
             if same_sets_unordered(&existing.sets, &log.sets) {
+                report.notes_added += merge_set_notes_unordered(&mut existing.sets, &log.sets);
                 continue;
             }
             // 取り込む側が強いときだけ差し替える。逆向きは黙って捨てる
@@ -4074,6 +4108,43 @@ mod tests {
             vec!["1本目", "2本目", "3本目"],
             "セットメモが行から剥がれていない"
         );
+        assert!(
+            report.conflicts.is_empty(),
+            "食い違っていないものを食い違いとして報告した: {report:?}"
+        );
+    }
+
+    #[test]
+    fn merge_still_takes_set_notes_from_a_reordered_other_device() {
+        // ★ ここを捨てると、片方の端末で 1 度並べ替えただけで**もう片方のセットメモが
+        //   二度と合流しなくなる**（same_sets の枝に二度と入らないため）
+        let (mut mine, theirs) = noted_pair(
+            &[(60.0, 10, ""), (62.5, 8, "自分の 2 本目"), (65.0, 6, "")],
+            &[
+                (65.0, 6, "あちらの 3 本目"),
+                (60.0, 10, "あちらの 1 本目"),
+                (62.5, 8, "あちらの 2 本目"),
+            ],
+        );
+
+        let report = merge_db(&mut mine, theirs);
+
+        let sets = &merged_log(&mine).sets;
+        assert_eq!(
+            sets.iter().map(|s| s.reps).collect::<Vec<_>>(),
+            vec![10, 8, 6],
+            "並びは取り込み先のまま"
+        );
+        assert_eq!(
+            sets.iter().map(|s| s.note.as_str()).collect::<Vec<_>>(),
+            vec![
+                "あちらの 1 本目",
+                "自分の 2 本目\nあちらの 2 本目",
+                "あちらの 3 本目",
+            ],
+            "重量・回数が同じセット同士でメモが合流する"
+        );
+        assert_eq!(report.notes_added, 4, "セットメモ 3 本 + 種目メモ 1 本");
         assert!(
             report.conflicts.is_empty(),
             "食い違っていないものを食い違いとして報告した: {report:?}"

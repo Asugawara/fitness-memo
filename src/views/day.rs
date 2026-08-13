@@ -83,15 +83,34 @@ const PRESS_SLOP_PX: f64 = 10.0;
 
 /// 画面端に指があるときのスクロール速度（px/frame）。60fps で約 840px/s。
 ///
-/// カードは 5〜8 枚 × 150〜400px で、可視域（約 660px）に収まらない。これが無いと
-/// 1 枚目を末尾へ運ぶのに「動かす → 指を離す → スクロール」を数回繰り返すことになる。
-/// セット行には要らない（1 カード最大 8 行 × 約 50px で、カードが見えていれば全部入る）。
+/// **カードにもセット行にも要る。**
+/// - カードは 5〜8 枚 × 150〜400px で、可視域（約 660px）に収まらない
+/// - セット行は閉じていれば 8 行 × 約 50px で収まるが、**メモ欄を開くと 1 行 96px**
+///   になり、8 行で 768px（実測）。1 本目を 8 本目まで運ぶ指が画面の外に出る
+///
+/// 無いと「動かす → 指を離す → スクロール」を数回繰り返すことになる。
 const EDGE_STEP_PX: f64 = 14.0;
 
 thread_local! {
     /// 端の自動スクロールのループが走っているか。**再入防止。**
     /// 同時に掴めるハンドルは 1 つなので 1 本で足りる（`views::mod` の `KB_TIMER` と同じ形）。
     static EDGE_SCROLLING: Cell<bool> = const { Cell::new(false) };
+    /// 長押し待ち。**画面には何も出ないので signal ではない。**
+    ///
+    /// ★ `DayEditor` の中（`StoredValue`）に置かない。記録タブは `mod.rs` の
+    ///   `match tab.get()` の枝なので、**タブを切り替えた瞬間に所有者ごと破棄される**。
+    ///   長押しの途中で切り替えると、生き残ったタイマーが破棄済みの値を触って panic する
+    ///   （wasm では unreachable に落ちてアプリが死ぬ）。ここなら所有者を持たない。
+    static PRESS: Cell<Option<Press>> = const { Cell::new(None) };
+}
+
+/// 長押し待ちを畳む。タイマーが生きていれば止める。**冪等。**
+fn end_press() {
+    if let Some(p) = PRESS.take()
+        && let Some(timer) = p.timer
+    {
+        timer.clear();
+    }
 }
 
 /// `.card-head` を押してからカードのドラッグが効き始めるまで。
@@ -183,6 +202,25 @@ impl Drag {
 
 /// 掴む資格を確かめ、ポインタを捕まえる。
 ///
+/// ★ **`prevent_default()` を呼ぶ。** これはスクロール対策ではない（それは
+/// `touch-action: none` の仕事で、`pointerdown` の preventDefault では iOS の
+/// スクロールは止まらない）。止めたいのは **WebKit の選択ドラッグ**で、これを許すと
+/// 指が通り過ぎた入力欄に**フォーカスが移ってしまう**。実測（iPhone 15 Pro / WebKit）:
+///
+/// | 段階 | `.app` | `activeElement` |
+/// |---|---|---|
+/// | ドラッグ前 | `app` | BODY |
+/// | `pointerdown` 後 | `app` | BODY |
+/// | **指を動かした後** | **`app kb-open`** | **`set-reps`** |
+/// | 指を離した後 | `app kb-open` | BODY |
+///
+/// 最後の行が致命的で、`<For>` が DOM を move した拍子にフォーカスが**`focusout` を
+/// 出さずに**消えるため `kb_blur` が走らず、`.kb-open` が立ちっぱなしになる
+/// （＝ `styles.css` の `.kb-open .bottom-tabs { display: none }` でタブバーが消えたまま
+/// 戻らない）。Chromium では再現しない。
+///
+/// 互換 `mousedown` が止まるとフォーカスが外れなくなるので、[`blur_active`] で自分で外す。
+///
 /// ★ `current_target()` ではなく `target()` を使う。leptos の `delegation` feature は
 /// 今 OFF（`csr` に含まれない）なのでハンドラは要素へ直付けされるが、ON になると
 /// `current_target` は黙って壊れる。capture 先が子要素（`.card-head` の中の `<h3>`）に
@@ -190,18 +228,44 @@ impl Drag {
 ///
 /// ★ capture できなければ掴まない。capture 無しで始めると、指がハンドルの外へ出た
 /// 瞬間に `pointermove` も `pointerup` も届かなくなり、**持ち上がったまま固まる**。
-///
-/// ★ `prevent_default()` は呼ばない。スクロールを止めるのは `touch-action: none` の
-/// 仕事で、`pointerdown` の preventDefault では iOS のスクロールは止まらない。むしろ
-/// 互換 `mousedown` を抑止してフォーカス移動まで止めるので、入力欄から blur して
-/// ほしいのに残る。
 fn capture(ev: &PointerEvent) -> bool {
-    ev.is_primary()
-        && ev.button() == 0
-        && ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-            .is_some_and(|el| el.set_pointer_capture(ev.pointer_id()).is_ok())
+    if !ev.is_primary() || ev.button() != 0 {
+        return false;
+    }
+    let ok = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .is_some_and(|el| el.set_pointer_capture(ev.pointer_id()).is_ok());
+    if ok {
+        ev.prevent_default();
+        blur_active();
+    }
+    ok
+}
+
+/// 今フォーカスがある要素を外す。
+///
+/// 掴んだらキーボードは引っ込むべきで、[`capture`] の `prevent_default()` が互換
+/// `mousedown` ごと止めてしまうぶんを自分で埋める。`focusout` が出るので
+/// `views::mod` の `kb_blur` が普通に走る。
+fn blur_active() {
+    if let Some(el) = document()
+        .active_element()
+        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        let _ = el.blur();
+    }
+}
+
+/// 画面に並んでいるカードの順（その日のぶんだけ）。`core::reorder_logs` に渡す。
+///
+/// ★ `CardRef.date` で絞るのは、日付を切り替えた直後の 1 tick で `cards` が前日のままでも
+/// 別の日の ID が混ざらないようにするため。**ドロップ側と `commit` の 2 か所から呼ぶので
+/// 関数にしてある** — 片方だけ絞り方を変えると「`logs` の順 == `cards` の順」という
+/// 不変条件が片方の経路でだけ破れる（adr/ux/drag-to-reorder-in-record-tab.md）。
+fn card_order(cards: RwSignal<Vec<CardRef>>, date: NaiveDate) -> Vec<ExerciseId> {
+    let key = core::date_key(date);
+    cards.with_untracked(|cs| cs.iter().filter(|c| c.date == key).map(|c| c.ex).collect())
 }
 
 /// このポインタが掴んでいる最中か。
@@ -245,7 +309,11 @@ fn alt_arrow(ev: &web_sys::KeyboardEvent) -> Option<bool> {
 /// （56px）の上端でちょうど最大速度になる位置に帯が来るため。指がタブバーの上まで
 /// 行っても pointer capture が効いているので、そこは「最大速度の続き」で正しい。
 fn edge_scroll_tick(drag: RwSignal<Option<Drag>>) {
-    let Some(d) = drag.get_untracked() else {
+    // ★ `try_` で読む。記録タブはタブ切替で破棄されるので、ドラッグ中に切り替えると
+    //   この signal はもう無い。`get_untracked` だと panic して wasm ごと落ちる。
+    //   **フラグを下ろすのは早期 return の全経路で**。1 つでも漏らすと再入防止の
+    //   フラグが立ちっぱなしになり、以後この機能が二度と動かない
+    let Some(Some(client_y)) = drag.try_with_untracked(|d| d.as_ref().map(|d| d.client_y)) else {
         EDGE_SCROLLING.set(false);
         return;
     };
@@ -255,7 +323,7 @@ fn edge_scroll_tick(drag: RwSignal<Option<Drag>>) {
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
     let step = reorder::edge_scroll_step(
-        d.client_y,
+        client_y,
         reorder::EDGE_BAND,
         height - reorder::EDGE_BAND,
         EDGE_STEP_PX,
@@ -269,6 +337,8 @@ fn edge_scroll_tick(drag: RwSignal<Option<Drag>>) {
             }
         });
     }
+    // ★ 端に居ないフレームでも回し続ける（指が後から端へ入ってくる）。読むのは
+    //   `client_y` の 1 つだけなので、止める価値のあるコストは乗っていない
     request_animation_frame(move || edge_scroll_tick(drag));
 }
 
@@ -430,10 +500,19 @@ pub fn DayEditor() -> impl IntoView {
 
     let cards: RwSignal<Vec<CardRef>> = RwSignal::new(Vec::new());
     // カードのドラッグ。全カードが押しのけ量を読むので `DayEditor` が持つ。
-    // 長押し待ちは何も描画しないので signal ではなく `StoredValue`（同時に押せる
-    // ハンドルは 1 つなので 1 本で足りる）。
+    // 長押し待ちは所有者を持たない `PRESS`（module 冒頭）に置く。
     let card_drag: RwSignal<Option<Drag>> = RwSignal::new(None);
-    let card_press: StoredValue<Option<Press>> = StoredValue::new(None);
+
+    // ★ この画面は `mod.rs` の `match tab.get()` の枝なので、**タブを切り替えると
+    //   ここごと破棄される**。ドラッグや長押しの途中で切り替えると、生き残った
+    //   タイマーと rAF ループが破棄済みの `card_drag` を触って panic する
+    //   （wasm では unreachable = アプリが死ぬ）。畳んでから消える。
+    //   `EDGE_SCROLLING` を下ろし忘れると再入防止のフラグが立ちっぱなしになり、
+    //   戻ってきても自動スクロールが二度と動かない
+    on_cleanup(|| {
+        end_press();
+        EDGE_SCROLLING.set(false);
+    });
     let sheet = RwSignal::new(false);
 
     // カードを Db から引き直す。
@@ -643,12 +722,7 @@ pub fn DayEditor() -> impl IntoView {
                         key=|c| (c.date.clone(), c.ex)
                         children=move |c| {
                             view! {
-                                <ExerciseCard
-                                    ex=c.ex
-                                    cards=cards
-                                    card_drag=card_drag
-                                    card_press=card_press
-                                />
+                                <ExerciseCard ex=c.ex cards=cards card_drag=card_drag />
                             }
                         }
                     />
@@ -863,7 +937,6 @@ fn ExerciseCard(
     ex: ExerciseId,
     cards: RwSignal<Vec<CardRef>>,
     card_drag: RwSignal<Option<Drag>>,
-    card_press: StoredValue<Option<Press>>,
 ) -> impl IntoView {
     let db = use_db();
     let dates = use_dates();
@@ -996,9 +1069,7 @@ fn ExerciseCard(
         //   不変条件になる（adr/ux/drag-to-reorder-in-record-tab.md）。
         //   `CardRef.date` で絞るのは、日付を切り替えた直後の 1 tick で `cards` が
         //   前日のままでも別の日の ID が混ざらないようにするため
-        let key = core::date_key(date);
-        let order: Vec<ExerciseId> =
-            cards.with_untracked(|cs| cs.iter().filter(|c| c.date == key).map(|c| c.ex).collect());
+        let order = card_order(cards, date);
         db.update(|d| {
             write_log(d, date, ex, sets, note, is_today);
             core::reorder_logs(d, date, &order);
@@ -1157,9 +1228,7 @@ fn ExerciseCard(
         }
         cards.update(|cs| reorder::move_item(cs, from, to));
         let date = dates.selected.get_untracked();
-        let key = core::date_key(date);
-        let order: Vec<ExerciseId> =
-            cards.with_untracked(|cs| cs.iter().filter(|c| c.date == key).map(|c| c.ex).collect());
+        let order = card_order(cards, date);
         db.update(|d| {
             core::reorder_logs(d, date, &order);
         });
@@ -1170,34 +1239,45 @@ fn ExerciseCard(
     // ★ 押した瞬間の位置を基準にしないこと。待っている間の 0〜10px ぶん、掴んだ
     //   瞬間にカードが跳ねる。測るのもここ（押した瞬間ではない）。
     let arm_card = move || {
-        let Some(p) = card_press.get_value() else {
+        let Some(p) = PRESS.get() else {
             return;
         };
-        let (ids, here) = cards.with_untracked(|cs| {
+        // ★ `try_` で読む。長押しの途中でタブを切り替えると `DayEditor` ごと破棄され、
+        //   このタイマーだけが生き残る。`on_cleanup` でタイマーを止めてはいるが、
+        //   既にキューへ入った 1 発は止められないので、ここでも受け止める
+        let Some((ids, here)) = cards.try_with_untracked(|cs| {
             (
                 cs.iter().map(|c| card_dom_id(c.ex)).collect::<Vec<_>>(),
                 cs.iter().position(|c| c.ex == ex),
             )
-        });
+        }) else {
+            return;
+        };
         let (Some(from), Some(slots)) = (here, measure_slots(&ids)) else {
             return;
         };
-        card_drag.set(Some(Drag::start(p.pointer_id, from, p.last_y, slots)));
-        start_edge_scroll(card_drag);
+        if card_drag
+            .try_set(Some(Drag::start(p.pointer_id, from, p.last_y, slots)))
+            .is_none()
+        {
+            start_edge_scroll(card_drag);
+        }
     };
 
     let grab_card = move |ev: PointerEvent| {
-        if card_drag.with_untracked(Option::is_some)
-            || card_press.with_value(Option::is_some)
-            || !capture(&ev)
-        {
+        if card_drag.with_untracked(Option::is_some) || !capture(&ev) {
             return;
         }
+        // ★ **前の待ちが残っていても弾かずに畳んで立て直す。** `capture` が非 primary と
+        //   左ボタン以外を落としているので、ここまで来たのは必ず新しいジェスチャである。
+        //   「残っていたら何もしない」形にすると、`pointerup` を 1 度でも取りこぼしたとき
+        //   （タブ切替で画面ごと消える等）**以後カードが二度と掴めなくなる**
+        end_press();
         // ★ capture は**待つ前に**取る。取らないと、待っている 250ms の間に指が
         //   ハンドルの外へ出たとき `pointermove` が届かず slop を判定できない
         let y = f64::from(ev.client_y());
         let timer = set_timeout_with_handle(arm_card, PRESS_DELAY_CARD).ok();
-        card_press.set_value(Some(Press {
+        PRESS.set(Some(Press {
             pointer_id: ev.pointer_id(),
             down_y: y,
             last_y: y,
@@ -1215,31 +1295,20 @@ fn ExerciseCard(
             return;
         }
         // まだ長押し待ち。動きすぎたらこのジェスチャは捨てる
-        card_press.update_value(|p| {
-            let Some(p) = p.as_mut().filter(|p| p.pointer_id == ev.pointer_id()) else {
-                return;
-            };
-            p.last_y = f64::from(ev.client_y());
-            if (p.last_y - p.down_y).abs() > PRESS_SLOP_PX
-                && let Some(timer) = p.timer.take()
-            {
-                timer.clear();
-            }
-        });
+        let Some(mut p) = PRESS.get().filter(|p| p.pointer_id == ev.pointer_id()) else {
+            return;
+        };
+        p.last_y = f64::from(ev.client_y());
+        if (p.last_y - p.down_y).abs() > PRESS_SLOP_PX
+            && let Some(timer) = p.timer.take()
+        {
+            timer.clear();
+        }
+        PRESS.set(Some(p));
     };
 
-    /// 長押し待ちを畳む。`timer` が生きていれば止める。
-    fn end_press(card_press: StoredValue<Option<Press>>) {
-        if let Some(p) = card_press.get_value() {
-            if let Some(timer) = p.timer {
-                timer.clear();
-            }
-            card_press.set_value(None);
-        }
-    }
-
     let drop_card = move |ev: PointerEvent| {
-        end_press(card_press);
+        end_press();
         let Some(d) = card_drag.get_untracked() else {
             return;
         };
@@ -1251,7 +1320,7 @@ fn ExerciseCard(
     };
 
     let cancel_card = move |_: PointerEvent| {
-        end_press(card_press);
+        end_press();
         release(card_drag);
     };
 
@@ -1438,6 +1507,7 @@ fn ExerciseCard(
                                         ),
                                     ),
                                 );
+                            start_edge_scroll(row_drag);
                         };
                         let track = move |ev: PointerEvent| {
                             if !holds(row_drag, &ev) {
@@ -1600,6 +1670,11 @@ fn ExerciseCard(
                                                     format!("{} セット目のメモ", index())
                                                 }
                                                 data-testid="set-note"
+                                                // ★ 行の入力欄には**全部**付ける。
+                                                //   1 つでも漏らすと、そこからは
+                                                //   `nudge_card` へ bubble して
+                                                //   「行を動かしたつもりがカードが動く」
+                                                on:keydown=nudge_row
                                                 on:focusin=move |_| kb_focus(kb)
                                                 on:focusout=move |_| kb_blur(kb)
                                                 on:input=move |ev| {

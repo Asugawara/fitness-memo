@@ -56,6 +56,8 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない](storage/share-sheet-over-download.md) | 採用 |
 | [同一オリジン内の多層バックアップを採用しない](storage/no-same-origin-redundancy.md) | 採用 |
 | [UI の状態を `Db` に入れず別キーに置く](storage/ui-state-in-separate-key.md) | 採用 |
+| [CSV を二次形式として足し、正は JSON のままにする](storage/csv-as-a-secondary-lossy-format.md) | 採用 |
+| [公開リンクの Google スプレッドシートを URL で取り込む](storage/import-from-published-sheet-url.md) | 採用 |
 
 ### pwa — オフライン動作と iOS 実機
 
@@ -91,6 +93,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](ux/menu-groups-as-single-open-accordion.md) | 採用 |
 | [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](ux/exercise-and-set-notes-behind-one-toggle.md) | 採用 |
 | [記録タブのカードとセットをドラッグで並び替え、`Vec` の並びをそのまま保存する](ux/drag-to-reorder-in-record-tab.md) | 採用 |
+| [表からの取り込みは利用者に何も聞かない](ux/spreadsheet-import-asks-nothing.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

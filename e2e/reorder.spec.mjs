@@ -170,9 +170,21 @@ async function dragSet(page, card, index, dy) {
   await dragBy(page, row.getByTestId('set-handle'), row, dy);
 }
 
-/** ドラッグの代わりのキーボード経路。`el` にフォーカスして 1 つ動かす。 */
+/**
+ * ドラッグの代わりのキーボード経路。`el` にフォーカスして 1 つ動かす。
+ *
+ * ★ **フォーカスが載ったことを確かめてから押す。** `views::Sheet` は `<dialog>` の
+ *   `close` で「開いたボタン」へフォーカスを戻す（views/mod.rs の `opener`）。この
+ *   `close` イベントはブラウザが非同期に投げるので、種目を追加した直後の `focus()` の
+ *   **後から**着弾しうる。そうなるとキーがカードの外（`add-exercise`）へ飛んで
+ *   **何も動かない** — 負荷の高い全 project 実行でだけ落ちる形になり、実際に
+ *   リリースの重い E2E で 1 度踏んだ。`toPass` で載るまで取り直す。
+ */
 async function nudge(page, el, up) {
-  await el.focus();
+  await expect(async () => {
+    await el.focus();
+    await expect(el).toBeFocused({ timeout: 1000 });
+  }).toPass({ timeout: 5000 });
   await page.keyboard.press(up ? 'Alt+ArrowUp' : 'Alt+ArrowDown');
 }
 

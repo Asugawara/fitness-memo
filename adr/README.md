@@ -90,6 +90,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [他アプリからの移行はスクショの文字起こしを貼り付けて受ける](ux/migrate-by-ocr-paste.md) | 破棄（読み取りが成立せず操作量も見合わないため撤去） |
 | [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](ux/menu-groups-as-single-open-accordion.md) | 採用 |
 | [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](ux/exercise-and-set-notes-behind-one-toggle.md) | 採用 |
+| [記録タブのカードとセットをドラッグで並び替え、`Vec` の並びをそのまま保存する](ux/drag-to-reorder-in-record-tab.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

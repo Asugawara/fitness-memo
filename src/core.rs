@@ -817,8 +817,8 @@ pub fn migrate(raw: &str, ids: &mut IdGen) -> Result<Db, RestoreError> {
     Ok(db)
 }
 
-/// 世代に依らない正規化。
-fn normalize(db: &mut Db) {
+/// 世代に依らない正規化。**取り込み境界では必ず通すこと**（`sheet::parse` も呼ぶ）。
+pub(crate) fn normalize(db: &mut Db) {
     let mut sessions: BTreeMap<String, Session> = BTreeMap::new();
     for (key, session) in std::mem::take(&mut db.sessions) {
         let Some(date) = parse_date_key(&key) else {

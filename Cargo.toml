@@ -57,6 +57,12 @@ web-sys = { version = "0.3", features = [
     "FileList",
     "FileReader",          # 選んだファイルの読み出し
     "Clipboard",           # Navigator::clipboard → writeText（unstable フラグ不要）
+    # ── Google スプレッドシートからの取り込み（src/transfer.rs の fetch_text）──
+    # ★ このアプリで唯一の外部通信。Window::fetch_with_str は "Window" だけで足りるので
+    #   Request / RequestInit は宣言しない（既定の mode: cors / redirect: follow で通る）。
+    #   Google が cache-control: no-store を返すので RequestCache も要らない
+    "Response",            # ok / status / text（共有されていないシートの見分け）
+    "Headers",             # Response::headers → content-type が text/html なら未共有
 ] }
 
 [profile.release]

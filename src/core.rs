@@ -3,7 +3,7 @@
 //! `cargo test`（ホストターゲット）で検証する層。UI から呼ぶ計算はすべてここに置き、
 //! 画面側は結果を並べるだけにする。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{Datelike, NaiveDate, TimeDelta};
 
@@ -1509,7 +1509,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
     push_row(&mut out, TSV_HEADER);
 
     // 記録に出てきた種目。末尾のマスタ行から除くのに使う
-    let mut logged: HashMap<ExerciseId, ()> = HashMap::new();
+    let mut logged: HashSet<ExerciseId> = HashSet::new();
 
     for (key, session) in &db.sessions {
         let Some(date) = parse_date_key(key) else {
@@ -1527,7 +1527,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
             let Some(ex) = db.exercise(log.exercise_id) else {
                 continue;
             };
-            logged.insert(ex.id, ());
+            logged.insert(ex.id);
             let group = db
                 .group(ex.group_id)
                 .map(|g| g.name.as_str())
@@ -1583,7 +1583,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
 
     // ── 種目マスタ行（日付が空）──
     for ex in &db.exercises {
-        if logged.contains_key(&ex.id) {
+        if logged.contains(&ex.id) {
             continue;
         }
         // 手つかずのプリセット（名前も ID もそのまま）は書かない
@@ -1630,6 +1630,12 @@ pub enum ImportError {
     NoHeader,
     /// 見出しはあるが、取り込める行が 1 つも無い
     NoRecords,
+    /// 日付や回数が読めず、記録が 1 日も残らなかった。
+    ///
+    /// ★ `NoRecords` と分けるのは、**利用者の次の行動が違う**から。あちらは「中身が
+    /// 入っていない」で、こちらは「入っているが書式が変わってしまっている」。後者は
+    /// 表計算アプリが日付や数値を書き戻したときに起きるので、言うことが違う。
+    Unreadable,
     /// 新しい版で作られている（JSON のみ。TSV は版番号を持たない）
     Unsupported(u32),
 }
@@ -1648,6 +1654,10 @@ impl ImportError {
                     .to_string()
             }
             Self::NoRecords => "取り込める記録が入っていません".to_string(),
+            Self::Unreadable => {
+                "日付や回数の書き方が変わっていて読めませんでした（日付は 2026-08-01、回数は 10 の形で書いてください）"
+                    .to_string()
+            }
             Self::Unsupported(v) => {
                 format!("新しい版（形式 {v}）で作られた記録です。アプリを更新してください")
             }
@@ -1771,9 +1781,14 @@ fn tsv_header(line: &str) -> Option<TsvCols> {
     (cols.date.is_some() && cols.exercise.is_some()).then_some(cols)
 }
 
-/// `2026-08-01` / `2026-8-1` / `2026/8/1` を受ける。
+/// `2026-08-01` / `2026-8-1` / `2026/8/1` を受ける。**年は 4 桁必須。**
 ///
 /// スラッシュを受けるのは、スプレッドシートが日付セルをロケール既定で書き戻すため。
+///
+/// ★ **年を 4 桁に縛るのが要。** 縛らないと `8/1/26`（M/D/Y ロケール）が「西暦 8 年
+/// 1 月 26 日」として通る。`parse_date_key` は往復するので保存まで通り、カレンダーにも
+/// グラフにも 2000 年前の記録として残って**二度と見つけられない**。読めない日付は
+/// 黙って別の日にせず、行ごと弾いて呼び側に数えさせる。
 fn parse_tsv_date(cell: &str) -> Option<NaiveDate> {
     let s = cell.trim();
     if s.is_empty() {
@@ -1781,13 +1796,32 @@ fn parse_tsv_date(cell: &str) -> Option<NaiveDate> {
     }
     let norm = s.replace('/', "-");
     let mut parts = norm.split('-');
-    let y = parts.next()?.trim().parse::<i32>().ok()?;
+    let year = parts.next()?.trim();
+    // 4 桁でない先頭フィールドは年ではない（2 桁年 / M/D/Y の月）
+    if year.len() != 4 || !year.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let y = year.parse::<i32>().ok()?;
     let m = parts.next()?.trim().parse::<u32>().ok()?;
     let d = parts.next()?.trim().parse::<u32>().ok()?;
     if parts.next().is_some() {
         return None;
     }
     NaiveDate::from_ymd_opt(y, m, d)
+}
+
+/// セルの回数 / セット番号。**小数付きを受ける。**
+///
+/// ★ `parse_reps` を使わないのは、あちらが画面の入力欄用で `"10.0"` を弾くため。
+/// スプレッドシートは数値列を `10.0` と書き戻すことがあり、弾くと**セットが丸ごと
+/// 消える**（しかもシート上は正しく見えているので気づけない）。`parse_weight` が
+/// 小数を受けるのと同じ寛容さをここにも置く。
+fn parse_cell_count(s: &str) -> Option<u32> {
+    let v = s.trim().replace(',', ".").parse::<f64>().ok()?;
+    if !v.is_finite() || v < 0.5 {
+        return None;
+    }
+    Some(v.round() as u32)
 }
 
 /// 並べ直す前のセット。`(セット番号, 行番号, セット)`。
@@ -1839,9 +1873,11 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
     let mut out = Db::default();
     // ★ キャッシュは必須。無いと同じ部位・種目に行ごとに採番して `Db` が行数分ふくらむ
     let mut group_ids: HashMap<String, GroupId> = HashMap::new();
-    let mut ex_ids: HashMap<String, ExerciseId> = HashMap::new();
+    let mut ex_ids: ExerciseCache = HashMap::new();
     // ログごとのセット。(日付, 種目) → [(セット番号, 行番号, セット)]
     let mut staged: HashMap<(String, ExerciseId), Vec<StagedSet>> = HashMap::new();
+    // ★ 読めなかったセル。**黙って捨てない**ための計数（下の `NoRecords` 判定で使う）
+    let mut unread = 0usize;
 
     for (row, line) in lines.enumerate() {
         let cells: Vec<&str> = line.split('\t').collect();
@@ -1850,11 +1886,14 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
                 .map(|s| s.trim())
                 .unwrap_or("")
         };
-        if cells.iter().all(|c| c.trim().is_empty()) {
+        let date_cell = at(cols.date);
+        let date = parse_tsv_date(date_cell);
+        // ★ 日付欄が埋まっているのに読めない = 行ごと落ちる。これを数えないと、
+        //   ロケール書き戻しで全行が落ちたファイルが「増えるものはありません」で通る
+        if date.is_none() && !date_cell.is_empty() {
+            unread += 1;
             continue;
         }
-
-        let date = parse_tsv_date(at(cols.date));
         let group_name = at(cols.group);
         let ex_name = at(cols.exercise);
 
@@ -1916,9 +1955,10 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
         };
         append_note(&mut log.note, at(cols.log_note));
 
-        // 回数が読めない行はセットを作らない（メモだけの行）
-        if let Some(reps) = parse_reps(at(cols.reps)) {
-            let no = at(cols.set_no).parse::<u32>().unwrap_or(u32::MAX);
+        // 回数が空の行はセットを作らない（メモだけの行）。空でないのに読めないなら数える
+        let reps_cell = at(cols.reps);
+        if let Some(reps) = parse_cell_count(reps_cell) {
+            let no = parse_cell_count(at(cols.set_no)).unwrap_or(u32::MAX);
             staged.entry((key, ex_id)).or_default().push((
                 no,
                 row,
@@ -1928,6 +1968,8 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
                     note: at(cols.set_note).to_string(),
                 },
             ));
+        } else if !reps_cell.is_empty() {
+            unread += 1;
         }
     }
 
@@ -1951,13 +1993,37 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
     normalize(&mut out, ids);
 
     // ★ 判定は `normalize` の**後**。先に見ると、行は読めたが中身が全部落ちた形
-    //   （部位が引けない種目だけのファイル）が「空の Db を取り込んだ」で通ってしまう
-    if out.groups.is_empty() && out.exercises.is_empty() && out.sessions.is_empty() {
-        return Err(ImportError::NoRecords);
+    //   （部位が引けない種目だけのファイル）が「空の Db を取り込んだ」で通ってしまう。
+    //
+    //   ★ **記録が 1 日も残らなかったら、種目だけ拾えていても失敗にする。** ここを
+    //   「groups と exercises と sessions が全部空」にしていると、日付や回数が
+    //   ロケール書き戻しで全滅したファイルが `Ok(sessions: {})` で通り、画面は
+    //   「新しく取り込むものはありません」と出す。**全部落ちたことに気づけない**のが
+    //   このアプリでいちばん避けたい終わり方なので、読めなかったセルがあるなら言う
+    if out.sessions.is_empty() && (unread > 0 || out.exercises.is_empty()) {
+        return Err(if unread > 0 {
+            ImportError::Unreadable
+        } else {
+            ImportError::NoRecords
+        });
     }
 
     out.schema = SCHEMA;
     Ok(out)
+}
+
+/// 種目の引き当てキャッシュ。**キーは (部位名, 種目名)。**
+///
+/// ★ 種目名だけにしてはいけない — 部位違いの同名種目が 1 つに潰れる。
+type ExerciseCache = HashMap<(String, String), ExerciseId>;
+
+/// ちょうど 1 件のときだけ返す。**曖昧なら `None`。**
+///
+/// ★ 2 件目を見た時点で打ち切る。「ちょうど 1 件」は [`pin_presets`] と共通の規則で、
+/// 同名が複数あるときに片方へ寄せると**別種目の履歴が無警告で合流する**。
+fn exactly_one<T>(mut it: impl Iterator<Item = T>) -> Option<T> {
+    let first = it.next()?;
+    it.next().is_none().then_some(first)
 }
 
 /// 部位名 → `GroupId`。引き当てた部位は `out.groups` にも載せる。
@@ -1971,8 +2037,7 @@ fn resolve_group(
     if let Some(id) = cache.get(name) {
         return *id;
     }
-    let matched: Vec<&Group> = mine.groups.iter().filter(|g| g.name == name).collect();
-    let group = if let [only] = matched[..] {
+    let group = if let Some(only) = exactly_one(mine.groups.iter().filter(|g| g.name == name)) {
         // ★ 既存をそのまま複製する。`merge_db` が ID 一致の枝を素通りし、副作用が出ない
         only.clone()
     } else {
@@ -2004,27 +2069,29 @@ fn resolve_exercise(
     out: &mut Db,
     mine: &Db,
     groups: &mut HashMap<String, GroupId>,
-    cache: &mut HashMap<String, ExerciseId>,
+    cache: &mut ExerciseCache,
     ids: &mut IdGen,
     group_name: &str,
     name: &str,
 ) -> Option<ExerciseId> {
-    if let Some(id) = cache.get(name) {
+    // ★ キャッシュは **(部位名, 種目名)** で引く。種目名だけで引くと、部位違いの同名種目
+    //   （画面に重複名チェックが無いので作れてしまう）が 1 つに潰れ、下の梯子 1 が
+    //   意味を失う。**自分の書き出しを読み戻すだけで別種目にセットが移る。**
+    let key = (group_name.to_string(), name.to_string());
+    if let Some(id) = cache.get(&key) {
         return Some(*id);
     }
 
     // 1. (部位名, 種目名) がちょうど 1 件
-    let in_group: Vec<&Exercise> = mine
-        .exercises
-        .iter()
-        .filter(|e| e.name == name && mine.group(e.group_id).is_some_and(|g| g.name == group_name))
-        .collect();
+    let in_group = exactly_one(mine.exercises.iter().filter(|e| {
+        e.name == name && mine.group(e.group_id).is_some_and(|g| g.name == group_name)
+    }));
     // 2. 種目名がちょうど 1 件
-    let by_name: Vec<&Exercise> = mine.exercises.iter().filter(|e| e.name == name).collect();
+    let by_name = || exactly_one(mine.exercises.iter().filter(|e| e.name == name));
 
-    let exercise = if let [only] = in_group[..] {
+    let exercise = if let Some(only) = in_group {
         only.clone()
-    } else if let [only] = by_name[..] {
+    } else if let Some(only) = by_name() {
         only.clone()
     } else {
         // 3/4. 新規。部位が引けないなら取り込まない
@@ -2055,7 +2122,7 @@ fn resolve_exercise(
     if !out.exercises.iter().any(|e| e.id == id) {
         out.exercises.push(exercise);
     }
-    cache.insert(name.to_string(), id);
+    cache.insert(key, id);
     Some(id)
 }
 
@@ -2415,7 +2482,12 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
                 // ★ 上で合流させた種目メモを持ち越す。`*existing = log` だけだと、
                 //   セットが負けたせいで**取り込み先のメモまで消える**
                 let note = std::mem::take(&mut existing.note);
-                *existing = ExerciseLog { note, ..log };
+                // ★ 時刻も同じ理由で持ち越す。TSV は `at` を持たない
+                //   （adr/storage/tsv-export-for-spreadsheets.md）ので、当日の記録に
+                //   1 セット足したファイルを取り込むだけで**実施時刻が消える**。
+                //   取り込む側が時刻を持っているならそちらを優先する
+                let at = log.at.or(existing.at);
+                *existing = ExerciseLog { note, at, ..log };
             }
         }
 
@@ -5156,6 +5228,144 @@ mod tests {
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         assert_eq!(incoming.exercises.len(), 1);
         assert_eq!(incoming.exercises[0].id, bench);
+    }
+
+    /// ★ 部位違いの同名種目（画面に重複名チェックが無いので作れる）が 1 本に潰れない。
+    ///   キャッシュを種目名だけで引くと、**自分の書き出しを読み戻すだけで**肩のセットが
+    ///   胸のログに移る。
+    #[test]
+    fn tsv_round_trips_two_exercises_that_share_a_name_across_groups() {
+        let mut mine = crate::presets::seeded_db();
+        let mut g = ids();
+        let shoulder_bench = g.alloc();
+        mine.exercises.push(Exercise {
+            id: shoulder_bench,
+            name: "ベンチプレス".into(),
+            group_id: crate::presets::preset_group_id("肩").expect("プリセット"),
+            order: 9,
+            archived: false,
+        });
+        let chest_bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let set = |weight, reps| SetEntry {
+            weight,
+            reps,
+            note: String::new(),
+        };
+        mine.sessions.insert(
+            date_key(d(2026, 8, 1)),
+            Session {
+                logs: vec![
+                    ExerciseLog {
+                        exercise_id: chest_bench,
+                        sets: vec![set(60.0, 10)],
+                        at: None,
+                        note: String::new(),
+                    },
+                    ExerciseLog {
+                        exercise_id: shoulder_bench,
+                        sets: vec![set(20.0, 12)],
+                        at: None,
+                        note: String::new(),
+                    },
+                ],
+                body_weight: None,
+                note: String::new(),
+            },
+        );
+
+        let tsv = export_tsv(&mine, jst());
+        let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読める");
+        let report = merge_db(&mut mine, incoming);
+
+        assert!(report.is_noop(), "自分の書き出しで記録が動いた: {report:?}");
+        assert!(report.conflicts.is_empty(), "{:?}", report.conflicts);
+        let s = mine.sessions.get("2026-08-01").expect("その日がある");
+        assert_eq!(s.logs.len(), 2, "同名の 2 種目が 1 本に潰れた");
+        assert_eq!(s.log_of(chest_bench).expect("胸").sets, vec![set(60.0, 10)]);
+        assert_eq!(
+            s.log_of(shoulder_bench).expect("肩").sets,
+            vec![set(20.0, 12)]
+        );
+    }
+
+    /// ★ `8/1/26` を「西暦 8 年」として通さない。通すと `parse_date_key` が往復して
+    ///   保存まで抜け、2000 年前の記録としてカレンダーに残り二度と見つけられない。
+    #[test]
+    fn tsv_import_rejects_a_two_digit_year_instead_of_inventing_one() {
+        let mine = crate::presets::seeded_db();
+        let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\n8/1/26\t胸\tベンチプレス\t1\t60\t10\n";
+        assert_eq!(
+            parse_import(tsv, &mut ids(), &mine),
+            Err(ImportError::Unreadable)
+        );
+    }
+
+    /// ★ 行は読めたのにセッションが 1 日も残らなかったら**失敗にする**。
+    ///   種目だけ拾えていると `Ok` になり、画面が「増えるものはありません」と出して、
+    ///   全部落ちたことに気づけないまま終わる。
+    #[test]
+    fn tsv_import_says_so_when_every_row_failed_to_parse() {
+        let mine = crate::presets::seeded_db();
+        // 日付がロケール書き戻しで全滅
+        let bad_dates =
+            "日付\t部位\t種目\tセット\t重量kg\t回数\nAugust 1, 2026\t胸\tベンチプレス\t1\t60\t10\n";
+        assert_eq!(
+            parse_import(bad_dates, &mut ids(), &mine),
+            Err(ImportError::Unreadable)
+        );
+    }
+
+    /// ★ シートが数値列を `10.0` と書き戻してもセットが消えない。ここが落ちると
+    ///   「シートで編集して戻す」という機能の主目的が成立しない。
+    #[test]
+    fn tsv_import_accepts_decimal_reps_and_set_numbers() {
+        let mine = crate::presets::seeded_db();
+        let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\n\
+                   2026-08-01\t胸\tベンチプレス\t2.0\t62.5\t8.0\n\
+                   2026-08-01\t胸\tベンチプレス\t1.0\t60.0\t10.0\n";
+        let db = parse_import(tsv, &mut ids(), &mine).expect("読める");
+        let sets = &db.sessions.get("2026-08-01").expect("その日").logs[0].sets;
+        assert_eq!(
+            sets.iter().map(|s| (s.weight, s.reps)).collect::<Vec<_>>(),
+            vec![(60.0, 10), (62.5, 8)]
+        );
+    }
+
+    /// ★ TSV は `at` を持たないので、当日の記録に 1 セット足したファイルを取り込むと
+    ///   `merge_db` の差し替えで実施時刻が消えていた。取り込む側が持たないなら残す。
+    #[test]
+    fn merging_a_stronger_log_without_a_clock_keeps_the_existing_one() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let set = |reps| SetEntry {
+            weight: 60.0,
+            reps,
+            note: String::new(),
+        };
+        let day = |sets: Vec<SetEntry>, at| Session {
+            logs: vec![ExerciseLog {
+                exercise_id: bench,
+                sets,
+                at,
+                note: String::new(),
+            }],
+            body_weight: None,
+            note: String::new(),
+        };
+        let mut mine = crate::presets::seeded_db();
+        mine.sessions.insert(
+            date_key(d(2026, 8, 1)),
+            day(vec![set(10)], Some(1_800_000_000_000)),
+        );
+        let mut theirs = crate::presets::seeded_db();
+        theirs
+            .sessions
+            .insert(date_key(d(2026, 8, 1)), day(vec![set(10), set(8)], None));
+
+        merge_db(&mut mine, theirs);
+
+        let log = &mine.sessions.get("2026-08-01").expect("その日").logs[0];
+        assert_eq!(log.sets.len(), 2, "強いほうが採られていない");
+        assert_eq!(log.at, Some(1_800_000_000_000), "実施時刻が消えた");
     }
 
     #[test]

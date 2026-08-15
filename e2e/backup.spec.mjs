@@ -192,6 +192,49 @@ test('「元に戻す」は 2 回押さないと実行されず、戻す前も�
   expect(preKeysAfterUndo.length, '戻す前の状態が保管されていない').toBeGreaterThan(1);
 });
 
+// ★ 確認待ちの間は「元に戻す」を出さない。出したまま巻き戻されると
+//   Pending.merged（巻き戻す**前**の db から作った）が古くなり、「取り込む」を
+//   1 タップした瞬間に巻き戻しが打ち消される。
+test('確認画面が出ている間は「元に戻す」を出さない', async ({ page }) => {
+  await openSheet(page);
+  await importFile(page, ONE_DAY_TSV);
+  await page.getByTestId('backup-apply').click();
+  await expect(page.getByTestId('backup-undo')).toBeVisible();
+
+  await page.getByTestId('backup-import').click();
+  await importFile(page, ONE_DAY_TSV.replaceAll('2026-08-01', '2026-09-01'));
+  await expect(page.getByTestId('backup-confirm')).toBeVisible();
+  await expect(page.getByTestId('backup-undo'), '確認中に巻き戻せてしまう').toHaveCount(0);
+
+  // やめれば戻ってくる
+  await page.getByTestId('backup-cancel').click();
+  await expect(page.getByTestId('backup-undo')).toBeVisible();
+});
+
+// ★ 1 回目のタップで武装した確認が、別の操作で警告文だけ消えて残らない。
+//   文字が画面に無いのに次の 1 タップで巻き戻るのが最悪の形。
+test('「元に戻す」の確認は別の操作をすると解ける', async ({ page }) => {
+  await stubShare(page);
+  await openSheet(page);
+  await importFile(page, ONE_DAY_TSV);
+  await page.getByTestId('backup-apply').click();
+
+  await page.getByTestId('backup-undo').click();
+  await expect(page.getByTestId('backup-note')).toContainText('もう一度押すと実行します');
+
+  // 書き出しを挟むと警告文が消える。武装も一緒に解けていること
+  await page.getByTestId('backup-export').click();
+  await expect(page.getByTestId('backup-note')).toContainText('書き出しました');
+
+  await page.getByTestId('backup-undo').click();
+  await expect(
+    page.getByTestId('backup-note'),
+    '警告なしで巻き戻しが実行された',
+  ).toContainText('もう一度押すと実行します');
+  const saved = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
+  expect(Object.keys(saved.sessions)).toContain('2026-08-01');
+});
+
 // ★ シートを閉じたら「元に戻す」を持ち越さない。iOS の PWA は何日もレジュームされる
 //   ので、残しておくと数日後に誤タップされ、その間の記録が消える。
 test('シートを閉じると「元に戻す」は消える', async ({ page }) => {
@@ -213,6 +256,11 @@ test('壊れたファイルは取り込まれず、今のデータが 1 バイ�
     ['あ\tい\nう\tえ\n', 'このアプリの記録ではない'],
     ['日付\t部位\t重量kg\n', '見出しが読めません'],
     ['日付\t部位\t種目\tセット\t重量kg\t回数\n', '取り込める記録が入っていません'],
+    // ★ ロケール書き戻しで日付が全滅したファイル。黙って 0 件成功にしない
+    [
+      '日付\t部位\t種目\tセット\t重量kg\t回数\n8/1/26\t胸\tベンチプレス\t1\t60\t10\n',
+      '日付や回数の書き方が変わっていて読めませんでした',
+    ],
     ['{"schema":3,"groups":', 'データが途中で切れている'],
   ]) {
     await importFile(page, bad);

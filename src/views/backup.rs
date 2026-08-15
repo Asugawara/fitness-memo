@@ -112,6 +112,21 @@ fn added_text(r: &MergeReport) -> Option<String> {
     Some(parts.join(" ・ "))
 }
 
+/// 確認画面の 1 行目。**「何も起きません」と言ってよい条件を 1 箇所に閉じる。**
+///
+/// ★ `MergeReport::is_noop` を単独で信じてはいけない。`Conflict::SetsDiverged` は
+/// 既存のログを丸ごと差し替える（`merge_db` の `*existing = ExerciseLog { .. }`）のに、
+/// カウンタがどれも増えないので `is_noop` は真になる。そのまま
+/// 「新しく取り込むものはありません」と出すと、**セットが入れ替わる取り込みを
+/// 「何も起きない」と言って実行させる**ことになる。確認画面が嘘をつくのが最悪。
+fn change_text(p: &Pending) -> String {
+    match (&p.added, p.conflicts.is_empty()) {
+        (Some(added), _) => format!("{added} を追加します"),
+        (None, false) => "入れ替わる記録があります".to_string(),
+        (None, true) => "新しく取り込むものはありません".to_string(),
+    }
+}
+
 /// 控えのキー末尾 epoch を読める日時にする。`.pre-` しか渡らない。
 fn snapshot_time(key: &str) -> String {
     key.rsplit('-')
@@ -162,6 +177,9 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         let tsv = db.with_untracked(|d| core::export_tsv(d, *now.offset()));
         let name = core::export_filename(now.naive_local());
         copy_rescue.set(false);
+        // ★ 「もう一度押すと実行します」の警告文をこの後 note が上書きするので、
+        //   武装も一緒に解く。文字が消えたのに 1 タップで発火する状態を残さない
+        confirm_undo.set(false);
         match transfer::pick_route() {
             transfer::Route::Share => {
                 transfer::share_file(&name, &tsv, core::TSV_MIME, move |outcome| {
@@ -203,6 +221,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
     };
 
     let do_copy = move |_| {
+        confirm_undo.set(false);
         let now = chrono::Local::now();
         let tsv = db.with_untracked(|d| core::export_tsv(d, *now.offset()));
         transfer::copy_text(&tsv, move |ok| {
@@ -241,10 +260,12 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                 }));
                 note.set(None);
                 copy_rescue.set(false);
+                confirm_undo.set(false);
             }
             Err(e) => {
                 pending.set(None);
                 note.set(Some(e.message()));
+                confirm_undo.set(false);
             }
         }
     };
@@ -275,9 +296,13 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         db.set(p.merged);
         db.with_untracked(storage::replace_now);
 
-        let mut message = match &p.added {
-            Some(added) => format!("取り込みました（{added} を追加）"),
-            None => "取り込みましたが、新しく増えたものはありませんでした".to_string(),
+        // ★ 確認画面と同じ規則で言う。片方だけ `is_noop` を信じると、確認では
+        //   「入れ替わる記録があります」と言ったのに結果は「増えたものはありません」
+        //   になって、どちらが本当か分からなくなる
+        let mut message = match (&p.added, p.conflicts.is_empty()) {
+            (Some(added), _) => format!("取り込みました（{added} を追加）"),
+            (None, false) => "取り込みました".to_string(),
+            (None, true) => "取り込みましたが、新しく増えたものはありませんでした".to_string(),
         };
         if !p.conflicts.is_empty() {
             message.push('\n');
@@ -322,8 +347,14 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                 db.with_untracked(storage::replace_now);
                 undo.set(None);
                 confirm_undo.set(false);
+                // ★ 確認待ちを捨てる。`Pending::merged` は**巻き戻す前**の `db` から
+                //   作ったので、残したまま「取り込む」を押されると、今戻したものが
+                //   そのまま戻ってくる（巻き戻しが 1 タップで打ち消される）
+                pending.set(None);
                 note.set(Some(if saved {
-                    "元に戻しました（戻す前の状態も保管しています）".to_string()
+                    // 退避の一覧 UI は無いので「保管しています」とだけ言い、
+                    // 取り出せるかのように書かない（adr/ux/one-screen-export-import.md）
+                    "元に戻しました".to_string()
                 } else {
                     "元に戻しました（戻す前の状態は保管できませんでした）".to_string()
                 }));
@@ -346,8 +377,11 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                 </p>
             </Show>
 
-            // ★ 通知の直下に置く。どのメッセージに紐づく操作なのかが読み取れる位置
-            <Show when=move || undo.get().is_some()>
+            // ★ 通知の直下に置く。どのメッセージに紐づく操作なのかが読み取れる位置。
+            //   **確認待ちのときは出さない** — 1 画面 1 判断にするだけでなく、確認中に
+            //   巻き戻されると `Pending::merged`（巻き戻す前の `db` から作った）が
+            //   古くなり、「取り込む」で巻き戻しを打ち消してしまう
+            <Show when=move || undo.get().is_some() && pending.with(Option::is_none)>
                 <div class="sheet-actions">
                     <button class="link-btn" data-testid="backup-undo" on:click=do_undo>
                         "元に戻す"
@@ -395,7 +429,9 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                     }
                 }
             >
-                // ★ 現在と取り込み後を両方出す。何が増えるかを押す前に見せる
+                // ★ 現在と取り込み後を両方出す。何が増えるかを押す前に見せる。
+                //   読み出しは全て `with`（`get` は `Pending` ごと clone するので、
+                //   `merged: Db` が再描画のたびに丸ごと複製される）
                 <div class="warn-box" data-testid="backup-confirm">
                     <p>
                         <strong>"現在"</strong>
@@ -406,20 +442,28 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                         <strong>"取り込み後"</strong>
                         " "
                         {move || {
-                            pending.get().map(|p| summary_text(&p.after)).unwrap_or_default()
+                            pending.with(|p| p.as_ref().map(|p| summary_text(&p.after)))
+                                .unwrap_or_default()
                         }}
                     </p>
                     <p>
                         {move || {
                             pending
-                                .get()
-                                .map(|p| match p.added {
-                                    Some(added) => format!("{added} を追加します"),
-                                    None => "新しく取り込むものはありません".to_string(),
-                                })
+                                .with(|p| p.as_ref().map(change_text))
                                 .unwrap_or_default()
                         }}
                     </p>
+                    // ★ 判断が要った箇所は**押す前**に出す。実行後にだけ見せていると、
+                    //   「取り込んだ側のセットを採りました」を読むのが手遅れになる
+                    <Show when=move || pending.with(|p| p.as_ref().is_some_and(|p| !p.conflicts.is_empty()))>
+                        <p class="backup-note">
+                            {move || {
+                                pending
+                                    .with(|p| p.as_ref().map(|p| p.conflicts.join("\n")))
+                                    .unwrap_or_default()
+                            }}
+                        </p>
+                    </Show>
                 </div>
                 <p class="muted">"今ある記録は消えません。無い日と無い種目だけを足します"</p>
                 <div class="sheet-actions">

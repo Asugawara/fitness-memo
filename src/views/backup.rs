@@ -68,6 +68,9 @@ fn conflict_text(c: &Conflict) -> String {
             format!("{date} の「{name}」は取り込んだ側のセットを採りました")
         }
         Conflict::BodyWeight { date } => format!("{date} の体重は元の値を残しました"),
+        Conflict::RoutineDiverged { name } => {
+            format!("メニュー「{name}」は元の内容を残しました")
+        }
     }
 }
 
@@ -92,6 +95,10 @@ fn report_text(r: &MergeReport) -> String {
     }
     if r.groups_added > 0 {
         parts.push(format!("{} 部位", r.groups_added));
+    }
+    // ★ メニューだけが増えることもある（`is_noop` に数えたものは必ずここにも出す）
+    if r.routines_added > 0 {
+        parts.push(format!("{} 件のメニュー", r.routines_added));
     }
     format!("{} を追加しました", parts.join(" ・ "))
 }

@@ -8,7 +8,8 @@ use std::collections::{BTreeMap, HashMap};
 use chrono::{Datelike, NaiveDate, TimeDelta};
 
 use crate::model::{
-    Db, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, SCHEMA, Session, SetEntry,
+    Db, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, Routine, RoutineId, SCHEMA,
+    Session, SetEntry,
 };
 
 /// `Db::sessions` のキー書式。ゼロ埋め ISO なので辞書順 = 時系列順になる。
@@ -263,6 +264,17 @@ pub fn reorder_logs(db: &mut Db, date: NaiveDate, order: &[ExerciseId]) -> bool 
 }
 
 // ── メニューのコピー ────────────────────────────────────────────────────────
+//
+// ★ このリポジトリで「メニュー」は 3 つの意味を持つ。取り違えると壊れるので明記する。
+//   1. **設定タブ**（`views::settings`）— 種目マスタの管理画面。旧「種目タブ」
+//   2. **過去の日の種目構成**（[`MenuCandidate`] / [`recent_menus`]）— この節の前半。
+//      同一性は「日付」で、コピーするとその日の数値がそのまま入る
+//   3. **保存済みのトレーニングメニュー**（[`crate::model::Routine`] /
+//      [`RoutineCandidate`] / [`apply_routine`]）— この節の後半。同一性は「名前」で、
+//      展開すると**種目ごとに別々の日**（各種目の直近）から数値が入る
+//
+//   2 と 3 は記録タブでは 1 本のリストに並ぶが、**同じ種目集合でも入る数値が違う**ので
+//   型を統合してはいけない（またいで重複排除すると別物の選択肢を隠すことになる）。
 
 /// メニュー候補として遡る上限。
 ///
@@ -341,43 +353,54 @@ pub fn recent_menus(db: &Db, before: NaiveDate, limit: usize) -> Vec<MenuCandida
 /// **種目メモとセットメモも同じ理由で複製しない**（adr/data-model/notes-on-logs-and-sets.md）。
 pub fn copy_day(db: &mut Db, from: NaiveDate, to: NaiveDate, at: Option<i64>) -> Vec<ExerciseId> {
     // `&db` と `&mut db` の借用を分けるため先に取り出しておく
-    //
-    // ★ `l.sets.clone()` は**メモまで運ぶ**ので、ここで明示的に落とす。「3 セット目で
-    //   肩に違和感」は前回の観測で、今日の観測ではない。複製すると起きていない観測が
-    //   翌日に生える
     let picked: Vec<(ExerciseId, Vec<SetEntry>)> = copyable(db, from)
-        .map(|l| {
-            let sets = l
-                .sets
-                .iter()
-                .map(|s| SetEntry {
-                    weight: s.weight,
-                    reps: s.reps,
-                    note: String::new(),
-                })
-                .collect();
-            (l.exercise_id, sets)
-        })
+        .map(|l| (l.exercise_id, sets_without_notes(&l.sets)))
         .collect();
+    seed_day(db, to, picked, at)
+}
+
+/// セットの重量と回数だけを写す。**メモは持ち込まない。**
+///
+/// ★ `sets.clone()` は**メモまで運ぶ**。「3 セット目で肩に違和感」は前回の観測で、
+/// 今日の観測ではない。複製すると起きていない観測が翌日に生える
+/// （adr/data-model/notes-on-logs-and-sets.md）。この規則の実装はここ 1 箇所に畳む。
+fn sets_without_notes(src: &[SetEntry]) -> Vec<SetEntry> {
+    src.iter()
+        .map(|s| SetEntry {
+            weight: s.weight,
+            reps: s.reps,
+            note: String::new(),
+        })
+        .collect()
+}
+
+/// 空の日に種目とセットを流し込む。**書いた種目 ID** を返す。
+///
+/// [`copy_day`]（1 日を丸ごと写す）と [`apply_routine`]（種目ごとに直近から引く）の
+/// 共通の書き込み口。**ガードを 2 箇所に書かない** — 片方だけ緩められると
+/// 「1 日 1 種目 1 ログ」（adr/data-model/one-log-per-exercise-per-day.md）が破れる。
+fn seed_day(
+    db: &mut Db,
+    to: NaiveDate,
+    picked: Vec<(ExerciseId, Vec<SetEntry>)>,
+    at: Option<i64>,
+) -> Vec<ExerciseId> {
+    // ★ 書くものが無いならセッションを作らない。作ると「何も記録していない日」が
+    //   カレンダーとバックアップに残る
     if picked.is_empty() {
         return Vec::new();
     }
 
     // ★ 既にログのある日には書かない。UI は「カードが 0 枚の日」にしか導線を出さないが、
     //   カードの再構築は Effect 経由なので「ログのある日 × 空のカード」の 1 tick が
-    //   存在する。そこを踏むと exercise_id が重複して「1 日 1 種目 1 ログ」が壊れる。
-    //
-    //   判定は `is_trained()` ではなく `logs.is_empty()` にする。空セットのログは
-    //   `migrate` が読み込みのたびに落とすので通常は存在しないが、判定を緩めると
-    //   「同じ種目のログが 2 本ある」状態を作れてしまう側に倒れる
-    let to_key = date_key(to);
-    if db.sessions.get(&to_key).is_some_and(|s| !s.logs.is_empty()) {
+    //   存在する。そこを踏むと exercise_id が重複して「1 日 1 種目 1 ログ」が壊れる
+    if has_logs_on(db, to) {
         return Vec::new();
     }
 
     // ★ or_default で取る。insert で置き換えると、空の日に先に打ち込まれた
     //   体重・体調メモが消える（ConditionRow は 1 文字ごとに commit する）
-    let session = db.sessions.entry(to_key).or_default();
+    let session = db.sessions.entry(date_key(to)).or_default();
     let mut copied = Vec::with_capacity(picked.len());
     for (exercise_id, sets) in picked {
         copied.push(exercise_id);
@@ -394,6 +417,127 @@ pub fn copy_day(db: &mut Db, from: NaiveDate, to: NaiveDate, at: Option<i64>) ->
         });
     }
     copied
+}
+
+// ── トレーニングメニュー（adr/data-model/routines-as-named-exercise-lists.md）──
+
+/// そのメニューから**実際に展開される**種目 ID。
+///
+/// ★ [`usable_routines`] と [`apply_routine`] は必ず**これを通す**。2 つのフィルタが
+/// ずれると「4 種目」と表示された候補を押しても何も起きない死んだボタンができる
+/// （[`copyable`] とまったく同じ理由）。
+///
+/// - 存在しない種目・アーカイブ済みの種目は外す（`copyable` と同じ規則。展開で
+///   アーカイブを復活させると、カードを閉じたあとユーザーが自力で戻せない種目になる）
+/// - 重複は初出だけ残す。`normalize` が読み込み時に潰しているが、**編集中の `Db` も
+///   ここを通る**ので受け口でも守る（「1 日 1 種目 1 ログ」は 3 層で守る）
+fn expandable<'a>(db: &'a Db, r: &'a Routine) -> impl Iterator<Item = ExerciseId> + 'a {
+    let mut seen: Vec<ExerciseId> = Vec::new();
+    r.exercises
+        .iter()
+        .copied()
+        .filter(|id| db.exercise(*id).is_some_and(|e| !e.archived))
+        .filter(move |id| {
+            let fresh = !seen.contains(id);
+            if fresh {
+                seen.push(*id);
+            }
+            fresh
+        })
+}
+
+/// 記録タブの候補に出せるトレーニングメニュー 1 件。
+#[derive(Clone, Debug, PartialEq)]
+pub struct RoutineCandidate {
+    pub id: RoutineId,
+    /// 名前がメニューの同一性そのものなので、[`MenuCandidate`] と違ってここに持つ。
+    pub name: String,
+    /// **実際に展開される種目 ID。** メニューの並び順。
+    pub exercises: Vec<ExerciseId>,
+}
+
+/// 候補に出せるメニュー（`Db::routines` の順）。
+///
+/// ★ **`limit` を取らない。** [`recent_menus`] の `limit` は「履歴を舐め続けないため」の
+/// 走査打ち切りで、意味が違う。メニューはユーザーが自分で作った数しか無い。
+///
+/// ★ **`before` も取らない。** 「履歴のある種目が 1 つ以上あること」は条件にしない —
+/// 履歴ゼロのメニューでも空のカードが並ぶので押した意味があり、**初めて組んだメニューが
+/// 押せない**のは最悪の体験になる。
+pub fn usable_routines(db: &Db) -> Vec<RoutineCandidate> {
+    db.routines
+        .iter()
+        .filter_map(|r| {
+            let exercises: Vec<ExerciseId> = expandable(db, r).collect();
+            // 全種目が削除済み / アーカイブ済みのメニューは出さない（押せない行を作らない）
+            (!exercises.is_empty()).then(|| RoutineCandidate {
+                id: r.id,
+                name: r.name.clone(),
+                exercises,
+            })
+        })
+        .collect()
+}
+
+/// メニューを `to` の日へ展開し、**その日に出すべき種目 ID** を並び順で返す。
+///
+/// セットは種目ごとに [`last_log_before`] から引く（[`copy_day`] が 1 日を丸ごと写すのに
+/// 対し、こちらは**種目ごとに別々の日**から引く）。カード内の「前回をコピー」と同じ
+/// 「前回」の定義になる。`at` は呼び出し側が渡す（core は時計を持たない）。
+///
+/// ★ **履歴が無い種目にはログを書かないが、返り値には含める。** 画面は
+/// `views::day` の `pick()` と同じ「空のカード」として出す。セットが 0 本のログを
+/// 書くと `dedupe_logs` が次回起動で落とし、**画面に出ているのに消える**という最悪の
+/// 食い違いになる。`0×0` のダミーを入れる案も、指標・カレンダーのドット・`fmt_set`・
+/// コピーを全部汚染するので採らない（adr/ux/start-from-a-saved-routine.md）。
+///
+/// ★ **`MENU_LOOKBACK_DAYS` は適用しない。** 種目カードの「前回」表示に上限が無いので、
+/// ここだけ入れると「カードに『前回 730日前 60×10』と出ているのにメニューからは何も
+/// 入らない」という食い違いが生まれる。
+///
+/// 体重・体調メモ・種目メモ・セットメモは複製しない（[`copy_day`] と同じ規則）。
+pub fn apply_routine(
+    db: &mut Db,
+    routine: RoutineId,
+    to: NaiveDate,
+    at: Option<i64>,
+) -> Vec<ExerciseId> {
+    let Some(r) = db.routine(routine) else {
+        return Vec::new();
+    };
+    // ★ ログのある日には 1 枚も出さない。書き込みを止めるのは [`seed_day`] の仕事だが、
+    //   ここでは**返り値（＝画面に出すカード）を決めるために答えが要る**ので先に問う。
+    //   判定式そのものは `has_logs_on` の 1 箇所に畳んであるので、2 つがずれることはない
+    if has_logs_on(db, to) {
+        return Vec::new();
+    }
+
+    // ★ `last_log_before` が `&db` を借りるので、`&mut db` に入る前に集め切る
+    //   （`copy_day` の `picked` と同じ形）
+    let opened: Vec<ExerciseId> = expandable(db, r).collect();
+    let picked: Vec<(ExerciseId, Vec<SetEntry>)> = opened
+        .iter()
+        .filter_map(|ex| {
+            let (_, log) = last_log_before(db, *ex, to)?;
+            Some((*ex, sets_without_notes(&log.sets)))
+        })
+        .collect();
+
+    // 履歴が 1 種目も無ければ `picked` は空。`seed_day` はセッションを作らずに返るので、
+    // 空の日は空のまま残り、カードだけが画面に出る
+    seed_day(db, to, picked, at);
+    opened
+}
+
+/// その日にログがあるか。**「空の日か」の判定はこの 1 本を通す。**
+///
+/// ★ `is_trained()` ではなく `logs.is_empty()` で見る。空セットのログは `migrate` が
+/// 読み込みのたびに落とすので通常は存在しないが、判定を緩めると「同じ種目のログが
+/// 2 本ある」状態を作れてしまう側に倒れる。
+fn has_logs_on(db: &Db, date: NaiveDate) -> bool {
+    db.sessions
+        .get(&date_key(date))
+        .is_some_and(|s| !s.logs.is_empty())
 }
 
 /// `from`〜`to`（両端含む）のセッションを日付順で走査する。
@@ -794,6 +938,9 @@ impl std::fmt::Display for RestoreError {
 ///   メモは重複ガード付きで連結）
 /// - 空白だけのメモを空にする
 /// - **セットもメモも無い**ログを捨て、ログも体重もメモも無いセッションを捨てる
+/// - トレーニングメニューの空白だけの名前を空にし、種目の重複を潰し、名前も種目も
+///   無いものを捨て、**ID が重複しているものに採番し直す**
+///   （adr/data-model/routines-as-named-exercise-lists.md）
 pub fn migrate(raw: &str, ids: &mut IdGen) -> Result<Db, RestoreError> {
     // schema だけを先に取り出す。本体の形が世代ごとに違うので 2 段パースになる
     #[derive(serde::Deserialize)]
@@ -812,13 +959,17 @@ pub fn migrate(raw: &str, ids: &mut IdGen) -> Result<Db, RestoreError> {
         other => return Err(RestoreError::Unsupported(other)),
     };
 
-    normalize(&mut db);
+    normalize(&mut db, ids);
     db.schema = SCHEMA;
     Ok(db)
 }
 
 /// 世代に依らない正規化。
-fn normalize(db: &mut Db) {
+///
+/// `ids` はトレーニングメニューの ID 重複を解くためだけに使う（[`normalize_routines`]）。
+fn normalize(db: &mut Db, ids: &mut IdGen) {
+    normalize_routines(db, ids);
+
     let mut sessions: BTreeMap<String, Session> = BTreeMap::new();
     for (key, session) in std::mem::take(&mut db.sessions) {
         let Some(date) = parse_date_key(&key) else {
@@ -835,6 +986,53 @@ fn normalize(db: &mut Db) {
     }
     sessions.retain(|_, s| !s.is_empty());
     db.sessions = sessions;
+}
+
+/// トレーニングメニューの正規化（adr/data-model/routines-as-named-exercise-lists.md）。
+///
+/// ★ **存在しない種目・アーカイブ済みの種目への参照は消さない。** このアプリに種目の
+/// 物理削除は無い（`views::settings` にあるのは `set_archived` だけ）ので、宙に浮いた
+/// 参照は「他端末のデータ」しか作らない。つまり**後から相手のファイルを取り込めば
+/// 生き返る**種類の参照であり、読み込みのたびに消すと生き返らせる機会を奪う。しかも
+/// 消すのは不可逆で、残しても被害は「候補に出ない」だけ（可逆）。
+/// `upgrade_from_sequential` の「宙に浮いた参照は宙に浮いたまま残す」と同じ立場。
+///
+/// 「押しても何も起きない死んだボタンを作らない」責任は、読み出し側の [`expandable`] が
+/// 全部持つ（[`copyable`] が `recent_menus` と `copy_day` の両方を通っているのと同じ形）。
+fn normalize_routines(db: &mut Db, ids: &mut IdGen) {
+    // ★ 空白だけの名前を空にするのが**先**。後ろの `is_empty()` は trim して見るので、
+    //   ここを飛ばすと `" "` が「名前がある」と「空」の判定でズレる。
+    //   ★ trim はしない。両端の空白を削るのはユーザーが打った文字の書き換えになる
+    //   （`blank_notes_to_empty` と同じ規則）
+    for r in &mut db.routines {
+        if r.name.trim().is_empty() {
+            r.name.clear();
+        }
+        // ★ 重複は初出だけ残す。展開時に同一 `exercise_id` のログが 2 本でき、
+        //   「1 日 1 種目 1 ログ」が破れる（adr/data-model/one-log-per-exercise-per-day.md）。
+        //   初出の順を保つのは `dedupe_logs` と同じ
+        let mut seen: Vec<ExerciseId> = Vec::with_capacity(r.exercises.len());
+        r.exercises.retain(|id| {
+            let fresh = !seen.contains(id);
+            if fresh {
+                seen.push(*id);
+            }
+            fresh
+        });
+    }
+    db.routines.retain(|r| !r.is_empty());
+
+    // ★ ID の重複だけは放置できない。画面は `<For key=id>` に使うので重複キーは
+    //   keyed diff を壊し（wasm では panic = アプリが死ぬ）、削除は
+    //   `retain(|r| r.id != id)` なので**片方消すと両方消える**。
+    //   捨てずに採番し直すのは、名前を付けて組んだリストを黙って失わないため
+    let mut seen: Vec<RoutineId> = Vec::with_capacity(db.routines.len());
+    for r in &mut db.routines {
+        if seen.contains(&r.id) {
+            r.id = ids.alloc();
+        }
+        seen.push(r.id);
+    }
 }
 
 /// `f32` で表せない重量を捨てる。**取り込み境界で必ず通すこと。**
@@ -989,6 +1187,8 @@ fn upgrade_from_sequential(old: legacy::Db, ids: &mut IdGen) -> Db {
                 archived: e.archived,
             })
             .collect(),
+        // schema ≤2 にトレーニングメニューは存在しない（`legacy::Db` にフィールドが無い）
+        routines: Vec::new(),
         sessions: old
             .sessions
             .into_iter()
@@ -1241,6 +1441,11 @@ pub enum Conflict {
     SetsDiverged { date: String, name: String },
     /// 同じ日で体重が食い違った。取り込み先を残した
     BodyWeight { date: String },
+    /// 同じ ID のトレーニングメニューで中身が違った。取り込み先を残した
+    ///
+    /// ★ 「名前が違う」と「種目が違う」を分けない。利用者の次の行動（そのメニューを
+    /// 開いて確かめる）がどちらでも同じなので、粒度を細かくしても選択肢が増えない。
+    RoutineDiverged { name: String },
 }
 
 /// [`merge_db`] の結果。
@@ -1260,17 +1465,24 @@ pub struct MergeReport {
     /// 画面が「新しく取り込むものはありませんでした」と嘘をつく。メモの冪等性を
     /// **数で**見る口でもある（追記は `conflicts` に出ないので、他に見る手段が無い）。
     pub notes_added: usize,
+    /// 追加したトレーニングメニューの本数。
+    pub routines_added: usize,
     pub conflicts: Vec<Conflict>,
 }
 
 impl MergeReport {
     /// 何も足さなかったか。
+    ///
+    /// ★ **ここに数を足したら `views::backup::report_text` にも必ず足すこと。**
+    /// 片方だけだと `is_noop` が偽なのに文言の部品が空になり、画面に
+    /// 「 を追加しました」だけが出る。
     pub fn is_noop(&self) -> bool {
         self.groups_added == 0
             && self.exercises_added == 0
             && self.sessions_added == 0
             && self.logs_added == 0
             && self.notes_added == 0
+            && self.routines_added == 0
     }
 }
 
@@ -1396,6 +1608,65 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
         });
         exercise_alias.insert(id, id);
         report.exercises_added += 1;
+    }
+
+    // ── トレーニングメニュー ──
+    //
+    // ★ **種目ループの後に置く。** `exercise_alias` が完成していないと写像を張れない。
+    //
+    // 判定は `ID 一致 → (同名 かつ 種目列が完全一致) → 新規追加`。
+    // ★ **同名でも中身が違えば寄せない**（種目とはここだけ規則を変える）。種目で
+    //   同名を寄せるのは履歴がぶら下がっているからで、寄せないとグラフの系列が 2 本に
+    //   割れる。メニューには**何もぶら下がっていない**ので、天秤が逆になる:
+    //     - 寄せて外す → 取り込む側のリストがどこにも残らず消える（不可逆・不可視）
+    //     - 寄せずに残す → 「胸の日」が 2 行並ぶ（可視・1 タップで消せる）
+    //   ID が違って名前だけ同じなのは「2 台で独立に作った」ときで、それは本当に別物。
+    //   中身が完全一致するときだけ寄せれば、純粋な重複は潰しつつ 1 本も失わない。
+    // ★ 却下: 種目列を union する。「この端末では意図的にチェストフライを外した」が
+    //   毎回の取り込みで無言に戻る。`merge_db` がセットを連結しないのと同型
+    for r in theirs.routines {
+        // ★ どの枝を通るかに関わらず、先に写像を適用しておく（セッションと同じ規則）。
+        //   同名判定も**写像適用後**の列で行う。前で比べると、同じ種目を指しているのに
+        //   ID が違うだけで「別物」と判定され重複が残る
+        let mut seen: Vec<ExerciseId> = Vec::with_capacity(r.exercises.len());
+        let exercises: Vec<ExerciseId> = r
+            .exercises
+            .iter()
+            .map(|id| exercise_alias.get(id).copied().unwrap_or(*id))
+            // ★ 写像は単射とは限らない。取り込み先で改名済みの種目と、取り込む側の
+            //   同名の別種目が同じ ID に落ちると、1 本のメニューに同じ exercise_id が
+            //   2 回入る。展開すると「1 日 1 種目 1 ログ」が破れる
+            //   （セッション側の `dedupe_by_exercise` とまったく同じ危険）
+            .filter(|id| {
+                let fresh = !seen.contains(id);
+                if fresh {
+                    seen.push(*id);
+                }
+                fresh
+            })
+            .collect();
+
+        if let Some(existing) = mine.routine(r.id) {
+            if existing.name != r.name || existing.exercises != exercises {
+                report.conflicts.push(Conflict::RoutineDiverged {
+                    name: existing.name.clone(),
+                });
+            }
+            continue;
+        }
+        if mine
+            .routines
+            .iter()
+            .any(|x| x.name == r.name && x.exercises == exercises)
+        {
+            continue;
+        }
+        mine.routines.push(Routine {
+            id: r.id,
+            name: r.name,
+            exercises,
+        });
+        report.routines_added += 1;
     }
 
     // ── セッション ──
@@ -1627,6 +1898,25 @@ mod tests {
                 ..Session::default()
             },
         );
+    }
+
+    fn r(n: u64) -> RoutineId {
+        RoutineId::from_bits(0x2_0000 + n)
+    }
+
+    /// テスト用のトレーニングメニュー。
+    fn routine(id: u64, name: &str, exercises: &[u64]) -> Routine {
+        Routine {
+            id: r(id),
+            name: name.into(),
+            exercises: exercises.iter().map(|n| e(*n)).collect(),
+        }
+    }
+
+    /// `db` を JSON にして `migrate` で読み戻す。正規化の観測に使う。
+    fn round_trip(db: &Db) -> Db {
+        let raw = serde_json::to_string(db).expect("直列化できる");
+        migrate(&raw, &mut ids()).expect("自分が書いた JSON は読める")
     }
 
     // ── 指標 ────────────────────────────────────────────────────────────────
@@ -2325,6 +2615,291 @@ mod tests {
             !db.sessions.contains_key(&date_key(d(2026, 8, 8))),
             "空の Session を置き去りにしない"
         );
+    }
+
+    // ── トレーニングメニューの展開 ──────────────────────────────────────────
+    // adr/data-model/routines-as-named-exercise-lists.md
+    // adr/ux/start-from-a-saved-routine.md
+
+    /// メニュー入りの Db。胸の日 = ベンチプレス(10) / プランク(20) / スクワット(30)。
+    ///
+    /// **3 種目とも別の部位**にしてある。「種目ごとに別々の日から引く」を見るテストで
+    /// 日付をばらけさせたいので、同じ日にまとまりがちな同一部位を避ける。
+    fn routine_db() -> Db {
+        let mut db = menu_db();
+        db.routines.push(routine(1, "胸の日", &[10, 20, 30]));
+        db
+    }
+
+    #[test]
+    fn usable_routines_drops_exercises_that_are_archived_or_missing() {
+        let mut db = routine_db();
+        db.exercises
+            .iter_mut()
+            .find(|x| x.id == e(20))
+            .expect("プランクがある")
+            .archived = true;
+        db.routines[0].exercises.push(e(99)); // 存在しない種目
+
+        let got = usable_routines(&db);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].exercises, vec![e(10), e(30)]);
+        assert_eq!(got[0].name, "胸の日");
+    }
+
+    #[test]
+    fn usable_routines_skips_a_routine_with_nothing_left_to_expand() {
+        // 押せない行を作らない（recent_menus が空の日を候補にしないのと同じ）
+        let mut db = routine_db();
+        db.routines.push(routine(2, "幽霊の日", &[98, 99]));
+
+        let got = usable_routines(&db);
+        assert_eq!(
+            got.len(),
+            1,
+            "展開できるものが 1 つも無いメニューは出さない"
+        );
+        assert_eq!(got[0].id, r(1));
+    }
+
+    #[test]
+    fn usable_routines_lists_a_routine_even_when_no_exercise_has_history() {
+        // ★ 初めて組んだメニューが押せないのは最悪。履歴ゼロでも候補に出す
+        let db = routine_db();
+        assert_eq!(usable_routines(&db).len(), 1);
+    }
+
+    #[test]
+    fn usable_routines_dedupes_the_exercises_of_an_unnormalized_routine() {
+        // 編集中の Db もここを通る（normalize は読み込みのときしか走らない）
+        let mut db = routine_db();
+        db.routines[0].exercises = vec![e(10), e(20), e(10)];
+
+        assert_eq!(usable_routines(&db)[0].exercises, vec![e(10), e(20)]);
+    }
+
+    #[test]
+    fn usable_routines_keeps_the_stored_order() {
+        let mut db = routine_db();
+        db.routines[0].exercises = vec![e(30), e(10), e(20)];
+        db.routines.push(routine(2, "背中の日", &[11]));
+
+        let got = usable_routines(&db);
+        assert_eq!(got[0].exercises, vec![e(30), e(10), e(20)]);
+        assert_eq!(
+            got.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            vec!["胸の日", "背中の日"]
+        );
+    }
+
+    /// ★ **死んだボタン対策の本丸。** 表示に使う集合と、実際に展開される集合が
+    /// 同じであることを直接主張する（`copyable` が 2 つのフィルタを兼ねているのと同じ契約）。
+    #[test]
+    fn usable_routines_and_apply_routine_agree_on_the_exercises() {
+        let mut db = routine_db();
+        db.exercises
+            .iter_mut()
+            .find(|x| x.id == e(20))
+            .expect("プランクがある")
+            .archived = true;
+        db.routines[0].exercises.push(e(99));
+        // 一部にだけ履歴を入れる（履歴の有無で集合が変わらないことも同時に見る）
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(60.0, 10)], None)]);
+
+        let listed = usable_routines(&db);
+        let opened = apply_routine(&mut db, r(1), d(2026, 8, 8), None);
+        assert_eq!(listed[0].exercises, opened);
+    }
+
+    #[test]
+    fn apply_routine_fills_each_exercise_from_its_own_last_record() {
+        // ★ この機能の核。ベンチは 3 日前、スクワットは 10 日前から引く
+        let mut db = routine_db();
+        put(&mut db, d(2026, 7, 29), vec![log(30, &[(80.0, 5)], None)]);
+        put(
+            &mut db,
+            d(2026, 8, 5),
+            vec![log(10, &[(60.0, 10), (60.0, 8)], None)],
+        );
+
+        let opened = apply_routine(&mut db, r(1), d(2026, 8, 8), None);
+        assert_eq!(opened, vec![e(10), e(20), e(30)], "メニューの並び順で返す");
+
+        let logs = &db.sessions[&date_key(d(2026, 8, 8))].logs;
+        assert_eq!(
+            logs.iter().map(|l| l.exercise_id).collect::<Vec<_>>(),
+            vec![e(10), e(30)],
+            "履歴のあるものだけログになる。並びはメニュー順"
+        );
+        assert_eq!(logs[0].sets, vec![set(60.0, 10), set(60.0, 8)]);
+        assert_eq!(logs[1].sets, vec![set(80.0, 5)]);
+    }
+
+    #[test]
+    fn apply_routine_reports_exercises_without_history_but_writes_no_log() {
+        // ★ 0 セットのログを書くと dedupe_logs が次回起動で落とし、
+        //   「画面に出ているのに消える」になる。カードは返り値で出す
+        let mut db = routine_db();
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(60.0, 10)], None)]);
+
+        let opened = apply_routine(&mut db, r(1), d(2026, 8, 8), None);
+        assert_eq!(opened, vec![e(10), e(20), e(30)]);
+        assert_eq!(db.sessions[&date_key(d(2026, 8, 8))].logs.len(), 1);
+    }
+
+    #[test]
+    fn apply_routine_leaves_no_session_when_no_exercise_has_history() {
+        let mut db = routine_db();
+
+        let opened = apply_routine(&mut db, r(1), d(2026, 8, 8), None);
+        assert_eq!(opened, vec![e(10), e(20), e(30)], "カードは全部出す");
+        assert!(
+            !db.sessions.contains_key(&date_key(d(2026, 8, 8))),
+            "何も記録していない日をカレンダーに残してはいけない"
+        );
+    }
+
+    #[test]
+    fn apply_routine_ignores_records_on_or_after_the_target_day() {
+        // 「前回」は指定日より厳密に前（last_log_before と同じ定義）
+        let mut db = routine_db();
+        put(&mut db, d(2026, 8, 8), vec![log(10, &[(70.0, 5)], None)]);
+        put(&mut db, d(2026, 8, 9), vec![log(30, &[(90.0, 3)], None)]);
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(60.0, 10)], None)]);
+
+        let opened = apply_routine(&mut db, r(1), d(2026, 8, 7), None);
+        assert_eq!(opened, vec![e(10), e(20), e(30)]);
+        let logs = &db.sessions[&date_key(d(2026, 8, 7))].logs;
+        assert_eq!(logs.len(), 1, "8/8 と 8/9 は「前回」ではない");
+        assert_eq!(logs[0].sets, vec![set(60.0, 10)]);
+    }
+
+    #[test]
+    fn apply_routine_does_not_use_a_note_only_log_as_a_source() {
+        // last_log_before はセットが空のログを飛ばす。メモはトレーニングではない
+        let mut db = routine_db();
+        put(&mut db, d(2026, 8, 1), vec![log(10, &[(60.0, 10)], None)]);
+        put(
+            &mut db,
+            d(2026, 8, 5),
+            vec![noted_log(10, "肩が痛いのでやめた", &[], None)],
+        );
+
+        apply_routine(&mut db, r(1), d(2026, 8, 8), None);
+        let logs = &db.sessions[&date_key(d(2026, 8, 8))].logs;
+        assert_eq!(logs[0].sets, vec![set(60.0, 10)], "8/1 まで遡る");
+    }
+
+    #[test]
+    fn apply_routine_does_not_copy_the_set_notes_or_the_exercise_note() {
+        // 「3 セット目で肩に違和感」は前回の観測。複製すると起きていない観測が生える
+        let mut db = routine_db();
+        put(
+            &mut db,
+            d(2026, 8, 5),
+            vec![noted_log(10, "調子が良い", &[(60.0, 10, "重い")], None)],
+        );
+
+        apply_routine(&mut db, r(1), d(2026, 8, 8), None);
+        let log = &db.sessions[&date_key(d(2026, 8, 8))].logs[0];
+        assert_eq!(log.note, "");
+        assert_eq!(log.sets[0].note, "");
+    }
+
+    #[test]
+    fn apply_routine_always_uses_the_given_at_never_the_source_one() {
+        let mut db = routine_db();
+        put(
+            &mut db,
+            d(2026, 8, 5),
+            vec![log(10, &[(60.0, 10)], Some(1))],
+        );
+
+        apply_routine(&mut db, r(1), d(2026, 8, 8), None);
+        assert_eq!(
+            db.sessions[&date_key(d(2026, 8, 8))].logs[0].at,
+            None,
+            "過去日バックフィルに元の epoch を持ち込まない"
+        );
+
+        apply_routine(&mut db, r(1), d(2026, 8, 9), Some(42));
+        assert_eq!(db.sessions[&date_key(d(2026, 8, 9))].logs[0].at, Some(42));
+    }
+
+    #[test]
+    fn apply_routine_does_nothing_when_the_target_already_has_logs() {
+        let mut db = routine_db();
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(60.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 8), vec![log(11, &[(0.0, 20)], None)]);
+
+        assert!(
+            apply_routine(&mut db, r(1), d(2026, 8, 8), None).is_empty(),
+            "カードを 1 枚も出さない（出すと画面と Db がずれる）"
+        );
+        assert_eq!(db.sessions[&date_key(d(2026, 8, 8))].logs.len(), 1);
+    }
+
+    #[test]
+    fn apply_routine_refuses_a_target_holding_an_empty_set_log() {
+        // 判定は is_trained() ではなく logs.is_empty()。緩めると同じ種目のログが 2 本できる
+        let mut db = routine_db();
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(60.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 8), vec![log(10, &[], None)]);
+
+        assert!(apply_routine(&mut db, r(1), d(2026, 8, 8), None).is_empty());
+    }
+
+    #[test]
+    fn apply_routine_keeps_the_body_weight_and_note_already_on_the_target() {
+        // ConditionRow は 1 文字ごとに commit するので、先に体重が入っていることがある
+        let mut db = routine_db();
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(60.0, 10)], None)]);
+        let session = db.sessions.entry(date_key(d(2026, 8, 8))).or_default();
+        session.body_weight = Some(62.5);
+        session.note = "よく寝た".into();
+
+        apply_routine(&mut db, r(1), d(2026, 8, 8), None);
+        let session = &db.sessions[&date_key(d(2026, 8, 8))];
+        assert_eq!(session.body_weight, Some(62.5));
+        assert_eq!(session.note, "よく寝た");
+        assert_eq!(session.logs.len(), 1);
+    }
+
+    #[test]
+    fn apply_routine_never_writes_two_logs_for_the_same_exercise() {
+        // 正規化前の Db（編集中）でも「1 日 1 種目 1 ログ」を守る
+        let mut db = routine_db();
+        db.routines[0].exercises = vec![e(10), e(10), e(10)];
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(60.0, 10)], None)]);
+
+        let opened = apply_routine(&mut db, r(1), d(2026, 8, 8), None);
+        assert_eq!(opened, vec![e(10)]);
+        assert_eq!(db.sessions[&date_key(d(2026, 8, 8))].logs.len(), 1);
+    }
+
+    #[test]
+    fn apply_routine_ignores_history_older_than_the_menu_lookback() {
+        // ★ MENU_LOOKBACK_DAYS は**適用しない**。カードの「前回」表示に上限が無いので、
+        //   ここだけ打ち切ると「前回 730日前 60×10 と出ているのに何も入らない」になる
+        let mut db = routine_db();
+        let old = d(2026, 8, 8) - TimeDelta::days(MENU_LOOKBACK_DAYS + 400);
+        put(&mut db, old, vec![log(10, &[(60.0, 10)], None)]);
+
+        apply_routine(&mut db, r(1), d(2026, 8, 8), None);
+        assert_eq!(
+            db.sessions[&date_key(d(2026, 8, 8))].logs[0].sets,
+            vec![set(60.0, 10)],
+            "何年前でも「前回」は「前回」"
+        );
+    }
+
+    #[test]
+    fn apply_routine_on_an_unknown_routine_does_nothing() {
+        let mut db = routine_db();
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(60.0, 10)], None)]);
+
+        assert!(apply_routine(&mut db, r(99), d(2026, 8, 8), None).is_empty());
+        assert!(!db.sessions.contains_key(&date_key(d(2026, 8, 8))));
     }
 
     // ── 系列 ────────────────────────────────────────────────────────────────
@@ -3423,6 +3998,137 @@ mod tests {
         }
     }
 
+    // ── トレーニングメニューの正規化 ────────────────────────────────────────
+    // adr/data-model/routines-as-named-exercise-lists.md
+
+    #[test]
+    fn migrate_dedupes_repeated_exercises_inside_a_routine() {
+        // 残ると展開時に同じ種目のログが 2 本でき「1 日 1 種目 1 ログ」が破れる
+        let mut db = test_db();
+        db.routines
+            .push(routine(1, "胸の日", &[10, 11, 10, 11, 10]));
+
+        let out = round_trip(&db);
+        assert_eq!(
+            out.routines[0].exercises,
+            vec![e(10), e(11)],
+            "初出の順で残す"
+        );
+    }
+
+    #[test]
+    fn migrate_keeps_a_routine_that_points_at_a_missing_exercise() {
+        // ★ 消してはいけない。宙に浮いた参照は「相手の端末のデータ」しか作らないので、
+        //   後からそのファイルを取り込めば生き返る。読み込みのたびに消すと救済できない
+        let mut db = test_db();
+        db.routines.push(routine(1, "胸の日", &[10, 99]));
+
+        let out = round_trip(&db);
+        assert_eq!(out.routines[0].exercises, vec![e(10), e(99)]);
+    }
+
+    #[test]
+    fn migrate_keeps_a_routine_that_points_at_an_archived_exercise() {
+        // アーカイブは可逆な操作。参照を消すと戻したときに復元できない
+        let mut db = test_db();
+        db.exercises[1].archived = true;
+        db.routines.push(routine(1, "胸の日", &[10, 11]));
+
+        let out = round_trip(&db);
+        assert_eq!(out.routines[0].exercises, vec![e(10), e(11)]);
+    }
+
+    #[test]
+    fn migrate_keeps_a_named_routine_that_has_no_exercises() {
+        // 名前を打って種目を選ぶ前に閉じた状態を消してはいけない
+        let mut db = test_db();
+        db.routines.push(routine(1, "胸の日", &[]));
+
+        assert_eq!(round_trip(&db).routines.len(), 1);
+    }
+
+    #[test]
+    fn migrate_keeps_an_unnamed_routine_that_has_exercises() {
+        let mut db = test_db();
+        db.routines.push(routine(1, "", &[10]));
+
+        assert_eq!(round_trip(&db).routines.len(), 1);
+    }
+
+    #[test]
+    fn migrate_drops_a_routine_with_neither_a_name_nor_exercises() {
+        let mut db = test_db();
+        db.routines.push(routine(1, "胸の日", &[10]));
+        db.routines.push(routine(2, "", &[]));
+
+        let out = round_trip(&db);
+        assert_eq!(out.routines.len(), 1);
+        assert_eq!(out.routines[0].id, r(1));
+    }
+
+    #[test]
+    fn migrate_clears_a_whitespace_only_routine_name() {
+        // ★ 空白だけの名前を空にするのが is_empty より先。順が逆だと " " が
+        //   「名前がある」と「空」の判定でズレる
+        let mut db = test_db();
+        db.routines.push(routine(1, "　", &[10]));
+        db.routines.push(routine(2, " \n ", &[]));
+
+        let out = round_trip(&db);
+        assert_eq!(out.routines.len(), 1, "空白だけ × 種目なし は落とす");
+        assert_eq!(out.routines[0].name, "");
+    }
+
+    #[test]
+    fn migrate_does_not_trim_a_routine_name_that_has_other_characters() {
+        // 両端の空白を削るのはユーザーが打った文字の書き換えになる
+        let mut db = test_db();
+        db.routines.push(routine(1, " 胸の日 ", &[10]));
+
+        assert_eq!(round_trip(&db).routines[0].name, " 胸の日 ");
+    }
+
+    #[test]
+    fn migrate_gives_a_new_id_to_a_routine_that_repeats_an_existing_one() {
+        // 重複キーは <For> の keyed diff を壊し、削除は「片方消すと両方消える」になる。
+        // 捨てずに振り直すのは、組んだリストを黙って失わないため
+        let mut db = test_db();
+        db.routines.push(routine(1, "胸の日", &[10]));
+        db.routines.push(routine(1, "背中の日", &[11]));
+
+        let out = round_trip(&db);
+        assert_eq!(out.routines.len(), 2, "捨ててはいけない");
+        assert_eq!(out.routines[0].id, r(1), "先に出たほうは動かさない");
+        assert_ne!(out.routines[1].id, r(1));
+        assert_eq!(out.routines[1].name, "背中の日");
+    }
+
+    #[test]
+    fn migrate_keeps_the_order_of_the_routines_and_of_their_exercises() {
+        let mut db = test_db();
+        db.routines.push(routine(1, "胸の日", &[11, 10]));
+        db.routines.push(routine(2, "体幹の日", &[20]));
+
+        let out = round_trip(&db);
+        let names: Vec<&str> = out.routines.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(names, vec!["胸の日", "体幹の日"]);
+        assert_eq!(out.routines[0].exercises, vec![e(11), e(10)]);
+    }
+
+    #[test]
+    fn migrate_from_schema_two_leaves_the_routines_empty() {
+        let raw = r#"{"schema":2,"groups":[],"exercises":[],"sessions":{}}"#;
+        let db = migrate(raw, &mut ids()).expect("旧世代が読める");
+        assert!(db.routines.is_empty());
+    }
+
+    #[test]
+    fn migrate_reads_schema_three_json_written_before_routines_existed() {
+        let raw = r#"{"schema":3,"groups":[],"exercises":[],"sessions":{}}"#;
+        let db = migrate(raw, &mut ids()).expect("メニュー以前の schema 3 が読める");
+        assert!(db.routines.is_empty());
+    }
+
     // ── 書き出し / 読み込み ──────────────────────────────────────────────────
 
     /// ★ この機能の生命線。書き出したものが、そのまま読み戻せる。
@@ -3447,6 +4153,22 @@ mod tests {
                 note: "調子よい".into(),
             },
         );
+
+        let raw = export_json(&db);
+        assert_eq!(parse_import(&raw, &mut ids()).expect("読み戻せる"), db);
+    }
+
+    #[test]
+    fn export_round_trips_the_routines_too() {
+        // 書き出し形式 = 保存形式なので `export_json` に手は要らないが、
+        // 「メニューが往復で消えない」は明示的に固定しておく
+        let mut db = crate::presets::seeded_db();
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        db.routines.push(Routine {
+            id: r(1),
+            name: "胸の日".into(),
+            exercises: vec![bench],
+        });
 
         let raw = export_json(&db);
         assert_eq!(parse_import(&raw, &mut ids()).expect("読み戻せる"), db);
@@ -4002,6 +4724,209 @@ mod tests {
 
         assert_eq!(a.sessions[&date_key(d(2026, 8, 1))].note, after_first);
         assert_eq!(after_first, "Aのメモ\nBのメモ");
+    }
+
+    // ── トレーニングメニューのマージ ────────────────────────────────────────
+    // adr/data-model/routines-as-named-exercise-lists.md
+    //
+    // ★ `device_a()` / `device_b()` は触らない。共有フィクスチャに手を入れると
+    //   他の assertion（冪等性・可換性）に波及するので、専用の Db を組む。
+
+    /// メニューだけを見るための最小の 2 台。プリセットの固定 ID を使うので
+    /// 「独立に seed された 2 台」の前提がそのまま成り立つ。
+    fn routine_devices() -> (Db, Db) {
+        (crate::presets::seeded_db(), crate::presets::seeded_db())
+    }
+
+    fn preset(name: &str) -> ExerciseId {
+        crate::presets::preset_exercise_id(name).expect("プリセット")
+    }
+
+    fn routine_names(db: &Db) -> Vec<&str> {
+        db.routines.iter().map(|x| x.name.as_str()).collect()
+    }
+
+    #[test]
+    fn merge_adds_a_routine_from_the_other_device() {
+        let (mut mine, mut theirs) = routine_devices();
+        theirs.routines.push(Routine {
+            id: r(1),
+            name: "胸の日".into(),
+            exercises: vec![preset("ベンチプレス")],
+        });
+
+        let report = merge_db(&mut mine, theirs);
+        assert_eq!(report.routines_added, 1);
+        assert_eq!(routine_names(&mine), vec!["胸の日"]);
+        assert!(!report.is_noop(), "メニューだけ増えたときも noop ではない");
+    }
+
+    #[test]
+    fn merge_maps_the_exercise_ids_inside_an_incoming_routine() {
+        // 取り込む側の「わたしの種目」は取り込み先の同名種目へ寄る。
+        // メニューの中の参照もその写像を通らなければ、宙に浮いた種目を指すことになる
+        let (mut mine, mut theirs) = routine_devices();
+        let chest = crate::presets::preset_group_id("胸").expect("プリセット");
+        let mine_id = ExerciseId::from_bits(0xAAA1);
+        let theirs_id = ExerciseId::from_bits(0xBBB1);
+        for (db, id) in [(&mut mine, mine_id), (&mut theirs, theirs_id)] {
+            db.exercises.push(Exercise {
+                id,
+                name: "わたしの種目".into(),
+                group_id: chest,
+                order: 9,
+                archived: false,
+            });
+        }
+        theirs.routines.push(Routine {
+            id: r(1),
+            name: "胸の日".into(),
+            exercises: vec![theirs_id],
+        });
+
+        merge_db(&mut mine, theirs);
+        assert_eq!(
+            mine.routines[0].exercises,
+            vec![mine_id],
+            "取り込み先の ID へ張り替わっていなければ宙に浮く"
+        );
+    }
+
+    #[test]
+    fn merge_does_not_let_two_incoming_exercises_collapse_into_one_routine_entry() {
+        // 写像は単射とは限らない。潰れた結果が同じメニューに 2 回入ると、
+        // 展開時に「1 日 1 種目 1 ログ」が破れる
+        let (mut mine, mut theirs) = routine_devices();
+        let chest = crate::presets::preset_group_id("胸").expect("プリセット");
+        let bench = preset("ベンチプレス");
+        // 取り込む側だけが持つ別 ID の「ベンチプレス」→ 同名で bench に寄る
+        let dup = ExerciseId::from_bits(0xBBB2);
+        theirs.exercises.push(Exercise {
+            id: dup,
+            name: "ベンチプレス".into(),
+            group_id: chest,
+            order: 9,
+            archived: false,
+        });
+        theirs.routines.push(Routine {
+            id: r(1),
+            name: "胸の日".into(),
+            exercises: vec![bench, dup],
+        });
+
+        merge_db(&mut mine, theirs);
+        assert_eq!(mine.routines[0].exercises, vec![bench]);
+    }
+
+    #[test]
+    fn merge_keeps_my_routine_when_the_same_id_holds_different_exercises() {
+        let (mut mine, mut theirs) = routine_devices();
+        mine.routines.push(Routine {
+            id: r(1),
+            name: "胸の日".into(),
+            exercises: vec![preset("ベンチプレス")],
+        });
+        theirs.routines.push(Routine {
+            id: r(1),
+            name: "胸の日".into(),
+            exercises: vec![preset("ベンチプレス"), preset("チェストフライ")],
+        });
+
+        let report = merge_db(&mut mine, theirs);
+        assert_eq!(report.routines_added, 0);
+        assert_eq!(
+            mine.routines[0].exercises,
+            vec![preset("ベンチプレス")],
+            "取り込み先を残す（union にすると外した種目が毎回戻る）"
+        );
+        assert_eq!(
+            report.conflicts,
+            vec![Conflict::RoutineDiverged {
+                name: "胸の日".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn merge_reports_a_divergence_when_a_shared_routine_id_was_renamed() {
+        let (mut mine, mut theirs) = routine_devices();
+        mine.routines.push(Routine {
+            id: r(1),
+            name: "胸の日".into(),
+            exercises: vec![preset("ベンチプレス")],
+        });
+        theirs.routines.push(Routine {
+            id: r(1),
+            name: "プッシュの日".into(),
+            exercises: vec![preset("ベンチプレス")],
+        });
+
+        let report = merge_db(&mut mine, theirs);
+        assert_eq!(mine.routines[0].name, "胸の日");
+        assert_eq!(
+            report.conflicts,
+            vec![Conflict::RoutineDiverged {
+                name: "胸の日".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn merge_keeps_both_routines_that_only_share_a_name() {
+        // ★ 種目とはここだけ規則が違う。メニューには履歴がぶら下がっていないので、
+        //   寄せて外すと不可逆に消える。並べておけば 1 タップで消せる
+        let (mut mine, mut theirs) = routine_devices();
+        mine.routines.push(Routine {
+            id: r(1),
+            name: "胸の日".into(),
+            exercises: vec![preset("ベンチプレス")],
+        });
+        theirs.routines.push(Routine {
+            id: r(2),
+            name: "胸の日".into(),
+            exercises: vec![preset("チェストフライ")],
+        });
+
+        let report = merge_db(&mut mine, theirs);
+        assert_eq!(report.routines_added, 1);
+        assert_eq!(routine_names(&mine), vec!["胸の日", "胸の日"]);
+        assert!(report.conflicts.is_empty(), "食い違いではなく別物");
+    }
+
+    #[test]
+    fn merge_does_not_duplicate_a_routine_that_both_devices_built_identically() {
+        // 2 台で同じものを作った / 同じファイルを別経路で 2 度入れた場合
+        let (mut mine, mut theirs) = routine_devices();
+        mine.routines.push(Routine {
+            id: r(1),
+            name: "胸の日".into(),
+            exercises: vec![preset("ベンチプレス")],
+        });
+        theirs.routines.push(Routine {
+            id: r(2),
+            name: "胸の日".into(),
+            exercises: vec![preset("ベンチプレス")],
+        });
+
+        let report = merge_db(&mut mine, theirs);
+        assert_eq!(report.routines_added, 0);
+        assert_eq!(mine.routines.len(), 1);
+    }
+
+    #[test]
+    fn merge_of_routines_is_idempotent() {
+        let (mut mine, mut theirs) = routine_devices();
+        theirs.routines.push(Routine {
+            id: r(1),
+            name: "胸の日".into(),
+            exercises: vec![preset("ベンチプレス")],
+        });
+
+        merge_db(&mut mine, theirs.clone());
+        let again = merge_db(&mut mine, theirs);
+        assert_eq!(again.routines_added, 0);
+        assert_eq!(mine.routines.len(), 1);
+        assert!(again.conflicts.is_empty());
     }
 
     // ── メモのマージ（adr/data-model/notes-on-logs-and-sets.md）─────────────────

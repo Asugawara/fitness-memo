@@ -28,16 +28,22 @@ const BASE = `http://localhost:${PORT}/`;
  * 記録タブだけ指定があるのは、先頭で撮るとカレンダーしか入らず、この画面の要である
  * 「カレンダーと入力欄が縦に並んで 1 画面」（adr/ux/record-tab-calendar-with-day-editor.md）が写らないため。
  *
- * `expand` は設定タブ用で、撮る前にその部位を開き、そのカードを画面中央に寄せる。
- * 全部閉じた絵だと「部位しか無いアプリ」に見え、逆に開いた絵だけでは折りたたまれて
- * いることが伝わらない。閉じた部位と開いた部位が同時に写るのが、この画面の一番正確な絵
- * （adr/ux/menu-groups-as-single-open-accordion.md）。**先頭の部位を開くと上に閉じた
- * カードが写らない**ので、真ん中あたりの「肩」（4 種目でカードも高すぎない）を開く。
+ * `expand` は設定タブ用で、撮る前にその部位を開く。全部閉じた絵だと「部位しか無い
+ * アプリ」に見え、逆に開いた絵だけでは折りたたまれていることが伝わらない。閉じた部位と
+ * 開いた部位が同時に写るのが、この画面の一番正確な絵
+ * （adr/ux/menu-groups-as-single-open-accordion.md）。
+ *
+ * ★ **開くのは先頭の「胸」で、寄せ方は `block: 'nearest'`。** かつては真ん中あたりの
+ *   「肩」を画面中央へ寄せていたが、上にトレーニングメニューの節が載った今それをやると
+ *   メニュー — この画面のもう一方の目玉 — が画面外へ出る
+ *   （adr/ux/start-from-a-saved-routine.md）。先頭を開いて最小限だけ寄せると、
+ *   「メニュー 2 本 + 種目（開いた部位）」が 1 枚に収まる。
+ *   h1 は README の表側が「設定」と書いているので写らなくてよい。
  */
 const SHOTS = [
   { file: '1-record.png', testid: 'tab-record', screen: 'screen-record', center: 'today-date' },
   { file: '2-progress.png', testid: 'tab-progress', screen: 'screen-progress' },
-  { file: '3-menu.png', testid: 'tab-settings', screen: 'screen-settings', expand: '肩' },
+  { file: '3-menu.png', testid: 'tab-settings', screen: 'screen-settings', expand: '胸' },
 ];
 
 /**
@@ -59,6 +65,21 @@ const SEED = [
   { daysAgo: 2, name: 'ラットプルダウン', sets: [[45, 12], [45, 10], [45, 10]] },
   { daysAgo: 0, name: 'ベンチプレス', sets: [[60, 10], [60, 10], [60, 8]] },
   { daysAgo: 0, name: 'ダンベルプレス', sets: [[22.5, 12], [22.5, 10]] },
+];
+
+/**
+ * 撮影用のトレーニングメニュー（adr/ux/start-from-a-saved-routine.md）。
+ *
+ * ★ 置かないと設定タブに「まだありません」の 1 行しか写らず、この画面の目玉が
+ *   README から読めない。上の SEED と同じ分割（胸 / 背中）で 2 本だけ置く。
+ *
+ * ★ ID は予約領域（1024 未満）の外に固定で書く。撮り直しても同じ絵になるように
+ *   するためで、`IdGen` を通さないのはここが撮影用の直接注入だから（実アプリの
+ *   採番経路ではない）。12 文字の base32 でないと `core::migrate` が弾く。
+ */
+const ROUTINES = [
+  { id: '00000000zzz1', name: '胸の日', names: ['ベンチプレス', 'ダンベルプレス', 'チェストフライ'] },
+  { id: '00000000zzz2', name: '背中の日', names: ['懸垂', 'ラットプルダウン', 'デッドリフト'] },
 ];
 
 /**
@@ -124,7 +145,7 @@ try {
     document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
   });
 
-  await page.evaluate(({ seed, weights }) => {
+  await page.evaluate(({ seed, weights, routines }) => {
     // ★ storage.rs の KEY と一致していること。schema 世代ごとにキーを切る運用
     //   （adr/storage/storage-key-per-schema-generation.md）なので、ここが古いと getItem が null を返して黙って落ちる
     const KEY = 'fitness-memo/v3';
@@ -156,8 +177,17 @@ try {
       session.body_weight = kg;
       db.sessions[key] = session;
     }
+    db.routines = routines.map(({ id, name, names }) => ({
+      id,
+      name,
+      exercises: names.map((n) => {
+        const ex = db.exercises.find((e) => e.name === n);
+        if (!ex) throw new Error(`プリセットに無い種目: ${n}`);
+        return ex.id;
+      }),
+    }));
     localStorage.setItem(KEY, JSON.stringify(db));
-  }, { seed: SEED, weights: BODY_WEIGHTS });
+  }, { seed: SEED, weights: BODY_WEIGHTS, routines: ROUTINES });
 
   await page.reload();
 
@@ -178,7 +208,10 @@ try {
         has: page.getByTestId('group-name').filter({ hasText: new RegExp(`^${expand}$`) }),
       });
       await card.getByTestId('group-toggle').click();
-      await card.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
+      // ★ アプリ側の `scroll_into_view_if_needed` は request_animation_frame 越しに動く。
+      //   待たずに測ると、開く前の位置で寄せてから巻き戻されることになる
+      await page.waitForTimeout(100);
+      await card.evaluate((el) => el.scrollIntoView({ block: 'nearest', behavior: 'instant' }));
     }
     if (center) {
       await page

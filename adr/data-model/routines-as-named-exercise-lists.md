@@ -48,7 +48,7 @@ pub struct Routine {
 
 数値は展開時に種目ごとの `last_log_before` から引く。これはカード内の「前回をコピー」（[「前回をコピー」はセットが空のときだけ出す](../ux/copy-button-only-when-empty.md)）とまったく同じ「前回」の定義で、2 つの導線が同じ数値を出すことが保証される。
 
-副次的に、[1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](copy-whole-day-menu.md) が却下した「『予定』の概念をデータモデルに足す」という代償も避けられる。`Session::is_empty` / `is_trained` / `migrate` はいずれも無変更で済んだ。
+副次的に、[1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](../ux/copy-whole-day-menu.md) が却下した「『予定』の概念をデータモデルに足す」という代償も避けられる。`Session::is_empty` / `is_trained` / `migrate` はいずれも無変更で済んだ。
 
 ### なぜ `order` を持たないのか
 

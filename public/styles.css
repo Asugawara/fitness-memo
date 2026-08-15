@@ -2051,9 +2051,15 @@ h3 {
   border-top: 1px solid var(--line);
 }
 
-/* この画面のボタンは 1 行に 1 つなので、横幅いっぱいまで伸ばして押しやすくする */
+/* この画面のボタンは 1 行に 1 つなので、横幅いっぱいまで伸ばして押しやすくする。
+   ★ アイコンと文字を並べるので inline-flex にする。既定の inline のままだと
+   .icon（inline-flex の 20px 箱）がベースラインに載って文字と縦位置がずれる */
 .sheet-actions .wide {
   flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 /* ★ 衝突メッセージは \n で連結される。.settings-note は white-space を指定していないので、

@@ -340,7 +340,7 @@ pub fn Settings() -> impl IntoView {
                             // ★ 先頭に置く。データを失う前に見つけてもらう必要があるので、
                             //   ここだけは他の節より上（旧レイアウトの sticky と同じ意図）
                             {section_row(
-                                "データの書き出し / 読み込み",
+                                "エクスポート / インポート",
                                 None,
                                 "open-backup",
                                 move || {

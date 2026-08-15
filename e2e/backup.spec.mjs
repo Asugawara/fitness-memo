@@ -1,4 +1,4 @@
-// データの書き出し / 読み込み。
+// エクスポート / インポート。
 //
 // ★ ここで検証できるのは「文字列の中身」と「UI の分岐」だけ。
 //   Playwright の WebKit は download / share / clipboard のどれもジェスチャ要件を
@@ -79,7 +79,7 @@ test('書き出しは共有シートに files だけを .tsv で渡す', async (
   await openSheet(page);
 
   await page.getByTestId('backup-export').click();
-  await expect(page.getByTestId('backup-note')).toContainText('書き出しました');
+  await expect(page.getByTestId('backup-note')).toContainText('エクスポートしました');
 
   await page.waitForFunction(() => !!window.__shared);
   const shared = await page.evaluate(() => window.__shared);
@@ -111,7 +111,7 @@ test('書き出した TSV はそのまま読み戻せる', async ({ page }) => {
   await stubShare(page);
   await openSheet(page);
 
-  // 1 日分入れてから書き出す
+  // 1 日分入れてからエクスポートする
   await importFile(page, ONE_DAY_TSV);
   await page.getByTestId('backup-apply').click();
   await expect(page.getByTestId('backup-note')).toContainText('取り込みました');
@@ -224,7 +224,7 @@ test('「元に戻す」の確認は別の操作をすると解ける', async ({
 
   // 書き出しを挟むと警告文が消える。武装も一緒に解けていること
   await page.getByTestId('backup-export').click();
-  await expect(page.getByTestId('backup-note')).toContainText('書き出しました');
+  await expect(page.getByTestId('backup-note')).toContainText('エクスポートしました');
 
   await page.getByTestId('backup-undo').click();
   await expect(
@@ -290,7 +290,7 @@ test('同じファイルを続けて 2 回選んでも確認画面が出る', as
 //   「visible」で、それは**意図どおり**（display:none にすると iOS で click() が
 //   無視されうるので避けている。adr/ux/hidden-file-input-behind-a-button.md）。
 //   見たいのは「利用者の目にもタップにも触れないこと」なので、実測で確かめる。
-test('「読み込む」は押せるボタンで、input は目に触れない', async ({ page }) => {
+test('「インポート」は押せるボタンで、input は目に触れない', async ({ page }) => {
   await openSheet(page);
 
   const input = page.getByTestId('backup-file');
@@ -308,7 +308,7 @@ test('「読み込む」は押せるボタンで、input は目に触れない',
   expect(await page.locator('[data-testid=backup-sheet] input[type=file]').count()).toBe(1);
 
   const box = await page.getByTestId('backup-import').boundingBox();
-  expect(box, '「読み込む」が描画されていない').not.toBeNull();
+  expect(box, '「インポート」が描画されていない').not.toBeNull();
   expect(box.height, 'タップ標的が 44px 未満').toBeGreaterThanOrEqual(44);
 });
 

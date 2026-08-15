@@ -1,8 +1,8 @@
-//! データの書き出し / 読み込みシート。
+//! エクスポート / インポートのシート。
 //!
 //! 設計上の要点:
 //!
-//! - **1 画面に「書き出す」と「読み込む」を並べる。** ペイン切替も折りたたみも置かない
+//! - **1 画面に「エクスポート」と「インポート」を並べる。** ペイン切替も折りたたみも置かない
 //!   （adr/ux/one-screen-export-import.md）。ここは年に数回しか通らない導線なので、
 //!   稀な失敗のために常設 UI を積むと、毎回の 1 タップを全員が払うことになる
 //! - **取り込みは「足すだけ」に固定**（adr/storage/import-is-merge-only.md）。
@@ -32,6 +32,7 @@ use crate::core::{self, Conflict, DbSummary, MergeReport};
 use crate::model::Db;
 use crate::{storage, transfer};
 
+use super::icon::{self, icon};
 use super::{Sheet, use_db};
 
 /// 確認待ちの取り込み。**マージ済みの結果**を持つ。
@@ -168,7 +169,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         confirm_undo.set(false);
     };
 
-    // ── 書き出し ──
+    // ── エクスポート ──
     let do_export = move |_| {
         // ★ ここは同期。await を挟むと iOS の transient activation（5 秒）を失う。
         //   `chrono::Local` を触るのはこの層の仕事で、`core::export_tsv` は
@@ -185,7 +186,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                 transfer::share_file(&name, &tsv, core::TSV_MIME, move |outcome| {
                     match outcome {
                         transfer::ShareOutcome::Shared => note.set(Some(
-                            "書き出しました。「ファイルに保存」を選ぶと、機種を替えても残ります"
+                            "エクスポートしました。「ファイルに保存」を選ぶと、機種を替えても残ります"
                                 .into(),
                         )),
                         // ★ キャンセルを成功にしない。「保存した」と思わせるのが一番危ない
@@ -204,7 +205,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
             }
             transfer::Route::Download => {
                 transfer::download_file(&name, &tsv, core::TSV_MIME);
-                note.set(Some(format!("{name} を書き出しました")));
+                note.set(Some(format!("{name} にエクスポートしました")));
             }
             transfer::Route::Clipboard => {
                 // ★ 成否を待ってから文言を決める。失敗を「コピーしました」と出すと、
@@ -213,7 +214,8 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                     note.set(Some(if ok {
                         "コピーしました。メモや自分宛メールに貼り付けて保存してください".into()
                     } else {
-                        "コピーできませんでした（この端末では書き出す手段がありません）".to_string()
+                        "コピーできませんでした（この端末ではエクスポートする手段がありません）"
+                            .to_string()
                     }));
                 });
             }
@@ -228,12 +230,12 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
             note.set(Some(if ok {
                 "コピーしました。メモや自分宛メールに貼り付けて保存してください".into()
             } else {
-                "コピーできませんでした（この端末では書き出す手段がありません）".to_string()
+                "コピーできませんでした（この端末ではエクスポートする手段がありません）".to_string()
             }));
         });
     };
 
-    // ── 読み込み ──
+    // ── インポート ──
     let open_picker = move |_| {
         // ★ クリックハンドラから同期的に。iOS はここでジェスチャの活性を見る
         if let Some(input) = file_ref.get_untracked() {
@@ -367,7 +369,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         <Sheet
             open=open
             on_close=Callback::new(move |_| close())
-            title="データの書き出し / 読み込み".to_string()
+            title="エクスポート / インポート".to_string()
             testid="backup-sheet"
             close_testid="backup-sheet-close"
         >
@@ -395,8 +397,11 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                     view! {
                         <p class="muted">{move || summary_text(&current.get())}</p>
                         <div class="sheet-actions">
+                            // ★ アイコンは装飾（`icon()` が `aria-hidden` を付ける）。
+                            //   名前はボタンの文字が持つので、読み上げは「エクスポート」だけになる
                             <button class="primary wide" data-testid="backup-export" on:click=do_export>
-                                "書き出す"
+                                {icon(icon::UPLOAD)}
+                                "エクスポート"
                             </button>
                         </div>
                         <p class="muted">
@@ -419,11 +424,12 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                                     data-testid="backup-import"
                                     on:click=open_picker
                                 >
-                                    "読み込む"
+                                    {icon(icon::DOWNLOAD)}
+                                    "インポート"
                                 </button>
                             </div>
                             <p class="muted">
-                                "書き出したファイルを選びます。今ある記録は消えず、足りない分だけ足します"
+                                "エクスポートしたファイルを選びます。今ある記録は消えず、足りない分だけ足します"
                             </p>
                         </div>
                     }

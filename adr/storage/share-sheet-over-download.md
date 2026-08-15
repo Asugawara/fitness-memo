@@ -3,7 +3,23 @@
 - **状態**: 採用
 - **日付**: 2026-08-08
 - **カテゴリ**: storage
-- **関連**: [JSON エクスポート/インポートを v1 に入れない](defer-export-import.md)（代替案の評価を上書き）, [ID を 60 bit 乱数にし、プリセットには固定 ID を与える](../data-model/random-ids-for-safe-merge.md), [同一オリジン内の多層バックアップを採用しない](no-same-origin-redundancy.md)
+- **関連**: [JSON エクスポート/インポートを v1 に入れない](defer-export-import.md)（代替案の評価を上書き）, [ID を 60 bit 乱数にし、プリセットには固定 ID を与える](../data-model/random-ids-for-safe-merge.md), [同一オリジン内の多層バックアップを採用しない](no-same-origin-redundancy.md), [書き出しを TSV にし、保存形式（JSON）と分ける](tsv-export-for-spreadsheets.md)（形式）, [書き出し / 読み込みを 1 画面に畳む](../ux/one-screen-export-import.md)（textarea の常設を撤回）
+
+> **追記（[書き出しを TSV にし、保存形式（JSON）と分ける](tsv-export-for-spreadsheets.md) 時点）**
+> - **「textarea への全文表示は残す」を撤回した。** 常設をやめ、共有に失敗したときだけ
+>   「文字でコピー」を出す形にした。理由は [書き出し / 読み込みを 1 画面に畳む](../ux/one-screen-export-import.md)
+>   に書いたが、要点は「textarea だけが**成否の概念が無い**経路だった」こと。
+>   `share` と `clipboard` はどちらも Promise で成否が返るので、質が揃っている
+> - **`Route::Clipboard` は残す。** ここを消すと `canShare({files})` が偽の端末で
+>   「書き出す」が**何も起きない**（成否も出せない）ボタンになり、`<a download>` を
+>   却下した理由と正面から矛盾する
+> - **運ぶ中身が JSON から TSV になった。** 拡張子は `.tsv`、MIME は
+>   `text/tab-separated-values`。本文が「iOS の UTType は `File.type` ではなく**拡張子**
+>   から決まる」と書いているとおり名前と MIME は組なので、`can_share_file()` の
+>   プローブも `probe.json` → `probe.tsv` に揃えた（違う型で可否を判定しない）
+> - **`accept` を付けない方針は不変。** rdar://36726477 は直っていない
+> - **`<input type="file">` は画面から隠した**（[`<input type="file">` を隠してボタンから開く](../ux/hidden-file-input-behind-a-button.md)）。
+>   `accept` の議論はそのまま生きる
 
 ## 背景
 
@@ -32,7 +48,7 @@ pub fn pick_route() -> Route {
 - **`canShare` は 1 バイトのプローブ File でクリック直後に同期判定する**
 - **`AbortError`（キャンセル）を成功扱いにしない**
 - **`<input type="file">` に `accept` を付けない**
-- **textarea への全文表示は残す**が、折りたたみの中に隠す
+- ~~**textarea への全文表示は残す**が、折りたたみの中に隠す~~ → **撤回**（下記の追記）
 
 ## 理由
 

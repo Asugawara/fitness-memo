@@ -272,7 +272,10 @@ const PRE_PREFIX_SUFFIX: &str = ".pre-";
 const PRE_KEEP: usize = 3;
 
 /// 退避データのキー一覧（新しい順）。`.bak-` / `.pre-` / `.newer-` を全部拾う。
-pub fn backup_keys() -> Vec<String> {
+///
+/// ★ 画面からは使わない（adr/ux/one-screen-export-import.md で一覧 UI を畳んだ）。
+/// [`snapshot_current`] の剪定だけが呼ぶので private に閉じてある。
+fn backup_keys() -> Vec<String> {
     let Some(store) = store() else {
         return Vec::new();
     };
@@ -289,7 +292,8 @@ pub fn read_backup(key: &str) -> Option<String> {
     store()?.get_item(key).ok().flatten()
 }
 
-pub fn remove_key(key: &str) {
+/// ★ 画面からは使わない。[`snapshot_current`] の剪定専用。
+fn remove_key(key: &str) {
     if let Some(store) = store() {
         let _ = store.remove_item(key);
     }

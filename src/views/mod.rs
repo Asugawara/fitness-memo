@@ -234,32 +234,9 @@ pub fn fmt_metric(v: f64) -> String {
     if n < 0 { format!("-{out}") } else { out }
 }
 
-/// 60.0 → "60"、62.5 → "62.5"
-pub fn fmt_weight(w: f32) -> String {
-    if w == w.trunc() {
-        format!("{}", w.trunc() as i64)
-    } else {
-        format!("{w}")
-    }
-}
-
-/// 入力欄の生文字列 → 重量。
-///
-/// `"6."` は Rust の `f32` パーサが 6.0 として受けるので中間状態でも壊れない。
-/// iOS のテンキーは小数点がロケール依存で `,` になることがあるので置換しておく。
-pub fn parse_weight(s: &str) -> f32 {
-    s.trim()
-        .replace(',', ".")
-        .parse::<f32>()
-        .ok()
-        .filter(|w| w.is_finite() && *w >= 0.0)
-        .unwrap_or(0.0)
-}
-
-/// 入力欄の生文字列 → レップ数。**空欄と 0 は「行なし」として扱う。**
-pub fn parse_reps(s: &str) -> Option<u32> {
-    s.trim().parse::<u32>().ok().filter(|r| *r > 0)
-}
+// 重量・レップの整形とパースは `core` にある（書き出しの TSV が同じ関数を通るので、
+// ホストの `cargo test` で検証できる側に置いた）。ここから使い続けられるよう再輸出する。
+pub use crate::core::{fmt_weight, parse_reps, parse_weight};
 
 /// 1 セットの表示。重量ありなら "60×10"、重量なしなら "12"。
 ///

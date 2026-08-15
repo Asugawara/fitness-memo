@@ -5,6 +5,14 @@
 - **カテゴリ**: ux
 - **関連**: [書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない](../storage/share-sheet-over-download.md), [JSON エクスポート/インポートを v1 に入れない](../storage/defer-export-import.md)
 
+> **追記（[`<input type="file">` を隠してボタンから開く](hidden-file-input-behind-a-button.md) 時点）**
+> - **「効く先」から `input[type=file]` の「ファイルを選択」が外れた。** 書き出し /
+>   読み込みの input を視覚的に隠し、`.secondary` ボタンから `click()` する形にしたので、
+>   UA が描くコントロールが画面に出なくなった
+> - **宣言そのものは維持する。** 残りの受益者（`select` のネイティブピッカー、
+>   スクロールバー）に要る。E2E の 2 本（`color-scheme を宣言している` /
+>   `UA が描くコントロールがテーマに追従する`）もそのまま残す
+
 ## 背景
 
 書き出しシートのテキストエリアにある「コピー」が、**ダークモードで文字が見えなくなっていた。**

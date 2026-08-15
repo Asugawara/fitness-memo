@@ -10,7 +10,7 @@
 //!   ストレージが分かれうる環境のときだけ出る。**手順を必要とする人は必ずこの状態に
 //!   いる**（人に勧めるときも渡すのは URL なので、相手側にバナーが出る）ので、これが
 //!   本命の導線。ただし初期表示では折り返しの下にあり、スクロールしないと見えない。
-//! - [`InstallHelpLink`]: 種目タブ冒頭。standalone になったあとの読み返しと、
+//! - [`InstallHelpLink`]: 設定タブ冒頭。standalone になったあとの読み返しと、
 //!   [`super::storage_may_split`] が将来の UA 変更で壊れたときの逃げ道。
 //!
 //! ★ 図は `assets/help/*.svg` を `include_str!` で埋め込み `inner_html` で挿す。
@@ -102,19 +102,19 @@ pub fn InstallBanner() -> impl IntoView {
     }
 }
 
-/// 種目タブ冒頭の控えめなリンク。押すと同じ手順シートが開く。
+/// 設定タブ冒頭の控えめなリンク。押すと同じ手順シートが開く。
 ///
 /// ★ `storage_may_split` で絞らない。受動的なリンクなので無関係な環境に出ても軽い
 ///   無駄で済む一方、判定が壊れたときはここだけが手順への入口になる。
 ///
-/// ★ 種目タブの**冒頭**に置くこと。末尾は `.add-wrap` が `position: sticky` で
+/// ★ 設定タブの**冒頭**に置くこと。末尾は `.add-wrap` が `position: sticky` で
 ///   居座るので後続の要素が帯に覆われ、`ArchivedSection` の有無で位置も動く。
 #[component]
 pub fn InstallHelpLink() -> impl IntoView {
     let open = RwSignal::new(false);
 
     view! {
-        <p class="menu-help">
+        <p class="settings-help">
             <button
                 class="link-btn"
                 data-testid="install-help-link"
@@ -182,14 +182,14 @@ fn InstallHelpSheet(open: RwSignal<bool>) -> impl IntoView {
                                     </p>
                                 </section>
 
-                                // ★ 文言は種目タブの「データの書き出し / 読み込み」に合わせる。
+                                // ★ 文言は設定タブの「データの書き出し / 読み込み」に合わせる。
                                 //   ここだけ別の呼び方をすると、探す場所が分からなくなる
                                 <section class="hlp-step">
                                     <h3>"すでに Safari で記録してしまった場合"</h3>
                                     <p class="hlp-note">
                                         "移せます。"
                                         <strong>"Safari のタブのまま"</strong>
-                                        "種目タブを開いて「データの書き出し」でファイルに保存し、ホーム画面のアプリ側の「読み込み」で取り込んでください。"
+                                        "設定タブを開いて「データの書き出し」でファイルに保存し、ホーム画面のアプリ側の「読み込み」で取り込んでください。"
                                     </p>
                                     <p class="hlp-note">
                                         "ホーム画面に追加してから書き出そうとしても、そちらは空なので意味がありません。順番に注意してください。"

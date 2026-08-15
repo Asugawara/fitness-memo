@@ -1476,15 +1476,15 @@ h3 {
   border-radius: 50%;
 }
 
-/* ── 種目タブ ───────────────────────────────────────────────────────────── */
+/* ── 設定タブ ───────────────────────────────────────────────────────────── */
 
-.menu > .menu-note {
+.settings > .settings-note {
   margin: 0 0 12px;
 }
 
 /* 見出しだけの 1 行。space-between だった名残の justify-content は落としてある
    （右側に置いていた「プリセットを追加」ボタンを外したため） */
-.menu-head {
+.settings-head {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1492,11 +1492,11 @@ h3 {
 }
 
 /* h1 の UA 既定は 2em なので、今日タブ（.day-head h1）と同じ 20px に揃える */
-.menu-head h1 {
+.settings-head h1 {
   font-size: 20px;
 }
 
-.menu-note {
+.settings-note {
   margin: 6px 0;
   font-size: 12px;
 }
@@ -1702,7 +1702,7 @@ h3 {
 
 /* 種目タブ冒頭の導線。.link-btn が 44px のタップ領域を自前で持つので、
    ここで上下の余白を足すと種目タブの頭だけ間延びする */
-.menu-help {
+.settings-help {
   margin: 0 0 4px;
   font-size: 12px;
 }

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-// 記録タブ（カレンダー + 選択日エディタ）と推移・種目タブの E2E。
+// 記録タブ（カレンダー + 選択日エディタ）と推移・設定タブの E2E。
 // src/views/{day,calendar,mod,progress,chart,menu}.rs の data-testid を使う。
 //
 // 「前日の記録がある状態」は seedPastLogs() で localStorage に直接注入して作る。
@@ -35,7 +35,7 @@ async function blurActive(page) {
 }
 
 /**
- * 種目タブの部位カード。
+ * 設定タブの部位カード。
  *
  * ★ hasText を group-item に直接掛けない。開いている部位のカードは所属種目の名前も
  *   含むので、部位名が種目名の部分文字列だと誤マッチする。has: で group-name に
@@ -48,7 +48,7 @@ function groupItem(page, name) {
 }
 
 /**
- * 種目タブの部位を開いてカードを返す。
+ * 設定タブの部位を開いてカードを返す。
  *
  * ★ 種目一覧は既定で全部閉じている（adr/ux/menu-groups-as-single-open-accordion.md）。group-toggle はトグルなので、
  *   既に開いているものを押すと閉じてしまう。aria-expanded を見てから押す。
@@ -651,14 +651,14 @@ test('10. 同じ日に同じ種目を再度追加してもカードは増えず�
   await expect(row0.getByTestId('set-weight')).toHaveValue('70');
 });
 
-test('11. 種目タブでの改名・部位変更・新規追加が記録タブに反映され、アーカイブは推移タブから参照できる', async ({ page }) => {
-  await page.getByTestId('tab-menu').click();
-  await expect(page.getByTestId('screen-menu')).toBeVisible();
+test('11. 設定タブでの改名・部位変更・新規追加が記録タブに反映され、アーカイブは推移タブから参照できる', async ({ page }) => {
+  await page.getByTestId('tab-settings').click();
+  await expect(page.getByTestId('screen-settings')).toBeVisible();
 
   // 改名 + 部位変更（肩→腕）を1つの種目に対して行う
   await openGroup(page, '肩');
   await page.getByTestId('exercise-name').filter({ hasText: exactText('サイドレイズ') }).click();
-  const menuSheet = page.getByTestId('menu-sheet');
+  const menuSheet = page.getByTestId('settings-sheet');
   await expect(menuSheet).toBeVisible();
 
   await page.getByTestId('exercise-rename').fill('サイドレイズ改');
@@ -673,10 +673,10 @@ test('11. 種目タブでの改名・部位変更・新規追加が記録タブ�
   await expect(menuSheet.getByTestId('kind-option')).toHaveCount(0);
   await expect(menuSheet).not.toContainText('種類');
 
-  await page.getByTestId('menu-sheet-close').click();
+  await page.getByTestId('settings-sheet-close').click();
 
   // 新規部位 + 新規種目を追加する
-  await page.getByTestId('menu-add-group').click();
+  await page.getByTestId('settings-add-group').click();
   await page.getByTestId('new-group-name').fill('テスト部位');
   await page.getByTestId('new-group-submit').click();
 
@@ -684,7 +684,7 @@ test('11. 種目タブでの改名・部位変更・新規追加が記録タブ�
   //   見えず行き止まりに見える（adr/ux/menu-groups-as-single-open-accordion.md）
   const testGroupItem = groupItem(page, 'テスト部位');
   await expect(testGroupItem.getByTestId('group-toggle')).toHaveAttribute('aria-expanded', 'true');
-  await testGroupItem.getByTestId('menu-add-exercise').click();
+  await testGroupItem.getByTestId('settings-add-exercise').click();
   await page.getByTestId('new-exercise-name').fill('テスト種目');
   await page.getByTestId('new-exercise-submit').click();
 
@@ -710,7 +710,7 @@ test('11. 種目タブでの改名・部位変更・新規追加が記録タブ�
   // アーカイブ: 今日タブの追加シートには出なくなるが、推移タブのセレクタでは
   // 末尾の「アーカイブ済み」セクションから参照できる（過去ログの exercise_id 参照を
   // 保つための論理削除なので、参照できなくなると過去データが見えなくなる）
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   // 開閉状態はタブを跨いで保たれる（OpenGroupCtx が App 側にある）ので、
   // openGroup は aria-expanded を見て既に開いていれば押さない
   await openGroup(page, 'テスト部位');
@@ -718,7 +718,7 @@ test('11. 種目タブでの改名・部位変更・新規追加が記録タブ�
   await page.getByTestId('archive-exercise').click();
   // ★ <dialog> は常時マウントなので消えない。「閉じている」は toBeHidden で見る
   //   （閉じた dialog は UA の display:none が効く）
-  await expect(page.getByTestId('menu-sheet')).toBeHidden();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
 
   await page.getByTestId('tab-record').click();
   await page.getByTestId('add-exercise').click();
@@ -734,7 +734,7 @@ test('11. 種目タブでの改名・部位変更・新規追加が記録タブ�
   // 部位グループの削除ガード: アーカイブ済み種目も所属種目として数えるので削除できない。
   // ここが漏れるとアーカイブ済み種目の group_id が宙に浮き、過去ログの部位帰属
   // （カレンダーのドット色・部位別グラフ・今日タブの部位チップ）が壊れる
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   // 部位の編集は右端の鉛筆から（group-name は <span> になったので押せない）
   await groupItem(page, 'テスト部位').getByTestId('group-edit').click();
   await page.getByTestId('delete-group').click();
@@ -747,21 +747,21 @@ test('11. 種目タブでの改名・部位変更・新規追加が記録タブ�
   await expect(page.getByTestId('delete-blocked-archived')).toHaveCount(0);
 });
 
-test('種目タブは部位だけを並べ、部位を開くとその部位の種目が出る（1 つだけ開く）', async ({ page }) => {
-  await page.getByTestId('tab-menu').click();
+test('設定タブは部位だけを並べ、部位を開くとその部位の種目が出る（1 つだけ開く）', async ({ page }) => {
+  await page.getByTestId('tab-settings').click();
 
   // ★ 改修の本体。既定で種目は 1 つも出ていない。6 部位 28 種目が全部並ぶと、
   //   どの部位があるかを見るだけで長いスクロールが要る（adr/ux/menu-groups-as-single-open-accordion.md）
   await expect(page.getByTestId('group-item')).toHaveCount(6);
   await expect(page.getByTestId('exercise-item')).toHaveCount(0);
-  await expect(page.getByTestId('menu-add-exercise')).toHaveCount(0);
+  await expect(page.getByTestId('settings-add-exercise')).toHaveCount(0);
 
   // 閉じていても種目数はヘッダに出る（開かないと中身の量が分からない、を避ける）
   await expect(groupItem(page, '胸').getByTestId('group-count')).toHaveText('5 種目');
 
   const chest = await openGroup(page, '胸');
   await expect(chest.getByTestId('exercise-item')).toHaveCount(5);
-  await expect(chest.getByTestId('menu-add-exercise')).toBeVisible();
+  await expect(chest.getByTestId('settings-add-exercise')).toBeVisible();
   // 他の部位は閉じたままなので、画面全体で数えても 5 件
   await expect(page.getByTestId('exercise-item')).toHaveCount(5);
 
@@ -778,7 +778,7 @@ test('種目タブは部位だけを並べ、部位を開くとその部位の�
 });
 
 test('並び替えの矢印は種目にも部位にも無く、部位ヘッダの標的は 2 つだけ', async ({ page }) => {
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   await openGroup(page, '胸');
 
   // 退行の固定。一覧に 44px のボタンを並べ直さない（adr/ux/menu-groups-as-single-open-accordion.md）
@@ -798,14 +798,14 @@ test('アーカイブから戻すと、戻した先の部位が画面に入り�
   //   画面へ入ってくる」ことなので、端末によって一覧が丸ごと収まってしまうと
   //   （Pixel 7 は 915px 高）前提そのものが作れず、テストが何も見なくなる
   await page.setViewportSize({ width: 390, height: 480 });
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   const chest = await openGroup(page, '胸');
   await expect(chest.getByTestId('exercise-name').first()).toHaveText('ベンチプレス');
 
   await page.getByTestId('exercise-name').filter({ hasText: exactText('ベンチプレス') }).click();
   await page.getByTestId('archive-exercise').click();
   // シートは常時マウントなので toHaveCount(0) にはならない（adr/ux/native-dialog-for-sheets.md）
-  await expect(page.getByTestId('menu-sheet')).toBeHidden();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
 
   // 戻す先が閉じていて、かつ画面の外にある状態を作る。アーカイブ済みセクションは
   // 一覧の一番下なので、そこまでスクロールすると先頭の胸は上へ抜ける
@@ -834,17 +834,17 @@ test('自動で開いた部位は画面の中に入る（新規作成・部位�
   // 上のテストと同じ理由でビューポートを固定する（末尾に作った部位が
   // fold の下に来る状況を、どの project でも同じに作るため）
   await page.setViewportSize({ width: 390, height: 480 });
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
 
   // 新規部位は一覧の末尾に作られる。開くだけでスクロールしないと sticky な
   // .add-wrap の裏か fold の下に隠れて、「＋ 種目を追加」に到達できない
-  await page.getByTestId('menu-add-group').click();
+  await page.getByTestId('settings-add-group').click();
   await page.getByTestId('new-group-name').fill('有酸素');
   await page.getByTestId('new-group-submit').click();
   const cardio = groupItem(page, '有酸素');
   await expect(cardio.getByTestId('group-toggle')).toHaveAttribute('aria-expanded', 'true');
   await expect(cardio).toBeInViewport();
-  await expect(cardio.getByTestId('menu-add-exercise')).toBeInViewport();
+  await expect(cardio.getByTestId('settings-add-exercise')).toBeInViewport();
 
   // 部位を移すと移動先が開く（adr/ux/menu-groups-as-single-open-accordion.md の自動展開のうちテストが無かったもの）
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -855,7 +855,7 @@ test('自動で開いた部位は画面の中に入る（新規作成・部位�
     .getByTestId('group-option')
     .filter({ hasText: exactText('有酸素') })
     .click();
-  await page.getByTestId('menu-sheet-close').click();
+  await page.getByTestId('settings-sheet-close').click();
   await expect(cardio.getByTestId('group-toggle')).toHaveAttribute('aria-expanded', 'true');
   await expect(cardio).toBeInViewport();
   await expect(
@@ -869,8 +869,8 @@ test('自動で開いた部位は画面の中に入る（新規作成・部位�
 });
 
 test('開いていた部位を削除するとアコーディオンが閉じる', async ({ page }) => {
-  await page.getByTestId('tab-menu').click();
-  await page.getByTestId('menu-add-group').click();
+  await page.getByTestId('tab-settings').click();
+  await page.getByTestId('settings-add-group').click();
   await page.getByTestId('new-group-name').fill('空の部位');
   await page.getByTestId('new-group-submit').click();
 
@@ -890,12 +890,12 @@ test('開いていた部位を削除するとアコーディオンが閉じる',
 test('開いた部位はタブを往復しても開いたまま', async ({ page }) => {
   // ★ 筋トレ中は記録⇄種目の往復が常なので、戻るたびに部位を探して押し直すのは
   //   「最短距離」に反する。シグナルを App 側（OpenGroupCtx）に置くことで保つ
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   await openGroup(page, '肩');
 
   await page.getByTestId('tab-record').click();
   await expect(page.getByTestId('screen-record')).toBeVisible();
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
 
   await expect(groupItem(page, '肩').getByTestId('group-toggle')).toHaveAttribute(
     'aria-expanded',
@@ -909,13 +909,13 @@ test('アイコンの SVG が描画されている', async ({ page }) => {
   //   bogus comment にして**エラーも出さずに**アイコンが 1 つも出なくなる
   //   （adr/architecture/help-figures-as-included-svg.md /
   //   adr/architecture/lucide-icons-as-included-svg.md）。個数を固定して黙って消えるのを防ぐ
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   await expect(page.locator('[data-testid=group-toggle] .icon > svg')).toHaveCount(6);
   await expect(page.locator('[data-testid=group-edit] .icon > svg')).toHaveCount(6);
 
   await groupItem(page, '胸').getByTestId('group-edit').click();
-  await expect(page.locator('[data-testid=menu-sheet-close] .icon > svg')).toHaveCount(1);
-  await page.getByTestId('menu-sheet-close').click();
+  await expect(page.locator('[data-testid=settings-sheet-close] .icon > svg')).toHaveCount(1);
+  await page.getByTestId('settings-sheet-close').click();
 
   // 記録タブの月移動も同じ機構
   await page.getByTestId('tab-record').click();
@@ -923,14 +923,14 @@ test('アイコンの SVG が描画されている', async ({ page }) => {
   await expect(page.locator('[data-testid=cal-next] .icon > svg')).toHaveCount(1);
 });
 
-test('種目タブにクラスなしの button を作らない', async ({ page }) => {
+test('設定タブにクラスなしの button を作らない', async ({ page }) => {
   // adr/ux/declare-color-scheme-for-ua-widgets.md。UA 既定のボタンは約 20px しかない
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   await openGroup(page, '胸');
-  await expect(page.locator('[data-testid=screen-menu] button:not([class])')).toHaveCount(0);
+  await expect(page.locator('[data-testid=screen-settings] button:not([class])')).toHaveCount(0);
 
   await groupItem(page, '胸').getByTestId('group-edit').click();
-  await expect(page.locator('[data-testid=menu-sheet] button:not([class])')).toHaveCount(0);
+  await expect(page.locator('[data-testid=settings-sheet] button:not([class])')).toHaveCount(0);
 });
 
 test('12. 重量入力の中間状態("6.")でクラッシュせず、"6.5"まで打つと指標に反映される', async ({ page }) => {
@@ -1580,7 +1580,7 @@ test('記録タブの h1 は 1 個だけで、選択日は h2 にぶら下がる
 test('他タブの h1 もそれぞれ 1 個', async ({ page }) => {
   await page.getByTestId('tab-progress').click();
   await expect(page.locator('main h1')).toHaveCount(1);
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   await expect(page.locator('main h1')).toHaveCount(1);
 });
 
@@ -1688,8 +1688,8 @@ test('タブを切り替えても View Transition は走らない', async ({ pag
   });
   await page.reload();
 
-  await page.getByTestId('tab-menu').click();
-  await expect(page.getByTestId('screen-menu')).toBeVisible();
+  await page.getByTestId('tab-settings').click();
+  await expect(page.getByTestId('screen-settings')).toBeVisible();
   await page.getByTestId('tab-progress').click();
   await expect(page.getByTestId('screen-progress')).toBeVisible();
 
@@ -1788,11 +1788,11 @@ test('コピーできる種目が残っていない日は候補に出ない（�
   // アーカイブするとコピー対象から外れる。件数だけ数えて行を出していると、
   // 「1種目」と表示されるのに押しても何も起きない死んだボタンになる
   await blurActive(page);
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   await openGroup(page, '脚');
   await page.getByTestId('exercise-name').filter({ hasText: exactText('スクワット') }).click();
   await page.getByTestId('archive-exercise').click();
-  await expect(page.getByTestId('menu-sheet')).toBeHidden();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
 
   await page.getByTestId('tab-record').click();
   await expect(page.getByTestId('menu-copy')).toHaveCount(0);

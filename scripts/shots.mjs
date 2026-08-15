@@ -28,7 +28,7 @@ const BASE = `http://localhost:${PORT}/`;
  * 記録タブだけ指定があるのは、先頭で撮るとカレンダーしか入らず、この画面の要である
  * 「カレンダーと入力欄が縦に並んで 1 画面」（adr/ux/record-tab-calendar-with-day-editor.md）が写らないため。
  *
- * `expand` は種目タブ用で、撮る前にその部位を開き、そのカードを画面中央に寄せる。
+ * `expand` は設定タブ用で、撮る前にその部位を開き、そのカードを画面中央に寄せる。
  * 全部閉じた絵だと「部位しか無いアプリ」に見え、逆に開いた絵だけでは折りたたまれて
  * いることが伝わらない。閉じた部位と開いた部位が同時に写るのが、この画面の一番正確な絵
  * （adr/ux/menu-groups-as-single-open-accordion.md）。**先頭の部位を開くと上に閉じた
@@ -37,7 +37,7 @@ const BASE = `http://localhost:${PORT}/`;
 const SHOTS = [
   { file: '1-record.png', testid: 'tab-record', screen: 'screen-record', center: 'today-date' },
   { file: '2-progress.png', testid: 'tab-progress', screen: 'screen-progress' },
-  { file: '3-menu.png', testid: 'tab-menu', screen: 'screen-menu', expand: '肩' },
+  { file: '3-menu.png', testid: 'tab-settings', screen: 'screen-settings', expand: '肩' },
 ];
 
 /**

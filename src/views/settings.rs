@@ -1,4 +1,4 @@
-//! 種目タブ。部位グループと種目の管理。
+//! 設定タブ。トレーニングメニュー・部位グループ・種目の管理。
 //!
 //! 設計上の要点:
 //!
@@ -17,7 +17,7 @@
 //!   2 つに絞るのが要点で、44px のボタンを何個も並べると部位を見渡すという一覧本来の
 //!   役目が潰れる（adr/ux/menu-groups-as-single-open-accordion.md）
 //! - **並び替えの手段を持たない。** `Group.order` / `Exercise.order` はプリセットの宣言順
-//!   → 以後は追加順で固定される。この order は種目タブの表示順だけでなく、記録タブ
+//!   → 以後は追加順で固定される。この order は設定タブの表示順だけでなく、記録タブ
 //!   「種目を追加」シートの部位セクション順とその中の種目順、推移タブの種目セレクタも
 //!   決めている（adr/ux/menu-groups-as-single-open-accordion.md）
 //! - 編集フォームは一覧の外に置いた 1 枚のシートに集約する。一覧の中に入力欄を置くと、
@@ -236,7 +236,7 @@ fn opt_button(
 // ── 画面 ────────────────────────────────────────────────────────────────────
 
 #[component]
-pub fn Menu() -> impl IntoView {
+pub fn Settings() -> impl IntoView {
     let db = use_db();
     let editor: RwSignal<Option<Editor>> = RwSignal::new(None);
     let backup_open = RwSignal::new(false);
@@ -260,11 +260,11 @@ pub fn Menu() -> impl IntoView {
     let archived = Memo::new(move |_| db.with(archived_ids));
 
     view! {
-        <section class="menu" data-testid="screen-menu">
+        <section class="settings" data-testid="screen-settings">
             // プリセットの投入は初回起動時に storage::load が済ませる。再投入の導線は持たない
             // （改名済みプリセットが別種目として復活する挙動があり、得より害が大きかった）
-            <header class="menu-head">
-                <h1>"種目"</h1>
+            <header class="settings-head">
+                <h1>"設定"</h1>
             </header>
 
             // ★ 種目一覧の**上**に置く。下だと 6 部位 28 種目のスクロールの底になり、
@@ -283,7 +283,7 @@ pub fn Menu() -> impl IntoView {
                 </button>
             </div>
 
-            <p class="menu-note muted">
+            <p class="settings-note muted">
                 "アーカイブした種目は「種目を追加」に出なくなりますが、過去の記録は残り推移タブから参照できます"
             </p>
 
@@ -302,7 +302,7 @@ pub fn Menu() -> impl IntoView {
             <div class="add-wrap">
                 <button
                     class="secondary"
-                    data-testid="menu-add-group"
+                    data-testid="settings-add-group"
                     on:click=move |_| editor.set(Some(Editor::NewGroup))
                 >
                     "＋ 部位を追加"
@@ -322,8 +322,8 @@ pub fn Menu() -> impl IntoView {
                 open=Signal::derive(move || editor.get().is_some())
                 on_close=Callback::new(move |_| editor.set(None))
                 title=Signal::derive(move || editor_title(editor.get()).to_string())
-                testid="menu-sheet"
-                close_testid="menu-sheet-close"
+                testid="settings-sheet"
+                close_testid="settings-sheet-close"
             >
                 {move || {
                     editor
@@ -436,7 +436,7 @@ fn GroupBlock(
                             <div class="grp-foot">
                                 <button
                                     class="link-btn"
-                                    data-testid="menu-add-exercise"
+                                    data-testid="settings-add-exercise"
                                     on:click=move |_| editor.set(Some(Editor::NewExercise(group)))
                                 >
                                     "＋ 種目を追加"
@@ -852,7 +852,7 @@ fn ExerciseEditor(
                 "この種目をアーカイブ"
             </button>
         </div>
-        <p class="menu-note muted">
+        <p class="settings-note muted">
             "アーカイブは記録を消しません。過去のログは残り、「種目を追加」に出なくなります"
         </p>
     }
@@ -893,7 +893,7 @@ fn NewExerciseEditor(
     };
 
     view! {
-        <p class="menu-note muted">{format!("{group_name} に追加します")}</p>
+        <p class="settings-note muted">{format!("{group_name} に追加します")}</p>
 
         <label class="field">
             <span>"名前"</span>

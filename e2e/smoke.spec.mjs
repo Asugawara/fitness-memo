@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 // 記録タブ（カレンダー + 選択日エディタ）と推移・設定タブの E2E。
-// src/views/{day,calendar,mod,progress,chart,menu}.rs の data-testid を使う。
+// src/views/{day,calendar,mod,progress,chart,settings}.rs の data-testid を使う。
 //
 // 「前日の記録がある状態」は seedPastLogs() で localStorage に直接注入して作る。
 // UI から過去日へ書き込む経路そのものの検証（ExerciseLog.at が null になること）は
@@ -1964,16 +1964,53 @@ test('メニューは編集・削除でき、削除しても記録は消えな�
   await expect(page.getByTestId('menu-candidate')).toHaveCount(1);
 });
 
-test('種目が 0 個のメニューは保存できない', async ({ page }) => {
-  // 記録タブに出せないので、作れても「押せない行」が設定タブに残るだけになる
+test('種目が 0 個のメニューも、名前が空のメニューも保存できない', async ({ page }) => {
   await blurActive(page);
   await page.getByTestId('tab-settings').click();
   await page.getByTestId('settings-add-routine').click();
+
+  // 名前だけ。記録タブに出せないので、作れても「押せない行」が残るだけになる
   await page.getByTestId('routine-name-input').fill('からっぽ');
   await page.getByTestId('routine-save').click();
-  await expect(page.getByTestId('routine-empty-warning')).toBeVisible();
+  await expect(page.getByTestId('routine-invalid')).toHaveText('種目を 1 つ以上選んでください');
+
+  // ★ 種目だけ（名前なし）も止める。無名を許すと「（名前なし）」の行が複数並び、
+  //   誤タップ対策の柱にしている「行を見て選び分けられること」が痩せる
+  await page.getByTestId('routine-name-input').fill('   ');
+  await page.getByTestId('routine-pick').filter({ hasText: exactText('ベンチプレス') }).click();
+  await page.getByTestId('routine-save').click();
+  await expect(page.getByTestId('routine-invalid')).toHaveText('メニュー名を入れてください');
+
   await expect(page.getByTestId('settings-sheet')).toBeVisible();
   await expect(page.getByTestId('routine-item')).toHaveCount(0);
+});
+
+test('一部の種目だけアーカイブしたメニューは、開く数を出して差分の理由も出す', async ({ page }) => {
+  // ★ 「2 種目」と書いてあるのに 1 枚しか開かない、が起きないこと。
+  //   件数は core::expandable_count（＝記録タブが実際に開く数）を通す
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  await createRoutine(page, '胸の日', ['ベンチプレス', 'チェストフライ']);
+  await expect(page.getByTestId('routine-count')).toHaveText('2 種目');
+
+  await openGroup(page, '胸');
+  await page.getByTestId('exercise-name').filter({ hasText: exactText('チェストフライ') }).click();
+  await page.getByTestId('archive-exercise').click();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
+
+  // 件数は開く数に減り、名前は残したまま（アーカイブは可逆なので隠さない）、
+  // 食い違いの理由を出す
+  await expect(page.getByTestId('routine-count')).toHaveText('1 種目');
+  await expect(page.getByTestId('routine-names')).toContainText('チェストフライ');
+  await expect(page.getByTestId('routine-partial')).toHaveText(
+    'アーカイブ済みの 1 種目は記録タブに出ません',
+  );
+
+  // 記録タブで実際に開くのも 1 枚
+  await page.getByTestId('tab-record').click();
+  await page.getByTestId('routine-candidate').first().click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
 });
 
 test('全種目をアーカイブしたメニューは記録タブに出ず、設定タブに理由が出る', async ({ page }) => {
@@ -2022,4 +2059,41 @@ test('メニューを 1 本も作っていない保存データは今までと�
 
   const raw = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
   expect(raw).not.toContain('routines');
+});
+
+test('履歴ゼロでメニューを押したあとタブを往復すると、カードは消えるが候補は戻る', async ({ page }) => {
+  // ★ 初回起動の利用者では**全種目**が履歴なしになるので、
+  //   adr/ux/copy-whole-day-menu.md が却下した「タブ切替で消える」状況がそのまま起きる。
+  //   受け入れているのは、失うのがタップ 1 回だけで、記録が 1 バイトも消えないから。
+  //   その回復経路が本当に生きていることをここで固定する
+  await createRoutine(page, '胸の日', ['ベンチプレス', 'チェストフライ']);
+
+  await page.getByTestId('tab-record').click();
+  await page.getByTestId('routine-candidate').first().click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(2);
+  // カードが出ている間は候補を出さない
+  await expect(page.getByTestId('menu-copy')).toHaveCount(0);
+
+  // 1 セットも打たずにタブを往復する
+  await blurActive(page);
+  await page.getByTestId('tab-progress').click();
+  await page.getByTestId('tab-record').click();
+
+  // カードは消える（空のログは保存しない仕様）が、記録は 1 件も生まれていない
+  await expect(page.getByTestId('exercise-card')).toHaveCount(0);
+  await flushToStorage(page);
+  const raw = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
+  expect(JSON.parse(raw).sessions).toEqual({});
+
+  // ★ 候補が戻るので、もう 1 タップで同じ状態に復帰できる
+  await expect(page.getByTestId('routine-candidate')).toHaveCount(1);
+  await page.getByTestId('routine-candidate').first().click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(2);
+
+  // 1 文字打てば以後は永続化される（実際の使い方はこちら）
+  await page.getByTestId('exercise-card').first().getByTestId('set-reps').first().fill('10');
+  await blurActive(page);
+  await flushToStorage(page);
+  await page.reload();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
 });

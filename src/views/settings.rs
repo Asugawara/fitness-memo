@@ -340,10 +340,6 @@ pub fn Settings() -> impl IntoView {
                 </button>
             </div>
 
-            <p class="settings-note muted">
-                "アーカイブした種目は「種目を追加」に出なくなりますが、過去の記録は残り推移タブから参照できます"
-            </p>
-
             // ★ 末尾ではなく冒頭に置く。末尾は .add-wrap（sticky）の帯に覆われ、
             //   ArchivedSection の有無で縦位置も動く
             <InstallHelpLink />
@@ -382,6 +378,12 @@ pub fn Settings() -> impl IntoView {
             </div>
 
             <h2 class="settings-section">"種目"</h2>
+            // ★ 見出しの直下に置く。かつては画面の冒頭にあったが、間にメニューの節が
+            //   入った時点で「アーカイブの説明が、アーカイブできる画面から 1 スクリーン
+            //   離れている」状態になっていた。説明は説明される対象の隣に置く
+            <p class="settings-note muted">
+                "アーカイブした種目は「種目を追加」に出なくなりますが、過去の記録は残り推移タブから参照できます"
+            </p>
             <For
                 each=move || group_ids.get()
                 key=|id| *id
@@ -471,15 +473,12 @@ fn RoutineBlock(routine: RoutineId, editor: RwSignal<Option<Editor>>) -> impl In
             .unwrap_or_default()
     });
     let names = Memo::new(move |_| db.with(|d| routine_exercise_names(d, routine)));
-    // ★ 記録タブに出るかは `core::usable_routines` に**聞く**（同じ条件を書き写さない）。
-    //   ここで判定を複製すると、片方だけ緩んだときに「出ないのに理由が出ない」に戻る
-    let usable = Memo::new(move |_| {
-        db.with(|d| {
-            crate::core::usable_routines(d)
-                .iter()
-                .any(|c| c.id == routine)
-        })
-    });
+    // ★ 件数は**記録タブで実際に開く数**を出す。`names` の長さ（保存されている種目の数）を
+    //   出すと、アーカイブ済みを 1 つ含むだけで「2 種目」と書いてあるのに 1 枚しか開かない
+    //   ことになる。判定は `core::expandable_count` に聞く（同じ条件を書き写さない）
+    let open_count = Memo::new(move |_| db.with(|d| crate::core::expandable_count(d, routine)));
+    // 名前は出すのに開かない種目（＝アーカイブ済み）の数。0 なら注記を出さない
+    let hidden = Memo::new(move |_| names.get().len().saturating_sub(open_count.get()));
 
     view! {
         <section class="card rtn" data-testid="routine-item">
@@ -496,20 +495,36 @@ fn RoutineBlock(routine: RoutineId, editor: RwSignal<Option<Editor>>) -> impl In
                         }}
                     </b>
                     <i class="muted" data-testid="routine-count">
-                        {move || format!("{} 種目", names.get().len())}
+                        {move || format!("{} 種目", open_count.get())}
                     </i>
                 </span>
+                // ★ 名前はアーカイブ済みも出す。アーカイブは可逆なので、ここで隠すと
+                //   「入れたはずの種目が無い」に見える。件数と食い違う分は下の注記で説明する
                 <span class="rtn-names muted" data-testid="routine-names">
                     {move || names.get().join(", ")}
                 </span>
                 {move || {
-                    (!usable.get())
-                        .then(|| {
+                    // ★ 出ない理由は必ず画面に出す。無いと「作ったのに使えない」原因を
+                    //   探しようがない（記録タブ側には何も出せない — 行ごと消えるので）
+                    if open_count.get() == 0 {
+                        return Some(
                             view! {
                                 <span class="rtn-warn" data-testid="routine-unusable">
                                     "使える種目がないため記録タブに出ません"
                                 </span>
                             }
+                                .into_any(),
+                        );
+                    }
+                    let n = hidden.get();
+                    (n > 0)
+                        .then(|| {
+                            view! {
+                                <span class="rtn-warn" data-testid="routine-partial">
+                                    {format!("アーカイブ済みの {n} 種目は記録タブに出ません")}
+                                </span>
+                            }
+                                .into_any()
                         })
                 }}
             </button>
@@ -1112,7 +1127,8 @@ fn RoutineEditor(id: Option<RoutineId>, editor: RwSignal<Option<Editor>>) -> imp
     let name = RwSignal::new(name0);
     // ★ タップ順を保つ。この並びがそのまま記録タブのカードの並びになる
     let picked: RwSignal<Vec<ExerciseId>> = RwSignal::new(picked0);
-    let empty = RwSignal::new(false);
+    // 保存を止めた理由。**文言まで持つ**（bool にすると理由ごとに分岐が増える）
+    let invalid: RwSignal<Option<&'static str>> = RwSignal::new(None);
     let confirming = RwSignal::new(false);
 
     let toggle = move |ex: ExerciseId| {
@@ -1122,17 +1138,29 @@ fn RoutineEditor(id: Option<RoutineId>, editor: RwSignal<Option<Editor>>) -> imp
             }
             None => p.push(ex),
         });
-        empty.set(false);
+        invalid.set(None);
     };
 
     let save = move |_| {
+        // ★ 保存時の trim は他の 4 つのエディタ（部位 / 種目の追加・改名）と同じ。
+        //   `core::normalize_routines` が trim しないのは**読み込み**の話で、あちらは
+        //   自分が作ったのではないデータ（取り込んだファイル）を黙って書き換えないため。
+        //   ここは利用者が入力欄を見たうえで「保存」を押した結果なので、揃えてよい
         let value = name.get_untracked().trim().to_string();
         let list = picked.get_untracked();
+        // ★ 名前を必須にする。無名を許すと設定タブにも記録タブにも「（名前なし）」の行が
+        //   複数並び、adr/ux/start-from-a-saved-routine.md が誤タップ対策の柱に据えた
+        //   「行を見て選び分けられること」が種目名の 1 行だけに痩せる。
+        //   種目・部位の追加も同じく名前を必須にしている
+        if value.is_empty() {
+            invalid.set(Some("メニュー名を入れてください"));
+            return;
+        }
         // ★ 種目が 0 個のメニューは保存させない。記録タブに出せないので、作れても
         //   「押せない行」が設定タブに残るだけになる（名前だけの状態を `normalize` が
         //   残すのは、既にあるデータを消さないためであって、新しく作るためではない）
         if list.is_empty() {
-            empty.set(true);
+            invalid.set(Some("種目を 1 つ以上選んでください"));
             return;
         }
         match id {
@@ -1155,7 +1183,10 @@ fn RoutineEditor(id: Option<RoutineId>, editor: RwSignal<Option<Editor>>) -> imp
                 prop:value=move || name.get()
                 on:focusin=move |_| kb_focus(kb)
                 on:focusout=move |_| kb_blur(kb)
-                on:input=move |ev| name.set(event_target_value(&ev))
+                on:input=move |ev| {
+                    name.set(event_target_value(&ev));
+                    invalid.set(None);
+                }
             />
         </label>
 
@@ -1194,12 +1225,12 @@ fn RoutineEditor(id: Option<RoutineId>, editor: RwSignal<Option<Editor>>) -> imp
         }}
 
         {move || {
-            empty
+            invalid
                 .get()
-                .then(|| {
+                .map(|reason| {
                     view! {
                         <div class="warn-box">
-                            <p data-testid="routine-empty-warning">"種目を 1 つ以上選んでください"</p>
+                            <p data-testid="routine-invalid">{reason}</p>
                         </div>
                     }
                 })

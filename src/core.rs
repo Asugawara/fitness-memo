@@ -266,7 +266,7 @@ pub fn reorder_logs(db: &mut Db, date: NaiveDate, order: &[ExerciseId]) -> bool 
 // ── メニューのコピー ────────────────────────────────────────────────────────
 //
 // ★ このリポジトリで「メニュー」は 3 つの意味を持つ。取り違えると壊れるので明記する。
-//   1. **設定タブ**（`views::settings`）— 種目マスタの管理画面。旧「設定タブ」
+//   1. **設定タブ**（`views::settings`）— 種目マスタの管理画面。旧「種目タブ」
 //   2. **過去の日の種目構成**（[`MenuCandidate`] / [`recent_menus`]）— この節の前半。
 //      同一性は「日付」で、コピーするとその日の数値がそのまま入る
 //   3. **保存済みのトレーニングメニュー**（[`crate::model::Routine`] /
@@ -432,18 +432,32 @@ fn seed_day(
 /// - 重複は初出だけ残す。`normalize` が読み込み時に潰しているが、**編集中の `Db` も
 ///   ここを通る**ので受け口でも守る（「1 日 1 種目 1 ログ」は 3 層で守る）
 fn expandable<'a>(db: &'a Db, r: &'a Routine) -> impl Iterator<Item = ExerciseId> + 'a {
-    let mut seen: Vec<ExerciseId> = Vec::new();
     r.exercises
         .iter()
         .copied()
         .filter(|id| db.exercise(*id).is_some_and(|e| !e.archived))
-        .filter(move |id| {
-            let fresh = !seen.contains(id);
-            if fresh {
-                seen.push(*id);
-            }
-            fresh
-        })
+        .filter(first_occurrence())
+}
+
+/// 「初出だけ残す」述語。`Iterator::filter` にも `Vec::retain` にもそのまま渡せる。
+///
+/// ★ **同じ種目を 2 回持たせない規則の唯一の実装。** 「1 日 1 種目 1 ログ」
+/// （adr/data-model/one-log-per-exercise-per-day.md）はメニュー側で 3 箇所
+/// （[`expandable`] / [`normalize_routines`] / [`merge_db`]）から守っているが、
+/// **3 層で守るのと 3 回書き写すのは別のこと**で、後者はどれか 1 つが間違う口になる。
+/// 順序を保つ（`sort` + `dedup` にしない）のは `dedupe_logs` と同じ理由 —
+/// メニューの並びはそのまま記録タブのカードの並びになる。
+///
+/// 1 本のメニューは多くて 10 種目なので、`HashSet` ではなく `Vec::contains` で足りる。
+fn first_occurrence() -> impl FnMut(&ExerciseId) -> bool {
+    let mut seen: Vec<ExerciseId> = Vec::new();
+    move |id| {
+        let fresh = !seen.contains(id);
+        if fresh {
+            seen.push(*id);
+        }
+        fresh
+    }
 }
 
 /// 記録タブの候補に出せるトレーニングメニュー 1 件。
@@ -454,6 +468,19 @@ pub struct RoutineCandidate {
     pub name: String,
     /// **実際に展開される種目 ID。** メニューの並び順。
     pub exercises: Vec<ExerciseId>,
+}
+
+/// そのメニューを開いたときに**実際に出る種目の数**。0 なら候補にも出ない。
+///
+/// ★ 設定タブの「N 種目」はこれを出すこと。保存されている種目の数を出すと、
+/// アーカイブ済みを 1 つ含むだけで「2 種目」と書いてあるのに 1 枚しか開かない、という
+/// 食い違いになる。[`usable_routines`] と [`apply_routine`] が [`expandable`] を共有して
+/// いるのと同じ理由で、**表示もここを通す**。
+///
+/// ★ 1 本ぶんの判定にわざわざ `usable_routines` を呼ばないこと。あちらは全メニューを
+/// 走査して名前を clone した `Vec` を作るので、行ごとに呼ぶと N² 回の複製になる。
+pub fn expandable_count(db: &Db, routine: RoutineId) -> usize {
+    db.routine(routine).map_or(0, |r| expandable(db, r).count())
 }
 
 /// 候補に出せるメニュー（`Db::routines` の順）。
@@ -1002,23 +1029,18 @@ fn normalize(db: &mut Db, ids: &mut IdGen) {
 fn normalize_routines(db: &mut Db, ids: &mut IdGen) {
     // ★ 空白だけの名前を空にするのが**先**。後ろの `is_empty()` は trim して見るので、
     //   ここを飛ばすと `" "` が「名前がある」と「空」の判定でズレる。
-    //   ★ trim はしない。両端の空白を削るのはユーザーが打った文字の書き換えになる
-    //   （`blank_notes_to_empty` と同じ規則）
+    //   ★ **ここでは trim しない**（`blank_notes_to_empty` と同じ規則）。この関数が
+    //   触るのは自分が作ったのではないデータ — 取り込んだファイルや旧版が書いた JSON —
+    //   なので、両端の空白を削るのは書き換えになる。`views::settings` の編集シートが
+    //   保存時に trim するのは矛盾しない。あちらは利用者が入力欄を見て「保存」を押した
+    //   結果で、部位・種目の 4 つのエディタも同じく trim している
     for r in &mut db.routines {
         if r.name.trim().is_empty() {
             r.name.clear();
         }
         // ★ 重複は初出だけ残す。展開時に同一 `exercise_id` のログが 2 本でき、
-        //   「1 日 1 種目 1 ログ」が破れる（adr/data-model/one-log-per-exercise-per-day.md）。
-        //   初出の順を保つのは `dedupe_logs` と同じ
-        let mut seen: Vec<ExerciseId> = Vec::with_capacity(r.exercises.len());
-        r.exercises.retain(|id| {
-            let fresh = !seen.contains(id);
-            if fresh {
-                seen.push(*id);
-            }
-            fresh
-        });
+        //   「1 日 1 種目 1 ログ」が破れる（adr/data-model/one-log-per-exercise-per-day.md）
+        r.exercises.retain(first_occurrence());
     }
     db.routines.retain(|r| !r.is_empty());
 
@@ -1628,7 +1650,6 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
         // ★ どの枝を通るかに関わらず、先に写像を適用しておく（セッションと同じ規則）。
         //   同名判定も**写像適用後**の列で行う。前で比べると、同じ種目を指しているのに
         //   ID が違うだけで「別物」と判定され重複が残る
-        let mut seen: Vec<ExerciseId> = Vec::with_capacity(r.exercises.len());
         let exercises: Vec<ExerciseId> = r
             .exercises
             .iter()
@@ -1637,13 +1658,7 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             //   同名の別種目が同じ ID に落ちると、1 本のメニューに同じ exercise_id が
             //   2 回入る。展開すると「1 日 1 種目 1 ログ」が破れる
             //   （セッション側の `dedupe_by_exercise` とまったく同じ危険）
-            .filter(|id| {
-                let fresh = !seen.contains(id);
-                if fresh {
-                    seen.push(*id);
-                }
-                fresh
-            })
+            .filter(first_occurrence())
             .collect();
 
         if let Some(existing) = mine.routine(r.id) {

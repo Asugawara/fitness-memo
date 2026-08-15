@@ -68,6 +68,12 @@ fn conflict_text(c: &Conflict) -> String {
             format!("{date} の「{name}」は取り込んだ側のセットを採りました")
         }
         Conflict::BodyWeight { date } => format!("{date} の体重は元の値を残しました"),
+        // ★ 無名のメニューは他の画面と同じ「（名前なし）」にする。生のまま入れると
+        //   「メニュー「」は…」になり、何を指しているのか読めない文が出る。
+        //   無名は UI からは作れないが、旧版や他端末のファイルには入りうる
+        Conflict::RoutineDiverged { name } if name.trim().is_empty() => {
+            "無名のメニューは元の内容を残しました".to_string()
+        }
         Conflict::RoutineDiverged { name } => {
             format!("メニュー「{name}」は元の内容を残しました")
         }
@@ -372,7 +378,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                     </div>
 
                     <Show when=move || note.get().is_some()>
-                        <p class="menu-note" role="status" data-testid="backup-note">
+                        <p class="settings-note" role="status" data-testid="backup-note">
                             {move || note.get().unwrap_or_default()}
                         </p>
                     </Show>

@@ -293,8 +293,8 @@ pub struct MenuCandidate {
 
 /// その日の「コピーできるログ」だけを返す。
 ///
-/// ★ [`recent_menus`] と [`copy_day`] は必ず**これを通す**。2 つのフィルタがずれると
-/// 「5 種目」と表示された候補を押しても何も起きない死んだボタンができる。
+/// ★ [`recent_menus`] と [`copy_day`] と [`day_exercises`] は必ず**これを通す**。
+/// フィルタがずれると「5 種目」と表示された候補を押しても何も起きない死んだボタンができる。
 ///
 /// アーカイブ済みを外すのは、「種目を追加」シートがアーカイブ済みを出さないため。
 /// コピーで復活させると、カードを閉じたあとユーザーが自力で戻せない種目になる。
@@ -305,6 +305,20 @@ fn copyable(db: &Db, date: NaiveDate) -> impl Iterator<Item = &ExerciseLog> {
         .flat_map(|s| s.logs.iter())
         .filter(|l| !l.sets.is_empty())
         .filter(|l| db.exercise(l.exercise_id).is_some_and(|e| !e.archived))
+}
+
+/// その日の記録から**メニューに写せる種目**（その日のログ順）。
+///
+/// 記録タブの「この日をメニューにする」が使う（adr/ux/save-a-day-as-a-routine.md）。
+///
+/// ★ [`copyable`] を通すので、「前回のメニューから始める」の候補・[`copy_day`] と
+/// **同じ集合**になる。「この日をメニューにする」で保存したメニューを押した結果が、
+/// その日をコピーした結果と種目単位で一致する（数値は種目ごとの直近から入るので別）。
+///
+/// ★ セットの数値は返さない。[`crate::model::Routine`] は数値を持たない
+/// （adr/data-model/routines-as-named-exercise-lists.md）。
+pub fn day_exercises(db: &Db, date: NaiveDate) -> Vec<ExerciseId> {
+    copyable(db, date).map(|l| l.exercise_id).collect()
 }
 
 /// 指定日より**厳密に前**の、直近のメニュー候補（新しい順、最大 `limit` 件）。

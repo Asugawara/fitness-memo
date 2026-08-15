@@ -92,7 +92,8 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](ux/menu-groups-as-single-open-accordion.md) | 採用（タブ名は [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) で「設定」に改称） |
 | [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](ux/exercise-and-set-notes-behind-one-toggle.md) | 採用 |
 | [記録タブのカードとセットをドラッグで並び替え、`Vec` の並びをそのまま保存する](ux/drag-to-reorder-in-record-tab.md) | 採用 |
-| [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) | 採用 |
+| [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) | 採用（メニューを作る導線は [その日の記録から直接メニューを作れるようにする](ux/save-a-day-as-a-routine.md) で拡張） |
+| [その日の記録から直接メニューを作れるようにする](ux/save-a-day-as-a-routine.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

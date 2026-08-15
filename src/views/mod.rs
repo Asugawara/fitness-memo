@@ -7,6 +7,7 @@ pub mod day;
 pub mod help;
 pub mod icon;
 pub mod progress;
+pub mod routine;
 pub mod settings;
 
 use std::cell::Cell;

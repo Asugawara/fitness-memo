@@ -2097,3 +2097,126 @@ test('履歴ゼロでメニューを押したあとタブを往復すると、�
   await page.reload();
   await expect(page.getByTestId('exercise-card')).toHaveCount(1);
 });
+
+test('★ その日の記録から 1 タップでメニューを作れる', async ({ page }) => {
+  // adr/ux/save-a-day-as-a-routine.md
+  await seedPastLogs(page, [
+    { daysAgo: 0, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 0, exerciseName: 'スクワット', sets: [{ weight: 80, reps: 5 }] },
+  ]);
+
+  await page.getByTestId('day-to-routine').click();
+  const sheet = page.getByTestId('day-routine-sheet');
+  await expect(sheet).toBeVisible();
+
+  // その日の種目が**その日のログ順で**初期選択になっている
+  const picked = sheet.getByTestId('routine-picked').locator('li');
+  await expect(picked).toHaveCount(2);
+  await expect(picked.nth(0)).toContainText('ベンチプレス');
+  await expect(picked.nth(1)).toContainText('スクワット');
+
+  await page.getByTestId('routine-name-input').fill('全身の日');
+  await page.getByTestId('routine-save').click();
+  await expect(sheet).toBeHidden();
+
+  // ★ 記録は 1 件も動かない（メニューを作るのは記録の操作ではない）
+  await expect(page.getByTestId('exercise-card')).toHaveCount(2);
+  await flushToStorage(page);
+  const raw = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
+  const db = JSON.parse(raw);
+  expect(db.routines).toHaveLength(1);
+  expect(db.routines[0].name).toBe('全身の日');
+  expect(db.routines[0].exercises).toHaveLength(2);
+
+  // 設定タブにも、次の日の候補にも出る
+  await blurActive(page);
+  await page.getByTestId('tab-settings').click();
+  await expect(page.getByTestId('routine-name')).toHaveText('全身の日');
+});
+
+test('シートの中で種目を足し引きしてから保存できる', async ({ page }) => {
+  // その日やった bonus 種目を外す／その日やらなかった種目を足す、が同じ画面でできる
+  await seedPastLogs(page, [
+    { daysAgo: 0, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 0, exerciseName: 'プランク', sets: [{ weight: 0, reps: 60 }] },
+  ]);
+
+  await page.getByTestId('day-to-routine').click();
+  const sheet = page.getByTestId('day-routine-sheet');
+  // プランクを外して、チェストフライを足す
+  await sheet.getByTestId('routine-remove').nth(1).click();
+  await sheet.getByTestId('routine-pick').filter({ hasText: exactText('チェストフライ') }).click();
+  await page.getByTestId('routine-name-input').fill('胸の日');
+  await page.getByTestId('routine-save').click();
+  await expect(sheet).toBeHidden();
+
+  await blurActive(page);
+  await page.getByTestId('tab-settings').click();
+  await expect(page.getByTestId('routine-names')).toHaveText('ベンチプレス, チェストフライ');
+});
+
+test('記録が無い日には「この日をメニューにする」を出さない', async ({ page }) => {
+  // ★ 判定は cards ではなく core::day_exercises。「種目を追加」で出しただけで
+  //   まだ何も打っていないカードで出すと、何も保存されないリンクになる
+  await expect(page.getByTestId('day-to-routine')).toHaveCount(0);
+
+  // 種目を追加しただけ（セットは空）ではまだ出ない
+  await addExercise(page, 'ベンチプレス');
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
+  await expect(page.getByTestId('day-to-routine')).toHaveCount(0);
+
+  // 1 セット打つと出る
+  const card = page.getByTestId('exercise-card').first();
+  await card.getByTestId('set-weight').first().fill('60');
+  await card.getByTestId('set-reps').first().fill('10');
+  await blurActive(page);
+  await expect(page.getByTestId('day-to-routine')).toBeVisible();
+});
+
+test('アーカイブ済み種目の記録はメニューに入れない', async ({ page }) => {
+  // 「前回のメニューから始める」の候補と同じ copyable を通す
+  await seedPastLogs(page, [
+    { daysAgo: 0, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 0, exerciseName: 'スクワット', sets: [{ weight: 80, reps: 5 }] },
+  ]);
+
+  await blurActive(page);
+  await page.getByTestId('tab-settings').click();
+  await openGroup(page, '脚');
+  await page.getByTestId('exercise-name').filter({ hasText: exactText('スクワット') }).click();
+  await page.getByTestId('archive-exercise').click();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
+
+  await page.getByTestId('tab-record').click();
+  await page.getByTestId('day-to-routine').click();
+  const picked = page.getByTestId('day-routine-sheet').getByTestId('routine-picked').locator('li');
+  await expect(picked).toHaveCount(1);
+  await expect(picked.nth(0)).toContainText('ベンチプレス');
+});
+
+test('「この日をメニューにする」は sticky な帯に覆われず force なしで押せる', async ({ page }) => {
+  // ★ .add-wrap は sticky で包含ブロックが .day。その中で帯より後ろに置くと、
+  //   .day の末尾までスクロールしきるまで帯の下に潜りうる。だから .day の外に出して
+  //   ある（InstallBanner と同じ回避、adr/ux/save-a-day-as-a-routine.md）。
+  //   この位置関係を固定するテスト
+  await seedPastLogs(page, [
+    { daysAgo: 0, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  // カードを増やして、リンクが確実に折り返しの下へ行く状況を作る
+  for (const name of ['ダンベルプレス', 'チェストフライ', 'プッシュアップ']) {
+    await addExercise(page, name);
+  }
+  await blurActive(page);
+
+  const link = page.getByTestId('day-to-routine');
+  await link.scrollIntoViewIfNeeded();
+  const box = await link.boundingBox();
+  const add = await page.locator('.add-wrap').boundingBox();
+  expect(box, 'リンクが描画されていない').not.toBeNull();
+  // 「種目を追加」の下端よりリンクの上端が下にある（= 重なっていない）
+  expect(box.y).toBeGreaterThanOrEqual(add.y + add.height);
+
+  // force なしで押せる（actionability チェックを通る）
+  await link.click();
+  await expect(page.getByTestId('day-routine-sheet')).toBeVisible();
+});

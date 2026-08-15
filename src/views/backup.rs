@@ -404,10 +404,6 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                                 "エクスポート"
                             </button>
                         </div>
-                        <p class="muted">
-                            "「ファイルに保存」を選ぶと、機種を替えても残ります。"
-                            "表計算アプリでそのまま開けます"
-                        </p>
                         // ★ 共有に失敗した人にだけ出す。静止時は 1 要素も増やさない
                         <Show when=move || copy_rescue.get()>
                             <div class="sheet-actions">
@@ -417,6 +413,10 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                             </div>
                         </Show>
 
+                        // ★ ボタンの下に説明文を置かない。「「ファイルに保存」を選ぶと〜」は
+                        //   共有が成功した**そのとき**の通知に出るし、「今ある記録は消えず〜」は
+                        //   取り込みを決める確認画面に出る。**必要な瞬間に出るものを、
+                        //   常時見える位置に前置きしても読まれずに嵩むだけ**
                         <div class="backup-split">
                             <div class="sheet-actions">
                                 <button
@@ -428,9 +428,6 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                                     "インポート"
                                 </button>
                             </div>
-                            <p class="muted">
-                                "エクスポートしたファイルを選びます。今ある記録は消えず、足りない分だけ足します"
-                            </p>
                         </div>
                     }
                 }

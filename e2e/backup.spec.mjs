@@ -54,7 +54,13 @@ async function stubShare(page) {
   });
 }
 
-/** 隠した input にファイルを流し込む。★ setInputFiles は attached しか要求しない。 */
+/**
+ * 隠した input にファイルを流し込む。★ setInputFiles は attached しか要求しない。
+ *
+ * ★ 事前に「インポート」ボタンを押してはいけない。あれは `input.click()` で**ネイティブの
+ *   ファイルピッカーを開く**ので、直後の setInputFiles と競合して WebKit で不定期に落ちる。
+ *   ボタンが押せること自体は別のテストが見ている。
+ */
 async function importFile(page, text, name = 'fitness-memo-20260801-1200.tsv') {
   await page.getByTestId('backup-file').setInputFiles({
     name,
@@ -147,7 +153,6 @@ test('取り込みは現在と取り込み後を並べ、今の記録を減ら�
 
   // 記録 0 日のファイルでも「現在」が減らない = 全消しが構造的に起きない
   await page.getByTestId('backup-apply').click();
-  await page.getByTestId('backup-import').click();
   await importFile(page, '日付\t部位\t種目\tセット\t重量kg\t回数\n\t胸\t自作マシン\t\t\t\n');
   await expect(confirm).toContainText('記録 1 日');
   await expect(confirm).not.toContainText('記録 0 日');
@@ -201,7 +206,6 @@ test('確認画面が出ている間は「元に戻す」を出さない', async
   await page.getByTestId('backup-apply').click();
   await expect(page.getByTestId('backup-undo')).toBeVisible();
 
-  await page.getByTestId('backup-import').click();
   await importFile(page, ONE_DAY_TSV.replaceAll('2026-08-01', '2026-09-01'));
   await expect(page.getByTestId('backup-confirm')).toBeVisible();
   await expect(page.getByTestId('backup-undo'), '確認中に巻き戻せてしまう').toHaveCount(0);

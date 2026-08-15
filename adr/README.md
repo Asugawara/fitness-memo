@@ -89,11 +89,12 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [タブ切替に方向つき View Transition を掛ける](ux/directional-tab-transitions.md) | 破棄（0.2s の演出が視線を取るので当日撤去。切替は即時） |
 | [フォーカスリングを明示し、記録タブの見出しを 1 本の階層にする](ux/focus-ring-and-heading-order.md) | 採用 |
 | [他アプリからの移行はスクショの文字起こしを貼り付けて受ける](ux/migrate-by-ocr-paste.md) | 破棄（読み取りが成立せず操作量も見合わないため撤去） |
-| [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](ux/menu-groups-as-single-open-accordion.md) | 採用（タブ名は [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) で「設定」に改称） |
+| [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](ux/menu-groups-as-single-open-accordion.md) | 採用（タブ名は [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) で「設定」に改称、置き場所は [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](ux/settings-as-a-list-of-sections.md) で「種目」節の中へ） |
 | [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](ux/exercise-and-set-notes-behind-one-toggle.md) | 採用 |
 | [記録タブのカードとセットをドラッグで並び替え、`Vec` の並びをそのまま保存する](ux/drag-to-reorder-in-record-tab.md) | 採用 |
-| [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) | 採用（メニューを作る導線は [その日の記録から直接メニューを作れるようにする](ux/save-a-day-as-a-routine.md) で拡張） |
+| [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) | 採用（メニューを作る導線は [その日の記録から直接メニューを作れるようにする](ux/save-a-day-as-a-routine.md)、画面構成は [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](ux/settings-as-a-list-of-sections.md) で拡張） |
 | [その日の記録から直接メニューを作れるようにする](ux/save-a-day-as-a-routine.md) | 採用 |
+| [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](ux/settings-as-a-list-of-sections.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

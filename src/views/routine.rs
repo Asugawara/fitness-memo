@@ -229,8 +229,11 @@ pub fn RoutineEditor(
     };
 
     view! {
+        // ★ **必須であることを label に書く。** 書かないと、押しても保存されない理由が
+        //   押すまで分からない。この画面は種目ピッカーが縦を占めるので名前欄が埋もれる
+        //   （他のエディタは入力欄 1 個なので気づける）
         <label class="field">
-            <span>"メニュー名"</span>
+            <span>"メニュー名（必須）"</span>
             <input
                 class="text-input"
                 type="text"
@@ -275,18 +278,6 @@ pub fn RoutineEditor(
                                 })
                                 .collect::<Vec<_>>()}
                         </ol>
-                    }
-                })
-        }}
-
-        {move || {
-            invalid
-                .get()
-                .map(|reason| {
-                    view! {
-                        <div class="warn-box">
-                            <p data-testid="routine-invalid">{reason}</p>
-                        </div>
                     }
                 })
         }}
@@ -337,12 +328,6 @@ pub fn RoutineEditor(
                     .collect::<Vec<_>>()
             })
         }}
-
-        <div class="sheet-actions">
-            <button class="primary" data-testid="routine-save" on:click=save>
-                "保存"
-            </button>
-        </div>
 
         {move || {
             id.map(|id| {
@@ -396,5 +381,28 @@ pub fn RoutineEditor(
                 }
             })
         }}
+
+        // ★ **保存はシート内で sticky にする。** この画面は種目ピッカーが 6 部位ぶん
+        //   縦に伸びるので、通常フローに置くと「保存するにはピッカーを全部スクロールし切る」
+        //   になる。他のエディタ（部位 / 種目）は入力欄 1 個で下端が見えているから
+        //   `.sheet-actions` のままでよい — 長いのはこの 1 枚だけ。
+        //
+        // ★ **DOM の最後に置く。** 前に置くと、後ろに続く削除ボタンや確認ボックスが
+        //   スクロール途中で帯の下に潜る（記録タブの `.add-wrap` と同じ罠）。
+        //
+        // ★ 保存できない理由もこの中に出す。ボタンの隣でないと、押した場所と
+        //   「なぜ効かなかったか」が画面の別の場所に離れる（この画面の高さでは画面外）。
+        <div class="rtn-save" data-testid="routine-save-bar">
+            {move || {
+                invalid
+                    .get()
+                    .map(|reason| {
+                        view! { <p class="rtn-invalid" data-testid="routine-invalid">{reason}</p> }
+                    })
+            }}
+            <button class="primary" data-testid="routine-save" on:click=save>
+                "保存"
+            </button>
+        </div>
     }
 }

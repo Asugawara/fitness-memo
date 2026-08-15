@@ -102,27 +102,25 @@ pub fn InstallBanner() -> impl IntoView {
     }
 }
 
-/// 設定タブ冒頭の控えめなリンク。押すと同じ手順シートが開く。
+/// 設定タブの節一覧に並ぶ 1 行。押すと手順シートが開く。
 ///
 /// ★ `storage_may_split` で絞らない。受動的なリンクなので無関係な環境に出ても軽い
 ///   無駄で済む一方、判定が壊れたときはここだけが手順への入口になる。
 ///
-/// ★ 設定タブの**冒頭**に置くこと。末尾は `.add-wrap` が `position: sticky` で
-///   居座るので後続の要素が帯に覆われ、`ArchivedSection` の有無で位置も動く。
+/// ★ **設定トップに置くこと**（adr/ux/settings-as-a-list-of-sections.md）。節の中へ
+///   埋めると 2 タップ先になる。iOS で Safari のタブと PWA の localStorage が別なことを
+///   伝える唯一の常設導線なので、深いところに置かない
+///   （adr/ux/install-guide-banner-and-sheet.md）。
 #[component]
 pub fn InstallHelpLink() -> impl IntoView {
     let open = RwSignal::new(false);
 
     view! {
-        <p class="settings-help">
-            <button
-                class="link-btn"
-                data-testid="install-help-link"
-                on:click=move |_| open.set(true)
-            >
-                "ホーム画面への追加のしかた"
-            </button>
-        </p>
+        // 見た目は他の節と同じ `.row`。中身が節ではなくシートというだけ
+        <button class="row" data-testid="install-help-link" on:click=move |_| open.set(true)>
+            <span class="row-label">"ホーム画面への追加のしかた"</span>
+            {icon(icon::CHEVRON_RIGHT)}
+        </button>
         <InstallHelpSheet open=open />
     }
 }

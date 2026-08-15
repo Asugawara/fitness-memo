@@ -1493,13 +1493,73 @@ h3 {
   margin: 0 0 12px;
 }
 
-/* 見出しだけの 1 行。space-between だった名残の justify-content は落としてある
-   （右側に置いていた「プリセットを追加」ボタンを外したため） */
+/* 見出しの 1 行。節の中では左端に「‹ 設定」（.icon-btn）が入る。
+   space-between だった名残の justify-content は落としてある
+   （右側に置いていた「プリセットを追加」ボタンを外したため）。
+   ★ 戻るボタンは 44px 角なので、その分だけ左の余白を詰めて h1 の位置を
+     トップ（戻るボタンが無い）と揃える */
 .settings-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   margin-bottom: 10px;
+  margin-left: -10px;
+}
+
+/* 戻るボタンが無いトップは、上の負マージンを打ち消して元の位置に戻す */
+.settings-head:first-child {
+  margin-left: 0;
+}
+
+/* ── 設定トップの節一覧 ─────────────────────────────────────────────────── */
+
+/* ★ 設定タブの入口は**節の一覧**（adr/ux/settings-as-a-list-of-sections.md）。
+   4 つを 1 画面に縦積みしていた頃は、メニューを 1 本足すのに 6 部位 28 種目の
+   一覧を跨いでスクロールしていた。 */
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 節 1 行。カードと同じ面に見せる（.menu-cand と同じ作り）。
+   ★ 高さはタップ標的の規約値 44px より大きく取る。行が 4 つしか無い画面なので、
+     詰めるより押しやすさを取る */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 12px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: inherit;
+  font: inherit;
+}
+
+.row-label {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.row-count {
+  flex: none;
+  font-size: 13px;
+}
+
+/* シェブロンは「押すと先がある」ことだけを示すので、本文より弱く */
+.row > .icon {
+  flex: none;
+  color: var(--muted);
+}
+
+/* ホーム画面ヘルプも同じ行に並べる（`.settings-help` の余白規則は使わない） */
+.rows .settings-help {
+  margin: 0;
 }
 
 /* h1 の UA 既定は 2em なので、今日タブ（.day-head h1）と同じ 20px に揃える */
@@ -1575,6 +1635,40 @@ h3 {
    メニューの原因を探しようがない */
 .rtn-warn {
   font-size: 12px;
+  color: var(--warn);
+}
+
+/* メニュー編集シートの保存帯。★ シート内で sticky にする。
+   このシートは種目ピッカーが 6 部位ぶん伸びるので、通常フローだと「保存するには
+   ピッカーを全部スクロールし切る」になる（他のエディタは入力欄 1 個なので不要）。
+
+   ★ 貼り付け先は `.sheet-body`（`overflow-y: auto` のスクロール容器）の下端。
+     `.sheet` 自体は `position: fixed` なので、ここは viewport ではなくシートの中に閉じる。
+   ★ 上下左右の負マージンで `.sheet-body` の padding（8px 14px 16px）を打ち消し、
+     帯を端まで塗る。塗り切らないと下を流れる種目ボタンが帯の脇から覗く。
+   ★ `bottom` は 0 ではなく **-16px**。sticky は scrollport（= padding box）の下端に
+     貼るので、0 だと `.sheet-body` の padding-bottom 16px が帯の**下**に残り、
+     そこを種目ボタンが流れていくのが見える（実測で確認した）。 */
+.rtn-save {
+  position: sticky;
+  bottom: -16px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px -14px -16px;
+  padding: 10px 14px 12px;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+
+/* 保存できない理由。ボタンの隣に出すので `.warn-box` の枠は要らない
+   （枠を付けると帯の中に箱が入れ子になって、押す場所がぼやける） */
+.rtn-invalid {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
   color: var(--warn);
 }
 

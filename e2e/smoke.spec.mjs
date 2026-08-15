@@ -48,12 +48,32 @@ function groupItem(page, name) {
 }
 
 /**
- * 設定タブの部位を開いてカードを返す。
+ * 設定タブの節（`settings-row-*`）へ入る。
+ *
+ * ★ 設定タブの入口は節の一覧（adr/ux/settings-as-a-list-of-sections.md）なので、
+ *   部位や種目を触るテストは必ずここを通す。
+ * ★ **既に入っていることがある。** 開いている節は `SettingsPageCtx` が持っていて
+ *   タブ往復では戻らない（`OpenGroupCtx` と同じ理由）ので、行が出ているときだけ押す。
+ */
+async function openSettingsSection(page, which) {
+  await blurActive(page);
+  await page.getByTestId('tab-settings').click();
+  // ★ **別の節に居ることがある。** 開いている節は `SettingsPageCtx` が持っていて
+  //   タブ往復では戻らないので、まずトップへ戻してから入る（「入っていない」
+  //   ではなく「違う節に入っている」が抜けると、行が見えないまま素通りする）
+  const back = page.getByTestId('settings-back');
+  if (await back.isVisible()) await back.click();
+  await page.getByTestId(`settings-row-${which}`).click();
+}
+
+/**
+ * 設定タブの部位を開いてカードを返す。**「種目」節に入るところからやる。**
  *
  * ★ 種目一覧は既定で全部閉じている（adr/ux/menu-groups-as-single-open-accordion.md）。group-toggle はトグルなので、
  *   既に開いているものを押すと閉じてしまう。aria-expanded を見てから押す。
  */
 async function openGroup(page, name) {
+  await openSettingsSection(page, 'exercises');
   const item = groupItem(page, name);
   const toggle = item.getByTestId('group-toggle');
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
@@ -748,7 +768,7 @@ test('11. 設定タブでの改名・部位変更・新規追加が記録タブ�
 });
 
 test('設定タブは部位だけを並べ、部位を開くとその部位の種目が出る（1 つだけ開く）', async ({ page }) => {
-  await page.getByTestId('tab-settings').click();
+  await openSettingsSection(page, 'exercises');
 
   // ★ 改修の本体。既定で種目は 1 つも出ていない。6 部位 28 種目が全部並ぶと、
   //   どの部位があるかを見るだけで長いスクロールが要る（adr/ux/menu-groups-as-single-open-accordion.md）
@@ -798,7 +818,7 @@ test('アーカイブから戻すと、戻した先の部位が画面に入り�
   //   画面へ入ってくる」ことなので、端末によって一覧が丸ごと収まってしまうと
   //   （Pixel 7 は 915px 高）前提そのものが作れず、テストが何も見なくなる
   await page.setViewportSize({ width: 390, height: 480 });
-  await page.getByTestId('tab-settings').click();
+  await openSettingsSection(page, 'exercises');
   const chest = await openGroup(page, '胸');
   await expect(chest.getByTestId('exercise-name').first()).toHaveText('ベンチプレス');
 
@@ -834,7 +854,7 @@ test('自動で開いた部位は画面の中に入る（新規作成・部位�
   // 上のテストと同じ理由でビューポートを固定する（末尾に作った部位が
   // fold の下に来る状況を、どの project でも同じに作るため）
   await page.setViewportSize({ width: 390, height: 480 });
-  await page.getByTestId('tab-settings').click();
+  await openSettingsSection(page, 'exercises');
 
   // 新規部位は一覧の末尾に作られる。開くだけでスクロールしないと sticky な
   // .add-wrap の裏か fold の下に隠れて、「＋ 種目を追加」に到達できない
@@ -869,7 +889,7 @@ test('自動で開いた部位は画面の中に入る（新規作成・部位�
 });
 
 test('開いていた部位を削除するとアコーディオンが閉じる', async ({ page }) => {
-  await page.getByTestId('tab-settings').click();
+  await openSettingsSection(page, 'exercises');
   await page.getByTestId('settings-add-group').click();
   await page.getByTestId('new-group-name').fill('空の部位');
   await page.getByTestId('new-group-submit').click();
@@ -909,7 +929,7 @@ test('アイコンの SVG が描画されている', async ({ page }) => {
   //   bogus comment にして**エラーも出さずに**アイコンが 1 つも出なくなる
   //   （adr/architecture/help-figures-as-included-svg.md /
   //   adr/architecture/lucide-icons-as-included-svg.md）。個数を固定して黙って消えるのを防ぐ
-  await page.getByTestId('tab-settings').click();
+  await openSettingsSection(page, 'exercises');
   await expect(page.locator('[data-testid=group-toggle] .icon > svg')).toHaveCount(6);
   await expect(page.locator('[data-testid=group-edit] .icon > svg')).toHaveCount(6);
 
@@ -1803,8 +1823,7 @@ test('コピーできる種目が残っていない日は候補に出ない（�
 
 /** 設定タブでメニューを 1 本作る。`names` の順がそのまま展開順になる。 */
 async function createRoutine(page, name, names) {
-  await blurActive(page);
-  await page.getByTestId('tab-settings').click();
+  await openSettingsSection(page, 'routines');
   await page.getByTestId('settings-add-routine').click();
   await expect(page.getByTestId('settings-sheet')).toBeVisible();
   await page.getByTestId('routine-name-input').fill(name);
@@ -1965,8 +1984,7 @@ test('メニューは編集・削除でき、削除しても記録は消えな�
 });
 
 test('種目が 0 個のメニューも、名前が空のメニューも保存できない', async ({ page }) => {
-  await blurActive(page);
-  await page.getByTestId('tab-settings').click();
+  await openSettingsSection(page, 'routines');
   await page.getByTestId('settings-add-routine').click();
 
   // 名前だけ。記録タブに出せないので、作れても「押せない行」が残るだけになる
@@ -1999,6 +2017,8 @@ test('一部の種目だけアーカイブしたメニューは、開く数を�
   await page.getByTestId('archive-exercise').click();
   await expect(page.getByTestId('settings-sheet')).toBeHidden();
 
+  await openSettingsSection(page, 'routines');
+
   // 件数は開く数に減り、名前は残したまま（アーカイブは可逆なので隠さない）、
   // 食い違いの理由を出す
   await expect(page.getByTestId('routine-count')).toHaveText('1 種目');
@@ -2024,6 +2044,8 @@ test('全種目をアーカイブしたメニューは記録タブに出ず、�
   await page.getByTestId('archive-exercise').click();
   await expect(page.getByTestId('settings-sheet')).toBeHidden();
 
+  await openSettingsSection(page, 'routines');
+
   // ★ 出ない理由が画面から読めること。無いと「作ったのに使えない」原因を探せない
   await expect(page.getByTestId('routine-unusable')).toBeVisible();
 
@@ -2046,7 +2068,7 @@ test('メニューは書き出して読み戻しても残る', async ({ page }) 
   // 書き出し形式 = 保存形式なので、この JSON がそのまま読み戻せる
   await page.reload();
   await expect(page.getByTestId('tab-settings')).toBeVisible();
-  await page.getByTestId('tab-settings').click();
+  await openSettingsSection(page, 'routines');
   await expect(page.getByTestId('routine-name')).toHaveText('胸の日');
 });
 
@@ -2129,8 +2151,7 @@ test('★ その日の記録から 1 タップでメニューを作れる', asyn
   expect(db.routines[0].exercises).toHaveLength(2);
 
   // 設定タブにも、次の日の候補にも出る
-  await blurActive(page);
-  await page.getByTestId('tab-settings').click();
+  await openSettingsSection(page, 'routines');
   await expect(page.getByTestId('routine-name')).toHaveText('全身の日');
 });
 
@@ -2150,8 +2171,7 @@ test('シートの中で種目を足し引きしてから保存できる', async
   await page.getByTestId('routine-save').click();
   await expect(sheet).toBeHidden();
 
-  await blurActive(page);
-  await page.getByTestId('tab-settings').click();
+  await openSettingsSection(page, 'routines');
   await expect(page.getByTestId('routine-names')).toHaveText('ベンチプレス, チェストフライ');
 });
 
@@ -2219,4 +2239,47 @@ test('「この日をメニューにする」は sticky な帯に覆われず fo
   // force なしで押せる（actionability チェックを通る）
   await link.click();
   await expect(page.getByTestId('day-routine-sheet')).toBeVisible();
+});
+
+// ── 設定タブの節一覧（adr/ux/settings-as-a-list-of-sections.md）──────────────
+
+test('★ 設定タブの入口は節の一覧で、中身は入るまで出ない', async ({ page }) => {
+  await blurActive(page);
+  await page.getByTestId('tab-settings').click();
+
+  // トップは 4 行だけ。種目もメニューも 1 件も出ていない
+  // （`.row` で数える。手順シートの <dialog> も同じ親に出るので `> *` だと 5 になる）
+  await expect(page.getByTestId('settings-rows').locator('.row')).toHaveCount(4);
+  await expect(page.getByTestId('group-item')).toHaveCount(0);
+  await expect(page.getByTestId('routine-item')).toHaveCount(0);
+  await expect(page.getByTestId('settings-add-group')).toHaveCount(0);
+  await expect(page.getByTestId('settings-add-routine')).toHaveCount(0);
+  // 入る前に件数が読める（入って初めて空だと分かる、を避ける）
+  await expect(page.getByTestId('settings-row-exercises')).toContainText('28');
+  await expect(page.getByTestId('settings-row-routines')).toContainText('0');
+
+  // 節へ入ると h1 がその節名になる（h1 は常に 1 つ）
+  await page.getByTestId('settings-row-exercises').click();
+  await expect(page.locator('main h1')).toHaveCount(1);
+  await expect(page.locator('main h1')).toHaveText('種目');
+  await expect(page.getByTestId('group-item')).toHaveCount(6);
+  await expect(page.getByTestId('settings-rows')).toHaveCount(0);
+
+  // 「‹」でトップへ戻る
+  await page.getByTestId('settings-back').click();
+  await expect(page.locator('main h1')).toHaveText('設定');
+  await expect(page.getByTestId('group-item')).toHaveCount(0);
+});
+
+test('開いていた節はタブを往復しても戻らない', async ({ page }) => {
+  // ★ OpenGroupCtx と同じ理由。往復のたびにトップへ戻されると、入り直す手数が毎回要る
+  await openSettingsSection(page, 'exercises');
+  await expect(page.getByTestId('group-item')).toHaveCount(6);
+
+  await blurActive(page);
+  await page.getByTestId('tab-record').click();
+  await page.getByTestId('tab-settings').click();
+
+  await expect(page.locator('main h1')).toHaveText('種目');
+  await expect(page.getByTestId('group-item')).toHaveCount(6);
 });

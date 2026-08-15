@@ -114,6 +114,28 @@ pub struct KbCtx(pub RwSignal<bool>);
 #[derive(Clone, Copy)]
 pub struct OpenGroupCtx(pub RwSignal<Option<GroupId>>);
 
+/// 設定タブで開いているページ（adr/ux/settings-as-a-list-of-sections.md）。
+///
+/// ★ `OpenGroupCtx` とまったく同じ理由でここに置く。`Settings` の中に持つと、
+///   記録⇄設定を往復するたびに一覧のトップへ戻され、入っていた節をもう一度
+///   開き直すことになる。**永続化はしないのも同じ**（プロセス内の寿命に留める）。
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum SettingsPage {
+    #[default]
+    Root,
+    Routines,
+    Exercises,
+}
+
+#[derive(Clone, Copy)]
+pub struct SettingsPageCtx(pub RwSignal<SettingsPage>);
+
+pub fn use_settings_page() -> RwSignal<SettingsPage> {
+    use_context::<SettingsPageCtx>()
+        .expect("SettingsPageCtx が provide されていない")
+        .0
+}
+
 pub fn use_db() -> RwSignal<Db> {
     use_context::<DbCtx>()
         .expect("DbCtx が provide されていない")
@@ -562,8 +584,10 @@ pub fn App() -> impl IntoView {
     let kb = KbCtx(RwSignal::new(false));
     provide_context(kb);
 
-    // ★ 設定タブの外に置く（タブ往復で閉じないため）。理由は OpenGroupCtx を参照
+    // ★ 設定タブの外に置く（タブ往復で閉じない / トップへ戻らないため）。
+    //   理由は OpenGroupCtx と SettingsPage を参照
     provide_context(OpenGroupCtx(RwSignal::new(None)));
+    provide_context(SettingsPageCtx(RwSignal::new(SettingsPage::default())));
 
     let tab = RwSignal::new(Tab::Record);
     let tabs = TabCtx(tab);

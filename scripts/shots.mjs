@@ -28,22 +28,15 @@ const BASE = `http://localhost:${PORT}/`;
  * 記録タブだけ指定があるのは、先頭で撮るとカレンダーしか入らず、この画面の要である
  * 「カレンダーと入力欄が縦に並んで 1 画面」（adr/ux/record-tab-calendar-with-day-editor.md）が写らないため。
  *
- * `expand` は設定タブ用で、撮る前にその部位を開く。全部閉じた絵だと「部位しか無い
- * アプリ」に見え、逆に開いた絵だけでは折りたたまれていることが伝わらない。閉じた部位と
- * 開いた部位が同時に写るのが、この画面の一番正確な絵
- * （adr/ux/menu-groups-as-single-open-accordion.md）。
- *
- * ★ **開くのは先頭の「胸」で、寄せ方は `block: 'nearest'`。** かつては真ん中あたりの
- *   「肩」を画面中央へ寄せていたが、上にトレーニングメニューの節が載った今それをやると
- *   メニュー — この画面のもう一方の目玉 — が画面外へ出る
- *   （adr/ux/start-from-a-saved-routine.md）。先頭を開いて最小限だけ寄せると、
- *   「メニュー 2 本 + 種目（開いた部位）」が 1 枚に収まる。
- *   h1 は README の表側が「設定」と書いているので写らなくてよい。
+ * ★ 設定タブは**トップ（節の一覧）をそのまま撮る**。タップして最初に出るのがこれで、
+ *   各節の件数まで写る（adr/ux/settings-as-a-list-of-sections.md）。かつては部位を 1 つ
+ *   開いた絵にしていたが、その一覧は節の中へ移ったので、開いた絵は「設定」の代表では
+ *   なくなった。中身は README の本文が説明する。
  */
 const SHOTS = [
   { file: '1-record.png', testid: 'tab-record', screen: 'screen-record', center: 'today-date' },
   { file: '2-progress.png', testid: 'tab-progress', screen: 'screen-progress' },
-  { file: '3-menu.png', testid: 'tab-settings', screen: 'screen-settings', expand: '胸' },
+  { file: '3-menu.png', testid: 'tab-settings', screen: 'screen-settings' },
 ];
 
 /**
@@ -198,21 +191,11 @@ try {
   );
   if (!standalone) throw new Error('display-mode: standalone の偽装が効いていない');
 
-  for (const { file, testid, screen, center, expand } of SHOTS) {
+  for (const { file, testid, screen, center } of SHOTS) {
     await page.getByTestId(testid).click();
     await page.getByTestId(screen).waitFor({ state: 'visible' });
     // タブを切り替えてもスクロール位置は持ち越されるので、毎回先頭へ戻してから決める
     await page.evaluate(() => window.scrollTo(0, 0));
-    if (expand) {
-      const card = page.getByTestId('group-item').filter({
-        has: page.getByTestId('group-name').filter({ hasText: new RegExp(`^${expand}$`) }),
-      });
-      await card.getByTestId('group-toggle').click();
-      // ★ アプリ側の `scroll_into_view_if_needed` は request_animation_frame 越しに動く。
-      //   待たずに測ると、開く前の位置で寄せてから巻き戻されることになる
-      await page.waitForTimeout(100);
-      await card.evaluate((el) => el.scrollIntoView({ block: 'nearest', behavior: 'instant' }));
-    }
     if (center) {
       await page
         .getByTestId(center)

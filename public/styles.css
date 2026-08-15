@@ -1569,19 +1569,38 @@ h3 {
 
 /* 編集シートの「選択中」。★ この並びがそのまま記録タブのカードの並びになるので、
    番号を出して順序を読めるようにする（並び替えの UI は持たない — 外して入れ直すか、
-   記録タブでドラッグする） */
+   記録タブでドラッグする）。
+
+   ★ 番号は UA のリストマーカーではなく counter + ::before で出す。
+     `li { display: flex }` は要素の display を list-item から変えるので**マーカーが
+     消える**（実測: ::marker の content が normal のまま、テキストの左端が li の左端と
+     一致する = 何も描かれていない）。padding-left で空けた分がただの死んだ余白になる。
+     ::before なら flex アイテムとして並ぶので、行の構造を変えずに番号が出る。 */
 .rtn-picked {
+  counter-reset: rtn;
   margin: 10px 0;
-  padding-left: 22px;
+  padding-left: 0;
+  list-style: none;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
 .rtn-picked li {
+  counter-increment: rtn;
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 幅を固定して種目名の左端を揃える（揃っていないと並びを縦に追えない） */
+.rtn-picked li::before {
+  content: counter(rtn);
+  flex: none;
+  min-width: 16px;
+  text-align: right;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .rtn-picked li span {

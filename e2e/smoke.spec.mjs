@@ -1797,3 +1797,229 @@ test('コピーできる種目が残っていない日は候補に出ない（�
   await page.getByTestId('tab-record').click();
   await expect(page.getByTestId('menu-copy')).toHaveCount(0);
 });
+
+// ── トレーニングメニュー ────────────────────────────────────────────────────
+// adr/ux/start-from-a-saved-routine.md
+
+/** 設定タブでメニューを 1 本作る。`names` の順がそのまま展開順になる。 */
+async function createRoutine(page, name, names) {
+  await blurActive(page);
+  await page.getByTestId('tab-settings').click();
+  await page.getByTestId('settings-add-routine').click();
+  await expect(page.getByTestId('settings-sheet')).toBeVisible();
+  await page.getByTestId('routine-name-input').fill(name);
+  for (const n of names) {
+    await page.getByTestId('routine-pick').filter({ hasText: exactText(n) }).click();
+  }
+  await page.getByTestId('routine-save').click();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
+}
+
+test('★ 保存したメニューは種目ごとに別々の日の「前回」からセットを引く', async ({ page }) => {
+  // ★ この機能の核。ベンチは 3 日前、スクワットは 10 日前にやっている。
+  //   1 日を丸ごと写す menu-candidate と違い、種目ごとに別の日から入る
+  await seedPastLogs(page, [
+    {
+      daysAgo: 3,
+      exerciseName: 'ベンチプレス',
+      sets: [
+        { weight: 60, reps: 10 },
+        { weight: 60, reps: 8 },
+      ],
+    },
+    { daysAgo: 10, exerciseName: 'スクワット', sets: [{ weight: 80, reps: 5 }] },
+  ]);
+
+  await createRoutine(page, '胸と脚の日', ['ベンチプレス', 'スクワット']);
+
+  await page.getByTestId('tab-record').click();
+  const routines = page.getByTestId('routine-candidate');
+  await expect(routines).toHaveCount(1);
+  await expect(routines.first()).toContainText('胸と脚の日');
+  // 種目名まで出す（「胸の日」と「胸の日（軽め）」を名前だけで選び分けさせない）
+  await expect(routines.first()).toContainText('ベンチプレス');
+  await expect(routines.first()).toContainText('胸');
+
+  await routines.first().click();
+
+  const cards = page.getByTestId('exercise-card');
+  await expect(cards).toHaveCount(2);
+  // 並びはメニューの並び（タップ順）
+  await expect(cards.nth(0)).toContainText('ベンチプレス');
+  await expect(cards.nth(1)).toContainText('スクワット');
+
+  // ★ 入力欄の値で見る。Db は正しいのに <For> がカードを使い回して入力欄が
+  //   古いまま、という状態を today-metric は素通ししてしまう
+  const bench = cards.nth(0).getByTestId('set-row');
+  await expect(bench).toHaveCount(2);
+  await expect(bench.nth(0).getByTestId('set-weight')).toHaveValue('60');
+  await expect(bench.nth(0).getByTestId('set-reps')).toHaveValue('10');
+  await expect(bench.nth(1).getByTestId('set-reps')).toHaveValue('8');
+
+  const squat = cards.nth(1).getByTestId('set-row');
+  await expect(squat).toHaveCount(1);
+  await expect(squat.nth(0).getByTestId('set-weight')).toHaveValue('80');
+  await expect(squat.nth(0).getByTestId('set-reps')).toHaveValue('5');
+
+  // 1 種目でも入ったら候補は消える（menu-candidate と同じ「空のときだけ」）
+  await expect(page.getByTestId('menu-copy')).toHaveCount(0);
+
+  // signal に載っただけでなく Db にコミットされている
+  await flushToStorage(page);
+  await page.reload();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(2);
+});
+
+test('メニューに履歴の無い種目が入っていても、空のカードとして出る', async ({ page }) => {
+  // ★ 黙って飛ばすと「3 種目入れたのに 2 枚しか出ない」理由が画面から読めない。
+  //   0 セットのログを書くと migrate が次回起動で落として「出ているのに消える」
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  await createRoutine(page, '胸の日', ['ベンチプレス', 'チェストフライ']);
+
+  await page.getByTestId('tab-record').click();
+  await page.getByTestId('routine-candidate').first().click();
+
+  const cards = page.getByTestId('exercise-card');
+  await expect(cards).toHaveCount(2);
+  await expect(cards.nth(1)).toContainText('チェストフライ');
+  await expect(cards.nth(1)).toContainText('前回 —');
+  // 空の 1 行が出るだけで、値は入らない
+  await expect(cards.nth(1).getByTestId('set-row').nth(0).getByTestId('set-reps')).toHaveValue('');
+});
+
+test('メニューが 1 本も無いときの候補リストは今までと同じ見た目', async ({ page }) => {
+  // ★ メニューを使わない利用者の画面を変えない。見出しを 2 つに割るのは
+  //   出所が実際に 2 つあるときだけ
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+
+  const list = page.getByTestId('menu-copy');
+  await expect(list).toBeVisible();
+  await expect(list).toContainText('前回のメニューから始める');
+  await expect(list).not.toContainText('トレーニングメニュー');
+  await expect(page.getByTestId('routine-candidate')).toHaveCount(0);
+});
+
+test('メニューがあると候補は「トレーニングメニュー」と「最近の記録から」に分かれる', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  await createRoutine(page, '胸の日', ['ベンチプレス']);
+
+  await page.getByTestId('tab-record').click();
+  const list = page.getByTestId('menu-copy');
+  await expect(list).toContainText('トレーニングメニュー');
+  await expect(list).toContainText('最近の記録から');
+  await expect(list).not.toContainText('前回のメニューから始める');
+  // メニューが先頭。curated なほうを先に読ませる
+  await expect(page.getByTestId('routine-candidate')).toHaveCount(1);
+  await expect(page.getByTestId('menu-candidate')).toHaveCount(1);
+});
+
+test('未来日にはメニューの候補も出さない', async ({ page }) => {
+  // ★ ガードが日候補にしか効いていないと、まだやっていないトレーニングが
+  //   「実施済み」としてカレンダーのドット・グラフに乗る
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  await createRoutine(page, '胸の日', ['ベンチプレス']);
+
+  await page.getByTestId('tab-record').click();
+  await expect(page.getByTestId('routine-candidate')).toHaveCount(1);
+
+  // 翌月へ送って未来の日を選ぶ（月内の未来日は今日の位置に依存するため）
+  await page.getByTestId('cal-next').click();
+  await page.getByTestId('cal-day').filter({ hasText: exactText('15') }).click();
+  await expect(page.getByTestId('past-banner')).toBeVisible();
+  await expect(page.getByTestId('menu-copy')).toHaveCount(0);
+});
+
+test('メニューは編集・削除でき、削除しても記録は消えない', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  await createRoutine(page, '胸の日', ['ベンチプレス']);
+
+  // 行全体が編集の入口（開閉と編集を分けない）
+  await page.getByTestId('routine-open').click();
+  await expect(page.getByTestId('settings-sheet')).toBeVisible();
+  await page.getByTestId('routine-name-input').fill('プッシュの日');
+  await page.getByTestId('routine-pick').filter({ hasText: exactText('チェストフライ') }).click();
+  await page.getByTestId('routine-save').click();
+  await expect(page.getByTestId('routine-name')).toHaveText('プッシュの日');
+  await expect(page.getByTestId('routine-count')).toHaveText('2 種目');
+
+  // 削除は確認を挟む（組んだ並びは元に戻せない）
+  await page.getByTestId('routine-open').click();
+  await page.getByTestId('delete-routine').click();
+  await page.getByTestId('delete-routine-confirm').click();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
+  await expect(page.getByTestId('routine-item')).toHaveCount(0);
+
+  // ★ 記録は 1 件も消えない
+  await page.getByTestId('tab-record').click();
+  await expect(page.getByTestId('menu-candidate')).toHaveCount(1);
+});
+
+test('種目が 0 個のメニューは保存できない', async ({ page }) => {
+  // 記録タブに出せないので、作れても「押せない行」が設定タブに残るだけになる
+  await blurActive(page);
+  await page.getByTestId('tab-settings').click();
+  await page.getByTestId('settings-add-routine').click();
+  await page.getByTestId('routine-name-input').fill('からっぽ');
+  await page.getByTestId('routine-save').click();
+  await expect(page.getByTestId('routine-empty-warning')).toBeVisible();
+  await expect(page.getByTestId('settings-sheet')).toBeVisible();
+  await expect(page.getByTestId('routine-item')).toHaveCount(0);
+});
+
+test('全種目をアーカイブしたメニューは記録タブに出ず、設定タブに理由が出る', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'スクワット', sets: [{ weight: 80, reps: 5 }] },
+  ]);
+  await createRoutine(page, '脚の日', ['スクワット']);
+
+  await openGroup(page, '脚');
+  await page.getByTestId('exercise-name').filter({ hasText: exactText('スクワット') }).click();
+  await page.getByTestId('archive-exercise').click();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
+
+  // ★ 出ない理由が画面から読めること。無いと「作ったのに使えない」原因を探せない
+  await expect(page.getByTestId('routine-unusable')).toBeVisible();
+
+  await page.getByTestId('tab-record').click();
+  await expect(page.getByTestId('routine-candidate')).toHaveCount(0);
+});
+
+test('メニューは書き出して読み戻しても残る', async ({ page }) => {
+  await createRoutine(page, '胸の日', ['ベンチプレス', 'チェストフライ']);
+  // flushToStorage は screen-record を待つので、記録タブへ戻してから呼ぶ
+  await page.getByTestId('tab-record').click();
+  await flushToStorage(page);
+
+  const raw = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
+  const db = JSON.parse(raw);
+  expect(db.routines).toHaveLength(1);
+  expect(db.routines[0].name).toBe('胸の日');
+  expect(db.routines[0].exercises).toHaveLength(2);
+
+  // 書き出し形式 = 保存形式なので、この JSON がそのまま読み戻せる
+  await page.reload();
+  await expect(page.getByTestId('tab-settings')).toBeVisible();
+  await page.getByTestId('tab-settings').click();
+  await expect(page.getByTestId('routine-name')).toHaveText('胸の日');
+});
+
+test('メニューを 1 本も作っていない保存データは今までとバイト単位で同じ', async ({ page }) => {
+  // ★ routines を常に書くと、メニューを使わない利用者の JSON が変わる
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  await flushToStorage(page);
+
+  const raw = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
+  expect(raw).not.toContain('routines');
+});

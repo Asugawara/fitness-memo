@@ -1501,6 +1501,93 @@ h3 {
   font-size: 12px;
 }
 
+/* 「トレーニングメニュー」「種目」の節見出し。h1 の下の 1 階層だけを立てる
+   （adr/ux/focus-ring-and-heading-order.md）。上の余白を厚くして、直前の節の
+   末尾ボタンと視覚的に切る */
+.settings-section {
+  margin: 20px 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ── トレーニングメニュー（設定タブ） ───────────────────────────────────── */
+
+/* メニュー 1 本。中身は行全体を占める 1 個のボタンだけなので、.grp と同じく
+   .card の縦 padding を外してボタン側に持たせる */
+.rtn {
+  padding: 0 12px;
+}
+
+/* ★ 行全体が編集の入口。部位のように「開く」と「編集」を分けない（開いても中に
+   操作が無いのでタップが 1 つ増えるだけ）。色は .grp-toggle と揃えて --text */
+.rtn-open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+}
+
+.rtn-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.rtn-head b {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.rtn-head i {
+  flex: none;
+  font-style: normal;
+  font-size: 13px;
+}
+
+/* 種目名は溢れても行を増やさない。行の高さが揃っていないとメニューを読み比べられない
+   （.menu-cand .cand-names と同じ理由） */
+.rtn-names {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「記録タブに出ません」。出ない理由が画面から読めないと、作ったのに使えない
+   メニューの原因を探しようがない */
+.rtn-warn {
+  font-size: 12px;
+  color: var(--warn);
+}
+
+/* 編集シートの「選択中」。★ この並びがそのまま記録タブのカードの並びになるので、
+   番号を出して順序を読めるようにする（並び替えの UI は持たない — 外して入れ直すか、
+   記録タブでドラッグする） */
+.rtn-picked {
+  margin: 10px 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rtn-picked li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rtn-picked li span {
+  flex: 1;
+}
+
 /* 部位ブロック。縦の余白はヘッダ（.grp-toggle の 52px）と各行（44px）が自前で持つ
    ので、.card の 12px を左右だけに絞る。閉じた 6 行がこれで 1 画面に収まる */
 .grp {

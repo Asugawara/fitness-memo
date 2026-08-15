@@ -25,7 +25,7 @@
 
 use leptos::prelude::*;
 
-use crate::model::{Db, Exercise, ExerciseId, Group, GroupId};
+use crate::model::{Db, Exercise, ExerciseId, Group, GroupId, Routine, RoutineId};
 use crate::storage;
 
 use super::help::InstallHelpLink;
@@ -181,6 +181,56 @@ fn set_archived(db: &mut Db, id: ExerciseId, archived: bool) {
     }
 }
 
+// ── トレーニングメニュー ────────────────────────────────────────────────────
+//
+// ★ **同名を禁じない。** `core::merge_db` が「同名でも中身が違えば寄せない」と決めて
+//   いるので、同名のメニューは 2 台を混ぜれば普通に並ぶ。入口だけ塞いでも意味が無い。
+//   種目が同名を拒むのは `core::pin_presets` が「ちょうど 1 件」を要求するためで、
+//   メニューにはその制約が無い。
+
+/// ID は呼び側が採番して渡す（[`add_group`] と同じ理由 — この層は `web-sys` に触らない）。
+fn add_routine(db: &mut Db, id: RoutineId, name: String, exercises: Vec<ExerciseId>) {
+    // 末尾に足す。`Vec` の順が表示順なので `order` の付け替えは要らない
+    db.routines.push(Routine {
+        id,
+        name,
+        exercises,
+    });
+}
+
+/// 名前と種目をまとめて置き換える。**シートの「保存」1 回で 1 度だけ呼ぶ。**
+///
+/// ★ 名前だけ / 種目だけの更新に分けない。分けると保存が 2 回の `Db` 更新になり、
+///   間の 1 tick に「新しい名前 × 古い種目」という誰も入力していない状態が挟まる。
+fn set_routine(db: &mut Db, id: RoutineId, name: String, exercises: Vec<ExerciseId>) {
+    if let Some(r) = db.routines.iter_mut().find(|r| r.id == id) {
+        r.name = name;
+        r.exercises = exercises;
+    }
+}
+
+/// メニューを消す。**物理削除でよい** — これを参照する記録は 1 つも無いので、
+/// 消しても過去のログは 1 バイトも欠けない（種目のアーカイブとはここが違う）。
+fn delete_routine(db: &mut Db, id: RoutineId) {
+    db.routines.retain(|r| r.id != id);
+}
+
+/// メニュー 1 行に出す種目名。
+///
+/// ★ **アーカイブ済みも出す。** アーカイブは可逆なので、ここで隠すと「4 種目のはずが
+///   3 つしか出ない」理由が画面から読めなくなる。存在しない種目（他端末のデータを
+///   取り込むと起きる）だけは名前が引けないので落とす。
+fn routine_exercise_names(db: &Db, id: RoutineId) -> Vec<String> {
+    db.routine(id)
+        .map(|r| {
+            r.exercises
+                .iter()
+                .filter_map(|ex| db.exercise(*ex).map(|e| e.name.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 // ── シート ──────────────────────────────────────────────────────────────────
 
 /// シートで開いているもの。
@@ -193,6 +243,8 @@ enum Editor {
     NewGroup,
     Exercise(ExerciseId),
     NewExercise(GroupId),
+    Routine(RoutineId),
+    NewRoutine,
 }
 
 /// シートの見出し。閉じている（`None`）ときは空文字。
@@ -205,6 +257,8 @@ fn editor_title(target: Option<Editor>) -> &'static str {
         Some(Editor::NewGroup) => "部位を追加",
         Some(Editor::Exercise(_)) => "種目を編集",
         Some(Editor::NewExercise(_)) => "種目を追加",
+        Some(Editor::Routine(_)) => "メニューを編集",
+        Some(Editor::NewRoutine) => "メニューを追加",
         None => "",
     }
 }
@@ -258,6 +312,9 @@ pub fn Settings() -> impl IntoView {
 
     let group_ids = Memo::new(move |_| db.with(ordered_group_ids));
     let archived = Memo::new(move |_| db.with(archived_ids));
+    // メニューは `Vec` の順がそのまま表示順（`order` を持たない）
+    let routine_ids =
+        Memo::new(move |_| db.with(|d| d.routines.iter().map(|r| r.id).collect::<Vec<_>>()));
 
     view! {
         <section class="settings" data-testid="screen-settings">
@@ -291,6 +348,40 @@ pub fn Settings() -> impl IntoView {
             //   ArchivedSection の有無で縦位置も動く
             <InstallHelpLink />
 
+            // ★ 種目より**上**に置く。日々使うのはメニューのほうで、種目マスタは
+            //   6 部位 28 種目のスクロールになる。下に置くと作るたびに底まで潜ることになる
+            <h2 class="settings-section">"トレーニングメニュー"</h2>
+            <For
+                each=move || routine_ids.get()
+                key=|id| *id
+                children=move |id| view! { <RoutineBlock routine=id editor=editor /> }
+            />
+            {move || {
+                routine_ids
+                    .get()
+                    .is_empty()
+                    .then(|| {
+                        view! {
+                            <p class="settings-note muted" data-testid="routines-empty">
+                                "よくやる種目の組み合わせに名前を付けておくと、記録タブで 1 タップで呼び出せます"
+                            </p>
+                        }
+                    })
+            }}
+            <div class="grp-foot">
+                // ★ .add-wrap にしない。この画面には既に sticky の帯が 2 本
+                //   （書き出し読み込み / 部位を追加）あり、3 本目を足すと画面下端が
+                //   帯だけで埋まる。「＋ 種目を追加」と同じ .link-btn に揃える
+                <button
+                    class="link-btn"
+                    data-testid="settings-add-routine"
+                    on:click=move |_| editor.set(Some(Editor::NewRoutine))
+                >
+                    "＋ メニューを追加"
+                </button>
+            </div>
+
+            <h2 class="settings-section">"種目"</h2>
             <For
                 each=move || group_ids.get()
                 key=|id| *id
@@ -353,9 +444,75 @@ pub fn Settings() -> impl IntoView {
                                 }
                                     .into_any()
                             }
+                            Editor::Routine(id) => {
+                                view! { <RoutineEditor id=Some(id) editor=editor /> }.into_any()
+                            }
+                            Editor::NewRoutine => {
+                                view! { <RoutineEditor id=None editor=editor /> }.into_any()
+                            }
                         })
                 }}
             </Sheet>
+        </section>
+    }
+}
+
+/// メニュー 1 本ぶん。**行全体が編集シートを開くボタン。**
+///
+/// ★ 部位のようなアコーディオンにしない。部位に開閉が要るのは 28 種目を畳むためで、
+/// メニューは 4〜6 種目なので 2 段の 1 行に収まる。開いても中に操作は無いので、
+/// 「開く」と「編集」を分けるとタップが 1 つ増えるだけになる。
+#[component]
+fn RoutineBlock(routine: RoutineId, editor: RwSignal<Option<Editor>>) -> impl IntoView {
+    let db = use_db();
+
+    let name = Memo::new(move |_| {
+        db.with(|d| d.routine(routine).map(|r| r.name.clone()))
+            .unwrap_or_default()
+    });
+    let names = Memo::new(move |_| db.with(|d| routine_exercise_names(d, routine)));
+    // ★ 記録タブに出るかは `core::usable_routines` に**聞く**（同じ条件を書き写さない）。
+    //   ここで判定を複製すると、片方だけ緩んだときに「出ないのに理由が出ない」に戻る
+    let usable = Memo::new(move |_| {
+        db.with(|d| {
+            crate::core::usable_routines(d)
+                .iter()
+                .any(|c| c.id == routine)
+        })
+    });
+
+    view! {
+        <section class="card rtn" data-testid="routine-item">
+            <button
+                class="rtn-open"
+                data-testid="routine-open"
+                on:click=move |_| editor.set(Some(Editor::Routine(routine)))
+            >
+                <span class="rtn-head">
+                    <b data-testid="routine-name">
+                        {move || {
+                            let n = name.get();
+                            if n.trim().is_empty() { "（名前なし）".to_string() } else { n }
+                        }}
+                    </b>
+                    <i class="muted" data-testid="routine-count">
+                        {move || format!("{} 種目", names.get().len())}
+                    </i>
+                </span>
+                <span class="rtn-names muted" data-testid="routine-names">
+                    {move || names.get().join(", ")}
+                </span>
+                {move || {
+                    (!usable.get())
+                        .then(|| {
+                            view! {
+                                <span class="rtn-warn" data-testid="routine-unusable">
+                                    "使える種目がないため記録タブに出ません"
+                                </span>
+                            }
+                        })
+                }}
+            </button>
         </section>
     }
 }
@@ -927,5 +1084,231 @@ fn NewExerciseEditor(
                 "追加"
             </button>
         </div>
+    }
+}
+
+/// メニューの追加と編集。`id` が `None` なら新規。
+///
+/// ★ **追加と編集で 1 コンポーネントにする。** 違いは「初期値」と「削除ボタンの有無」
+/// だけで、種目ピッカーという一番大きい部分が同じ。分けると片方だけ直る事故が起きる。
+///
+/// ★ **編集中の値は `Db` に書かず、ここのシグナルに持つ。** 1 タップごとに `Db` へ
+/// 書くと、一覧（`RoutineBlock`）が作り直されるうえ、シートを閉じても取り消せない。
+/// `Db` に触るのは「保存」と「削除」の 2 か所だけ。
+///
+/// ★ シートは常時マウントだが、このコンポーネント自体は `editor` の値で作り直される
+/// （`Sheet` の中の `editor.get().map(..)`）ので、`with_untracked` で初期値を読んでよい。
+#[component]
+fn RoutineEditor(id: Option<RoutineId>, editor: RwSignal<Option<Editor>>) -> impl IntoView {
+    let db = use_db();
+    let kb = use_kb();
+
+    let (name0, picked0) = id
+        .and_then(|id| {
+            db.with_untracked(|d| d.routine(id).map(|r| (r.name.clone(), r.exercises.clone())))
+        })
+        .unwrap_or_default();
+
+    let name = RwSignal::new(name0);
+    // ★ タップ順を保つ。この並びがそのまま記録タブのカードの並びになる
+    let picked: RwSignal<Vec<ExerciseId>> = RwSignal::new(picked0);
+    let empty = RwSignal::new(false);
+    let confirming = RwSignal::new(false);
+
+    let toggle = move |ex: ExerciseId| {
+        picked.update(|p| match p.iter().position(|x| *x == ex) {
+            Some(i) => {
+                p.remove(i);
+            }
+            None => p.push(ex),
+        });
+        empty.set(false);
+    };
+
+    let save = move |_| {
+        let value = name.get_untracked().trim().to_string();
+        let list = picked.get_untracked();
+        // ★ 種目が 0 個のメニューは保存させない。記録タブに出せないので、作れても
+        //   「押せない行」が設定タブに残るだけになる（名前だけの状態を `normalize` が
+        //   残すのは、既にあるデータを消さないためであって、新しく作るためではない）
+        if list.is_empty() {
+            empty.set(true);
+            return;
+        }
+        match id {
+            Some(id) => db.update(move |d| set_routine(d, id, value, list)),
+            None => {
+                let new_id = storage::alloc_id();
+                db.update(move |d| add_routine(d, new_id, value, list));
+            }
+        }
+        editor.set(None);
+    };
+
+    view! {
+        <label class="field">
+            <span>"メニュー名"</span>
+            <input
+                class="text-input"
+                type="text"
+                data-testid="routine-name-input"
+                prop:value=move || name.get()
+                on:focusin=move |_| kb_focus(kb)
+                on:focusout=move |_| kb_blur(kb)
+                on:input=move |ev| name.set(event_target_value(&ev))
+            />
+        </label>
+
+        // 選んだ種目を**タップ順で**並べる。ここが記録タブでのカードの並びになるので、
+        // 順番が見えないと「どういう順で出るか」が保存するまで分からない
+        {move || {
+            let list = picked.get();
+            (!list.is_empty())
+                .then(|| {
+                    view! {
+                        <ol class="rtn-picked" data-testid="routine-picked">
+                            {list
+                                .into_iter()
+                                .map(|ex| {
+                                    let label = db
+                                        .with(|d| d.exercise(ex).map(|e| e.name.clone()))
+                                        .unwrap_or_else(|| "（削除された種目）".to_string());
+                                    view! {
+                                        <li>
+                                            <span>{label.clone()}</span>
+                                            <button
+                                                class="icon-btn"
+                                                aria-label=format!("{label} を外す")
+                                                data-testid="routine-remove"
+                                                on:click=move |_| toggle(ex)
+                                            >
+                                                {icon(icon::X)}
+                                            </button>
+                                        </li>
+                                    }
+                                })
+                                .collect::<Vec<_>>()}
+                        </ol>
+                    }
+                })
+        }}
+
+        {move || {
+            empty
+                .get()
+                .then(|| {
+                    view! {
+                        <div class="warn-box">
+                            <p data-testid="routine-empty-warning">"種目を 1 つ以上選んでください"</p>
+                        </div>
+                    }
+                })
+        }}
+
+        // 記録タブの「種目を追加」シートと同じ部位ごとの一覧。押すと選択が入れ替わる。
+        // ★ アーカイブ済みは出さない（あちらと同じ規則）。既にメニューへ入っている
+        //   アーカイブ済み種目は上の「選択中」に出るので、外すことはできる
+        {move || {
+            db.with(|d| {
+                let mut groups = d.groups.clone();
+                groups.sort_by_key(|g| g.order);
+                groups
+                    .into_iter()
+                    .map(|g| {
+                        let mut exercises: Vec<_> = d
+                            .exercises
+                            .iter()
+                            .filter(|e| e.group_id == g.id && !e.archived)
+                            .cloned()
+                            .collect();
+                        exercises.sort_by_key(|e| e.order);
+                        view! {
+                            <section class="sheet-group">
+                                <h3 style=format!("--dot:{}", g.color)>{g.name}</h3>
+                                <div class="pick-list">
+                                    {exercises
+                                        .into_iter()
+                                        .map(|e| {
+                                            let ex = e.id;
+                                            view! {
+                                                <button
+                                                    class="pick"
+                                                    class:added=move || {
+                                                        picked.with(|p| p.contains(&ex))
+                                                    }
+                                                    data-testid="routine-pick"
+                                                    on:click=move |_| toggle(ex)
+                                                >
+                                                    {e.name}
+                                                </button>
+                                            }
+                                        })
+                                        .collect::<Vec<_>>()}
+                                </div>
+                            </section>
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+        }}
+
+        <div class="sheet-actions">
+            <button class="primary" data-testid="routine-save" on:click=save>
+                "保存"
+            </button>
+        </div>
+
+        {move || {
+            id.map(|id| {
+                view! {
+                    <div class="sheet-actions">
+                        // 破壊的操作は静止時に警告色を持たない（adr/ux/destructive-affordance-quiet-at-rest.md）
+                        <button
+                            class="link-btn danger"
+                            data-testid="delete-routine"
+                            on:click=move |_| confirming.set(true)
+                        >
+                            "このメニューを削除"
+                        </button>
+                    </div>
+                    // ★ 確認を挟む。組んだ種目の並びは元に戻せず、undo も無い
+                    //   （セット削除に確認が無いのは 1 行だけの損失だから。
+                    //   adr/ux/set-delete-without-confirmation.md）。部位削除と同じ形にする
+                    {move || {
+                        confirming
+                            .get()
+                            .then(|| {
+                                view! {
+                                    <div class="warn-box">
+                                        <p>"このメニューを削除します"</p>
+                                        // 一番怖いのは「記録も消えるのでは」なので先に否定する
+                                        <p class="muted">
+                                            "記録は 1 件も消えません（メニューは種目の組み合わせを覚えているだけです）"
+                                        </p>
+                                        <div class="sheet-actions">
+                                            <button
+                                                class="primary"
+                                                data-testid="delete-routine-confirm"
+                                                on:click=move |_| {
+                                                    db.update(move |d| delete_routine(d, id));
+                                                    editor.set(None);
+                                                }
+                                            >
+                                                "削除する"
+                                            </button>
+                                            <button
+                                                class="link-btn"
+                                                on:click=move |_| confirming.set(false)
+                                            >
+                                                "やめる"
+                                            </button>
+                                        </div>
+                                    </div>
+                                }
+                            })
+                    }}
+                }
+            })
+        }}
     }
 }

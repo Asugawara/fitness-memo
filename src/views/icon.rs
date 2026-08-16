@@ -29,6 +29,12 @@ pub const CHEVRON_RIGHT: &str = include_str!("../../assets/icons/chevron-right.s
 pub const CHEVRON_LEFT: &str = include_str!("../../assets/icons/chevron-left.svg");
 pub const PENCIL: &str = include_str!("../../assets/icons/pencil.svg");
 pub const X: &str = include_str!("../../assets/icons/x.svg");
+/// エクスポート（端末の外へ出す）。★ 矢印の向きが上下で対になるので [`DOWNLOAD`] と
+/// 並べたとき 20px でも区別が付く。`file-output` / `file-input` の対は横矢印どうしで
+/// 紛らわしい
+pub const UPLOAD: &str = include_str!("../../assets/icons/upload.svg");
+/// インポート（アプリの中へ取り込む）。
+pub const DOWNLOAD: &str = include_str!("../../assets/icons/download.svg");
 
 /// アイコン 1 個。
 ///

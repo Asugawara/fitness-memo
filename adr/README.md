@@ -49,12 +49,14 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 
 | タイトル | 状態 |
 |---|---|
-| [localStorage の単一キーに JSON 全体を持つ](storage/localstorage-single-key-json.md) | 採用（容量超過の握りつぶしは撤回） |
-| [パース失敗時は上書きせず退避する](storage/quarantine-on-parse-failure.md) | 採用 |
+| [localStorage の単一キーに JSON 全体を持つ](storage/localstorage-single-key-json.md) | 採用（容量超過の握りつぶしと「保存形式 = 書き出し形式」は撤回） |
+| [パース失敗時は上書きせず退避する](storage/quarantine-on-parse-failure.md) | 採用（UI からの救出導線は撤回） |
 | [`visibilitychange` の hidden で debounce を flush する](storage/flush-on-visibilitychange.md) | 採用 |
 | [JSON エクスポート/インポートを v1 に入れない](storage/defer-export-import.md) | 履行済み → [書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない](storage/share-sheet-over-download.md) |
 | [保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す](storage/storage-key-per-schema-generation.md) | 採用 |
-| [書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない](storage/share-sheet-over-download.md) | 採用 |
+| [書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない](storage/share-sheet-over-download.md) | 採用（textarea の常設は撤回） |
+| [書き出しを TSV にし、保存形式（JSON）と分ける](storage/tsv-export-for-spreadsheets.md) | 採用 |
+| [取り込みは「足すだけ」に固定する](storage/import-is-merge-only.md) | 採用 |
 | [同一オリジン内の多層バックアップを採用しない](storage/no-same-origin-redundancy.md) | 採用 |
 | [UI の状態を `Db` に入れず別キーに置く](storage/ui-state-in-separate-key.md) | 採用 |
 
@@ -84,7 +86,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](ux/destructive-affordance-quiet-at-rest.md) | 採用 |
 | [体重を推移グラフの第2軸に常時重ねる](ux/body-weight-second-axis-always-on.md) | 採用 |
 | [セット削除は確認を挟まない（カード削除の確認は残す）](ux/set-delete-without-confirmation.md) | 採用 |
-| [`color-scheme` を宣言し、クラスなしの `<button>` を作らない](ux/declare-color-scheme-for-ua-widgets.md) | 採用 |
+| [`color-scheme` を宣言し、クラスなしの `<button>` を作らない](ux/declare-color-scheme-for-ua-widgets.md) | 採用（`input[type=file]` は受益者から外れた） |
 | [シートをネイティブ `<dialog>` にし、手動の重なり順から降りる](ux/native-dialog-for-sheets.md) | 採用 |
 | [タブ切替に方向つき View Transition を掛ける](ux/directional-tab-transitions.md) | 破棄（0.2s の演出が視線を取るので当日撤去。切替は即時） |
 | [フォーカスリングを明示し、記録タブの見出しを 1 本の階層にする](ux/focus-ring-and-heading-order.md) | 採用 |
@@ -95,6 +97,8 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) | 採用（メニューを作る導線は [その日の記録から直接メニューを作れるようにする](ux/save-a-day-as-a-routine.md)、画面構成は [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](ux/settings-as-a-list-of-sections.md) で拡張） |
 | [その日の記録から直接メニューを作れるようにする](ux/save-a-day-as-a-routine.md) | 採用 |
 | [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](ux/settings-as-a-list-of-sections.md) | 採用 |
+| [書き出し / 読み込みを 1 画面に畳み、逃げ道 UI を常設しない](ux/one-screen-export-import.md) | 採用 |
+| [`<input type="file">` を視覚的に隠し、ボタンから `click()` する](ux/hidden-file-input-behind-a-button.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

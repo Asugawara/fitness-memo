@@ -17,6 +17,9 @@
 //! - **`<input type="file">` に `accept` を付けない。** iOS の `accept` は壊れていて
 //!   （rdar://36726477）、最初の型しか効かず残りがピッカーで灰色になる。iCloud Drive
 //!   経由だとさらに悪化する。種別の検証は `core::parse_import` がやる
+//! - **ファイル名と MIME は必ず組で渡す。** iOS の UTType は `File.type` ではなく
+//!   **拡張子**から決まるので、片方だけ合わせても意味が無い。`can_share_file` の
+//!   プローブも本番と同じ拡張子・同じ MIME にしておく（違う型で可否を判定しない）
 
 use leptos::prelude::*;
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
@@ -67,7 +70,9 @@ pub fn can_share_file() -> bool {
     if !has("share") || !has("canShare") {
         return false;
     }
-    let Some(probe) = make_file("probe.json", "0") else {
+    // ★ 本番と同じ拡張子・同じ MIME で試す。違う型で可否を判定すると、
+    //   「共有できると判定して実際は出せない」が起きる
+    let Some(probe) = make_file("probe.tsv", "0", crate::core::TSV_MIME) else {
         return false;
     };
     let data = web_sys::ShareData::new();
@@ -75,10 +80,10 @@ pub fn can_share_file() -> bool {
     nav.can_share_with_data(&data)
 }
 
-fn make_file(name: &str, json: &str) -> Option<JsValue> {
-    let parts = js_sys::Array::of1(&JsValue::from_str(json));
+fn make_file(name: &str, body: &str, mime: &str) -> Option<JsValue> {
+    let parts = js_sys::Array::of1(&JsValue::from_str(body));
     let opts = web_sys::FilePropertyBag::new();
-    opts.set_type("application/json");
+    opts.set_type(mime);
     web_sys::File::new_with_str_sequence_and_options(&parts, name, &opts)
         .ok()
         .map(Into::into)
@@ -88,8 +93,8 @@ fn make_file(name: &str, json: &str) -> Option<JsValue> {
 ///
 /// `done` は成否で呼ばれる。`AbortError`（利用者がキャンセルした）は**失敗ではない** —
 /// ここで「保存した」扱いにすると、実際には保存していないのに催促が止まる。
-pub fn share_file(name: &str, json: &str, done: impl FnOnce(ShareOutcome) + 'static) {
-    let Some(file) = make_file(name, json) else {
+pub fn share_file(name: &str, body: &str, mime: &str, done: impl FnOnce(ShareOutcome) + 'static) {
+    let Some(file) = make_file(name, body, mime) else {
         done(ShareOutcome::Failed);
         return;
     };
@@ -142,10 +147,10 @@ pub enum ShareOutcome {
 }
 
 /// `<a download>` でファイルを落とす。**iOS では呼ばない**（[`pick_route`] 参照）。
-pub fn download_file(name: &str, json: &str) {
-    let parts = js_sys::Array::of1(&JsValue::from_str(json));
+pub fn download_file(name: &str, body: &str, mime: &str) {
+    let parts = js_sys::Array::of1(&JsValue::from_str(body));
     let opts = web_sys::BlobPropertyBag::new();
-    opts.set_type("application/json");
+    opts.set_type(mime);
     let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&parts, &opts) else {
         return;
     };
@@ -203,11 +208,18 @@ pub fn copy_text(text: &str, done: impl FnOnce(bool) + 'static) {
 }
 
 /// 選択されたファイルを読む。読み込みにジェスチャは要らないので非同期でよい。
+///
+/// ★ **読み終えたら `value` を空にする。** 空にしないと、同じファイルをもう一度選んでも
+/// `change` が飛ばない（値が変わっていないため）。「確認画面でやめる → もう一度同じ
+/// ファイル」は普通に踏む操作で、そのとき**何も起きないのに理由が画面に出ない**。
+/// `files()` は同期で掴んでから空にするので、読み出し自体には影響しない。
 pub fn read_file_text(
     input: &web_sys::HtmlInputElement,
     done: impl FnOnce(Option<String>) + 'static,
 ) {
-    let Some(file) = input.files().and_then(|list| list.get(0)) else {
+    let picked = input.files().and_then(|list| list.get(0));
+    input.set_value("");
+    let Some(file) = picked else {
         done(None);
         return;
     };

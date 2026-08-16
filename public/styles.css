@@ -6,9 +6,11 @@
      UA が描く**背景**（ButtonFace ≈ #efefef）はこの宣言が無いとライトのまま
      取り残される。ダークでは文字が --text = #eceef1 になり、コントラストが
      1.01:1 になって消える。効く先は自前で色を持たないもの全部 —
-     input[type=file] の「ファイルを選択」、select のネイティブピッカー、
-     スクロールバー。自前で background を持つ入力欄（.text-input /
-     .cond-fields input / .target-select / .json-box）は見た目が変わらない。 */
+     select のネイティブピッカーとスクロールバー。自前で background を持つ入力欄
+     （.text-input / .cond-fields input / .target-select）は見た目が変わらない。
+     ★ input[type=file] の「ファイルを選択」も受益者だったが、書き出し / 読み込みの
+     input を隠してボタンから開く形にしたので外れた
+     （adr/ux/hidden-file-input-behind-a-button.md）。宣言自体は残りの 2 つに要る。 */
   color-scheme: light dark;
 
   --bg: #f7f7f8;
@@ -2025,51 +2027,44 @@ h3 {
 
 /* ── データの書き出し / 読み込み ─────────────────────────────────────────── */
 
-/* JSON 全文。★ 上の `input { font-size: 16px }` は textarea に効かない。
-   16px 未満だと iOS がフォーカス時にページごとズームする */
-.json-box {
-  width: 100%;
-  min-height: 160px;
-  margin: 8px 0 0;
-  padding: 8px 10px;
-  font-size: 16px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  line-height: 1.4;
-  color: inherit;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  /* 折り返さないと 1 行が極端に長くなり、長押し選択がしづらい */
-  white-space: pre-wrap;
-  word-break: break-all;
-  box-sizing: border-box;
-}
+/* 視覚的に隠した <input type="file">。ボタンから click() で開く
+   （adr/ux/hidden-file-input-behind-a-button.md）。
 
-/* 「うまくいかないとき」「貼り付けで読み込む」の折りたたみ */
-.sheet-body details {
-  margin: 10px 0 0;
-}
-
-.sheet-body summary {
-  padding: 6px 0;
-  color: var(--muted);
-  font-size: 14px;
-  cursor: pointer;
-}
-
-.sheet-body input[type="file"] {
-  width: 100%;
-  margin: 8px 0 0;
-  font-size: 16px;
-}
-
-.backup-list {
-  margin: 6px 0 0;
+   ★ display:none にしない。iOS では「レイアウトツリーに無い input への click()」が
+   無視された報告があり、しかも click() は成否を返さないので検知できない
+   （<a download> を却下したのと同じ性質の危険）。1px 残せばこのリスクごと消える。
+   Playwright の setInputFiles も attached しか要求しないので、隠したままで動く */
+.file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
   padding: 0;
-  list-style: none;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
-.backup-list li {
-  padding: 8px 0;
+/* 書き出しと読み込みの境。1 画面に 2 つ並べるので、罫線 1 本で役割を分ける */
+.backup-split {
+  margin-top: 14px;
+  padding-top: 14px;
   border-top: 1px solid var(--line);
+}
+
+/* この画面のボタンは 1 行に 1 つなので、横幅いっぱいまで伸ばして押しやすくする。
+   ★ アイコンと文字を並べるので inline-flex にする。既定の inline のままだと
+   .icon（inline-flex の 20px 箱）がベースラインに載って文字と縦位置がずれる */
+.sheet-actions .wide {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* ★ 衝突メッセージは \n で連結される。.settings-note は white-space を指定していないので、
+   これが無いと複数行が 1 行に潰れて読めない（取り込みが「足すだけ」固定になり、
+   Conflict の全バリアントが常時ありうるようになったので、ここで効くようになった） */
+.backup-note {
+  white-space: pre-line;
 }

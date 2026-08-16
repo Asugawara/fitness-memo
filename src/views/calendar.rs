@@ -23,6 +23,7 @@ use crate::model::{Db, Group, GroupId, Session};
 use super::day::DayEditor;
 use super::help::InstallBanner;
 use super::icon::{self, icon};
+use super::routine::SaveDayAsRoutine;
 use super::{fmt_metric, use_dates, use_db};
 
 /// 日曜始まり。`Weekday::num_days_from_sunday()` の 0..=6 とインデックスが一致する。
@@ -265,6 +266,11 @@ pub fn Calendar() -> impl IntoView {
             //   日をタップした時点でここがその日のものになるので、記録がある日も無い日も
             //   同じ 1 手で書ける（要件「カレンダーに対して追加できる」の成立点）
             <DayEditor />
+
+            // ★ ここも `DayEditor` の**外**（理由は下の `InstallBanner` と同じ — `.day` の
+            //   中に置くと「種目を追加」の sticky な帯に覆われて押せない）。
+            //   記録の動線より下に流すのも同じ理由（adr/ux/save-a-day-as-a-routine.md）
+            <SaveDayAsRoutine />
 
             // ★ iOS では Safari のタブと standalone PWA で localStorage が共有されない。
             //   先に Safari で記録すると、ホーム画面に追加した後で全部見えなくなる。

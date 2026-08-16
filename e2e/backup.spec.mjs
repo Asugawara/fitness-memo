@@ -9,13 +9,13 @@ import { expect, test } from '@playwright/test';
 
 const KEY = 'fitness-memo/v3';
 
-/** 種目タブを開いてバックアップシートを出す。 */
+/** 設定タブを開いてバックアップシートを出す。 */
 async function openSheet(page) {
   await page.goto('./');
   // ★ 初回起動直後は 400ms の debounce 保存がまだ走っていない。ここを待たないと
   //   localStorage が空のままで、控え（.pre-）も取れない状態を見ることになる
   await page.waitForFunction((k) => !!localStorage.getItem(k), KEY);
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   await page.getByTestId('open-backup').click();
   await expect(page.getByTestId('backup-sheet')).toBeVisible();
 }
@@ -215,7 +215,7 @@ test('保存できなくなったら黙って動き続けず警告を出す', as
   await page.goto('./');
 
   // 何か入力して保存を走らせる（debounce 400ms + flush）
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   await page.getByTestId('open-backup').click();
   await page.getByTestId('backup-sheet-close').click();
   await page.evaluate(() => {

@@ -8,21 +8,26 @@
 //! と同じ分担で、`core` が `Db` を、`chart_layout` がグラフの寸法を、ここが並びの寸法を知る。
 //! **`Db` も leptos も web-sys も知らない。**
 //!
-//! ## 座標は document 基準
+//! ## 座標はスクロール容器の内容基準
 //!
-//! [`Slot::top`] は `getBoundingClientRect().top + scrollY`。viewport 基準にしないのは、
-//! iOS が慣性スクロール中の `pointerdown` で `pointercancel` を送らないことがあり、
-//! ドラッグ中にページが動くと viewport 基準のスナップショットが陳腐化するから。
-//! document 基準なら毎 `pointermove` で `scrollY` を足し直すだけで整合が保てる。
+//! [`Slot::top`] は `getBoundingClientRect().top + 容器のスクロール量`。viewport 基準に
+//! しないのは、iOS が慣性スクロール中の `pointerdown` で `pointercancel` を送らないことが
+//! あり、ドラッグ中に容器が動くと viewport 基準のスナップショットが陳腐化するから。
+//! 内容基準なら毎 `pointermove` でスクロール量を足し直すだけで整合が保てる。
+//!
+//! 容器はページ全体とは限らない。記録タブは `window` だが、メニュー編集シートの
+//! 「選択中」は `.sheet-body`（`overflow-y: auto`）の中にある。**どちらのスクロール量を
+//! 足すかは `views::drag::Scroller` が決める** — このモジュールは「何かのスクロール量が
+//! 足してある」ことだけを前提にする。
 
-/// 画面端の自動スクロールの帯の厚み。[`edge_scroll_step`] の立ち上がりの分母。
+/// 画面端の自動スクロールの帯の厚み。[`edge_scroll_step`] の立ち上がりの分母で、
+/// [`edge_band`] が容器の上下端から内側の縁を出すのに使う幅でもある。
 ///
-/// 呼び側は「帯の内側の縁」を渡す（上は `EDGE_BAND`、下は
-/// `innerHeight - タブバー - EDGE_BAND`）。72px は 44px のタップ標的より一回り大きく、
-/// 指がそこに入ったのが偶然ではないと言える幅。
+/// 72px は 44px のタップ標的より一回り大きく、指がそこに入ったのが偶然ではないと
+/// 言える幅。
 pub const EDGE_BAND: f64 = 72.0;
 
-/// 並びの 1 要素が占める箱。**document 座標**（`rect.top + scrollY`）。
+/// 並びの 1 要素が占める箱。**スクロール容器の内容座標**（`rect.top + スクロール量`）。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Slot {
     pub top: f64,
@@ -187,7 +192,8 @@ pub fn move_item<T>(v: &mut [T], from: usize, to: usize) {
 /// 並び替えの途中で、模型上 `i` 番目の要素が**画面で何番目に見えているか**。
 ///
 /// ドラッグ中は `Vec` を入れ替えないので、模型の添字と見えている位置がずれる。
-/// セット行の番号（`.set-no`）はこれを通してから描く。通さないと、掴んだ行が
+/// セット行の番号（`.set-no`）とメニューの「選択中」の番号（`.rtn-no`）はこれを
+/// 通してから描く。通さないと、掴んだ行が
 /// 2 番目に見えているのに「1」と書いてあるという状態になり、**その番号が順番だという
 /// 前提そのもの**（この機能が番号をハンドルにした理由）が指を離すまで嘘になる。
 /// これを通せば、掴んだ番号が中点を越えた瞬間に変わり、落ちる先が先に読める。
@@ -233,6 +239,28 @@ pub fn edge_scroll_step(client_y: f64, top: f64, bottom: f64, max_step: f64) -> 
         max_step * ((client_y - bottom) / EDGE_BAND).clamp(0.0, 1.0)
     } else {
         0.0
+    }
+}
+
+/// スクロール容器の上下端（viewport 座標）から、帯の**内側の縁**を決める。
+/// 返り値をそのまま [`edge_scroll_step`] の `top` / `bottom` に渡す。
+///
+/// ★ **容器が `2 * EDGE_BAND` より低いと上下の帯が重なる。** そのまま渡すと
+/// `top > bottom` になり、[`edge_scroll_step`] は `client_y < top` を先に見るので
+/// **容器のどこに指を置いても上へスクロールし続ける**。ページ全体（約 760px）では
+/// 起きないが、シートの `.sheet-body` は `max-height: 78vh` から見出しを引いた高さなので、
+/// 横向きや小さい端末で 144px を割りうる。重なるときは容器の中央で分ける
+/// （上半分は上へ / 下半分は下へ、中央でちょうど 0）。
+///
+/// ★ この式を `views` に書かないこと。あちらは wasm32 の cfg gate の内側にあって
+/// ホストの `cargo test` が一度も触れない（このモジュールの存在理由）。
+pub fn edge_band(top: f64, bottom: f64) -> (f64, f64) {
+    let (inner_top, inner_bottom) = (top + EDGE_BAND, bottom - EDGE_BAND);
+    if inner_bottom < inner_top {
+        let mid = (top + bottom) / 2.0;
+        (mid, mid)
+    } else {
+        (inner_top, inner_bottom)
     }
 }
 
@@ -601,5 +629,43 @@ mod tests {
     #[test]
     fn the_edge_scroll_is_zero_for_a_non_numeric_position() {
         assert_eq!(edge_scroll_step(f64::NAN, 72.0, 700.0, 12.0), 0.0);
+    }
+
+    // ── edge_band ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn the_band_edges_are_one_band_inside_a_tall_container() {
+        assert_eq!(edge_band(0.0, 760.0), (72.0, 688.0));
+        // シートの `.sheet-body`（下端に貼るので top が大きい）でも同じ
+        assert_eq!(edge_band(200.0, 700.0), (272.0, 628.0));
+    }
+
+    #[test]
+    fn a_short_container_splits_at_its_middle_instead_of_inverting() {
+        // ★ ここが崩れると「容器のどこに指を置いても上へスクロールし続ける」になる。
+        //   2 * EDGE_BAND = 144px を割る容器で必ず通る
+        let (top, bottom) = edge_band(100.0, 200.0);
+        assert_eq!((top, bottom), (150.0, 150.0));
+        assert!(top <= bottom, "帯の縁が反転しない");
+        assert!(
+            edge_scroll_step(150.0, top, bottom, 12.0) == 0.0,
+            "中央では止まる"
+        );
+        assert!(
+            edge_scroll_step(110.0, top, bottom, 12.0) < 0.0,
+            "上半分は上へ"
+        );
+        assert!(
+            edge_scroll_step(190.0, top, bottom, 12.0) > 0.0,
+            "下半分は下へ"
+        );
+    }
+
+    #[test]
+    fn the_band_edges_never_invert_for_any_container_height() {
+        for h in [0.0, 1.0, 72.0, 143.0, 144.0, 145.0, 500.0] {
+            let (top, bottom) = edge_band(10.0, 10.0 + h);
+            assert!(top <= bottom, "h = {h}");
+        }
     }
 }

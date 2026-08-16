@@ -4,6 +4,7 @@ pub mod backup;
 pub mod calendar;
 pub mod chart;
 pub mod day;
+pub mod drag;
 pub mod help;
 pub mod icon;
 pub mod progress;
@@ -310,38 +311,6 @@ pub fn scroll_into_view_if_needed(element_id: String) {
     });
 }
 
-// ── 並び替えの実測（adr/ux/drag-to-reorder-in-record-tab.md）────────────────
-
-/// 現在の縦スクロール量。viewport 座標を document 座標へ直すのに使う。
-pub fn scroll_y() -> f64 {
-    window().scroll_y().unwrap_or(0.0)
-}
-
-/// 指定 id の要素群を **document 座標**で測る。
-///
-/// 1 つでも見つからなければ `None` を返し、呼び側はドラッグを始めない。欠けた箱で
-/// 幾何を組むと、押しのけ量が 1 つずれた並びが「それらしく」動いてしまう。
-///
-/// ★ viewport 座標にしない。iOS は慣性スクロール中の `pointerdown` で `pointercancel` を
-/// 送らないことがあり、ドラッグ中にページが動くと viewport 基準のスナップショットは
-/// 陳腐化する。document 基準なら毎 `pointermove` で [`scroll_y`] を足し直すだけで
-/// 整合が保てる（[`crate::reorder`] のモジュール doc）。
-///
-/// ★ 呼ぶのは掴んだ 1 回だけ。`pointermove` から呼ぶとレイアウトを 60Hz で強制同期させる。
-pub fn measure_slots(ids: &[String]) -> Option<crate::reorder::Slots> {
-    let sy = scroll_y();
-    let doc = document();
-    let mut slots = Vec::with_capacity(ids.len());
-    for id in ids {
-        let rect = doc.get_element_by_id(id)?.get_bounding_client_rect();
-        slots.push(crate::reorder::Slot {
-            top: rect.top() + sy,
-            height: rect.height(),
-        });
-    }
-    Some(crate::reorder::Slots::new(slots))
-}
-
 // ── ボトムシート ────────────────────────────────────────────────────────────
 
 /// 下から上がるシート。種目を追加 / 種目の編集 / ホーム画面に追加 / 書き出し読み込みの
@@ -501,7 +470,15 @@ pub fn Sheet(
                     {icon(icon::X)}
                 </button>
             </header>
-            <div class="sheet-body">{children()}</div>
+            // ★ **id を振る。** `.sheet-body` は `overflow-y: auto` の入れ子のスクロール
+            //   容器で、この中でドラッグする画面（`views::routine` の「選択中」）は
+            //   `window().scroll_y()` ではなくここの `scrollTop` を読む必要がある
+            //   （`views::drag::Scroller`）。シートは全部常時マウントなので id は
+            //   衝突してはならず、`testid` が既にシートごとに一意なのでそれを使う。
+            //   `Scroller::of` は `closest(".sheet-body")` で辿ってこの id を拾う
+            <div class="sheet-body" id=format!("{testid}-body")>
+                {children()}
+            </div>
         </dialog>
     }
 }

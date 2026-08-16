@@ -456,12 +456,12 @@ test.describe('ストレージが分かれうる環境（iPhone の UA）', () =
   });
 
   // adr/ux/install-guide-banner-and-sheet.md が「消しても手順自体は失われない」ことを ✕ を入れる条件にしているので固定する
-  test('✕ で消しても種目タブから手順シートを開ける', async ({ page }) => {
+  test('✕ で消しても設定タブから手順シートを開ける', async ({ page }) => {
     await page.goto('./');
     await page.getByTestId('install-hint-dismiss').click();
     await expect(page.getByTestId('install-hint')).toHaveCount(0);
 
-    await page.getByTestId('tab-menu').click();
+    await page.getByTestId('tab-settings').click();
     await page.getByTestId('install-help-link').click();
 
     await expect(page.getByTestId('install-sheet')).toBeVisible();
@@ -541,9 +541,9 @@ test.describe('ストレージが分かれない環境（Android の UA）', () 
     await expect(page.getByTestId('install-hint')).toHaveCount(0);
   });
 
-  test('種目タブの導線は残り、同じシートが開く', async ({ page }) => {
+  test('設定タブの導線は残り、同じシートが開く', async ({ page }) => {
     await page.goto('./');
-    await page.getByTestId('tab-menu').click();
+    await page.getByTestId('tab-settings').click();
     await page.getByTestId('install-help-link').click();
 
     await expect(page.getByTestId('install-sheet')).toBeVisible();

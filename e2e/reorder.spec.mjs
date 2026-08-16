@@ -576,8 +576,8 @@ test('★ 掴んだままタブを切り替えてもアプリが落ちない', a
   let box = await head.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.getByTestId('tab-menu').dispatchEvent('click');
-  await expect(page.getByTestId('screen-menu')).toBeVisible();
+  await page.getByTestId('tab-settings').dispatchEvent('click');
+  await expect(page.getByTestId('screen-settings')).toBeVisible();
   await page.mouse.up();
 
   await page.getByTestId('tab-record').dispatchEvent('click');
@@ -589,8 +589,8 @@ test('★ 掴んだままタブを切り替えてもアプリが落ちない', a
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await expect(push).toHaveAttribute('data-drag', 'lift');
-  await page.getByTestId('tab-menu').dispatchEvent('click');
-  await expect(page.getByTestId('screen-menu')).toBeVisible();
+  await page.getByTestId('tab-settings').dispatchEvent('click');
+  await expect(page.getByTestId('screen-settings')).toBeVisible();
   await page.mouse.up();
 
   await page.getByTestId('tab-record').dispatchEvent('click');

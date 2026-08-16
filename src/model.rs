@@ -22,10 +22,17 @@ use serde::{Deserialize, Serialize};
 ///
 /// ★ フィールドを消す変更は前方互換を壊す（旧版の serde が `missing field` で
 /// 拒否する）。schema を上げるときは `storage::KEY` も必ず切ること。
+///
+/// ★ 逆に **`#[serde(default)]` を持つフィールドの追加では上げない**。旧版は
+/// `deny_unknown_fields` を付けていないので未知フィールドを黙って無視し、`migrate` が
+/// `Err` を返さないので退避パスにも落ちない。[`SetEntry::note`] / [`ExerciseLog::note`] /
+/// [`Db::routines`] がこれで通っている。ここで上げると逆に旧版が
+/// `RestoreError::Unsupported` で退避するので、**前方互換を積極的に壊す側になる**。
 pub const SCHEMA: u32 = 3;
 
 pub type GroupId = Id<GroupTag>;
 pub type ExerciseId = Id<ExerciseTag>;
+pub type RoutineId = Id<RoutineTag>;
 
 // ── ID ──────────────────────────────────────────────────────────────────────
 //
@@ -67,6 +74,10 @@ pub struct GroupTag;
 /// 種目 ID のタグ。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct ExerciseTag;
+
+/// トレーニングメニュー ID のタグ。
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct RoutineTag;
 
 impl<T> Id<T> {
     /// 予約領域の固定 ID を書くための入口。`const` なので `presets.rs` の定数に使える。
@@ -228,6 +239,46 @@ pub struct Exercise {
     pub archived: bool,
 }
 
+/// 名前付きの種目リスト。**UI では「トレーニングメニュー」**。
+///
+/// ★ 型名を `Menu` にしない。このリポジトリでは「メニュー」が既に 2 つの意味で
+/// 使われている（設定タブの [`crate::views::settings`] と、過去の日の種目構成を指す
+/// [`crate::core::MenuCandidate`] / `recent_menus`）。3 つ目を同じ語に載せると、
+/// どの「メニュー」の話をしているのかコードから読めなくなる。
+///
+/// ★ **セットの重量・回数を持たない。** 数値は展開時に種目ごとの
+/// [`crate::core::last_log_before`] から引く。目標値を持たせると、記録が伸びても
+/// 目標が古いまま腐り、**表示された数値が前回の実績と食い違う** —
+/// 「前回を見て同じかそれ以上をやる」という唯一のループが壊れる。
+///
+/// ★ `order` も持たない。`Vec` の順が表示順（[`Session::logs`] と同じ）。`Group` /
+/// `Exercise` が `order` を持つのは、全部位ぶんが 1 本の `Vec` に混ざっていて
+/// 部位内の順序を `Vec` 位置で表せないため。こちらは平坦な 1 本なのでその制約が無い。
+///
+/// ★ `archived` も持たない。**メニューは物理削除でよい** — 種目と違って、これを
+/// 参照する記録が 1 つも無いので、消しても過去のログは 1 バイトも欠けない。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Routine {
+    pub id: RoutineId,
+    pub name: String,
+    /// 展開したときのカードの並び順。
+    ///
+    /// 不変条件: `ExerciseId` は重複しない（[`crate::core::migrate`] が正規化する）。
+    /// 存在しない種目・アーカイブ済みの種目を指していることは**ある**（他端末の
+    /// データを取り込むと起きる）。読み出し側の `core::expandable` が外す。
+    pub exercises: Vec<ExerciseId>,
+}
+
+impl Routine {
+    /// 名前も種目も無い = 保存する価値がない。
+    ///
+    /// ★ 「種目が無い」ではない。名前だけ打って種目を選ぶ前に閉じた状態を消して
+    /// はいけない（[`ExerciseLog::is_empty`] がメモだけのログを残すのと同じ理由）。
+    pub fn is_empty(&self) -> bool {
+        self.name.trim().is_empty() && self.exercises.is_empty()
+    }
+}
+
 /// 1 セット。重量 × 回数と、そのセットのメモ。
 ///
 /// ★ **`Copy` は付けられない**（`note: String` を持つ）。外しても壊れた箇所は無かった —
@@ -327,6 +378,13 @@ pub struct Db {
     pub schema: u32,
     pub groups: Vec<Group>,
     pub exercises: Vec<Exercise>,
+    /// 保存済みのトレーニングメニュー。**`Vec` の順が表示順。**
+    ///
+    /// ★ `skip_serializing_if` は互換のため。メニューを 1 本も作っていない利用者の
+    /// JSON は**今までとバイト単位で同一**になり、`e2e/backup.spec.mjs` の
+    /// `toEqual(parsed)` などが「保存形式は変わっていない」ことを主張し続ける。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routines: Vec<Routine>,
     /// "YYYY-MM-DD" → 日付順が自動で保たれる（ゼロ埋め ISO なので辞書順 = 時系列順）
     pub sessions: BTreeMap<String, Session>,
 }
@@ -337,6 +395,7 @@ impl Default for Db {
             schema: SCHEMA,
             groups: Vec::new(),
             exercises: Vec::new(),
+            routines: Vec::new(),
             sessions: BTreeMap::new(),
         }
     }
@@ -349,6 +408,10 @@ impl Db {
 
     pub fn exercise(&self, id: ExerciseId) -> Option<&Exercise> {
         self.exercises.iter().find(|e| e.id == id)
+    }
+
+    pub fn routine(&self, id: RoutineId) -> Option<&Routine> {
+        self.routines.iter().find(|r| r.id == id)
     }
 
     /// アーカイブ済みも含む、その部位の全種目 ID。
@@ -536,6 +599,70 @@ mod tests {
         // 空白だけのメモを「ある」とすると、保存の価値が無いログが残り続ける
         for blank in [" ", "\n", "\t", "　", "  \n "] {
             assert!(log_of(Vec::new(), blank).is_empty(), "{blank:?}");
+        }
+    }
+
+    // ── トレーニングメニュー（adr/data-model/routines-as-named-exercise-lists.md）──
+
+    #[test]
+    fn db_omits_routines_from_its_json_when_there_are_none() {
+        // ★ バイト一致で見る。ここが崩れるとメニューを使っていない利用者の保存データが
+        //   変わり、e2e の「保存形式は変わっていない」系の assertion が落ちる
+        let json = serde_json::to_string(&Db::default()).expect("直列化できる");
+        assert_eq!(
+            json, r#"{"schema":3,"groups":[],"exercises":[],"sessions":{}}"#,
+            "メニューが 0 本のときは routines を書いてはいけない"
+        );
+    }
+
+    #[test]
+    fn db_reads_json_written_before_routines_existed() {
+        let db: Db =
+            serde_json::from_str(r#"{"schema":3,"groups":[],"exercises":[],"sessions":{}}"#)
+                .expect("メニュー以前の形も読める");
+        assert!(db.routines.is_empty());
+    }
+
+    #[test]
+    fn db_round_trips_its_routines() {
+        let mut db = Db::default();
+        db.routines.push(Routine {
+            id: Id::from_bits(0x1_0001),
+            name: "胸の日".to_string(),
+            exercises: vec![E::from_bits(0x1_0010), E::from_bits(0x1_0011)],
+        });
+        let json = serde_json::to_string(&db).expect("直列化できる");
+        assert_eq!(
+            serde_json::from_str::<Db>(&json).expect("読み戻せる"),
+            db,
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn routine_is_empty_only_without_a_name_and_without_exercises() {
+        let routine = |name: &str, exercises: Vec<E>| Routine {
+            id: Id::from_bits(1),
+            name: name.to_string(),
+            exercises,
+        };
+        let one = || vec![E::from_bits(0x1_0010)];
+        assert!(routine("", Vec::new()).is_empty());
+        // 名前だけ打って種目を選ぶ前に閉じた状態を消してはいけない
+        assert!(!routine("胸の日", Vec::new()).is_empty());
+        assert!(!routine("", one()).is_empty());
+        assert!(!routine("胸の日", one()).is_empty());
+    }
+
+    #[test]
+    fn a_routine_with_a_whitespace_only_name_and_no_exercises_is_empty() {
+        for blank in [" ", "\n", "\t", "　", "  \n "] {
+            let r = Routine {
+                id: Id::from_bits(1),
+                name: blank.to_string(),
+                exercises: Vec::new(),
+            };
+            assert!(r.is_empty(), "{blank:?}");
         }
     }
 

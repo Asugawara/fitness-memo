@@ -19,7 +19,7 @@ use web_sys::PointerEvent;
 
 use crate::core;
 use crate::core::Metric;
-use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, SetEntry};
+use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, RoutineId, SetEntry};
 use crate::reorder::{self, Slots};
 
 use super::icon::{self, icon};
@@ -362,14 +362,16 @@ const MENU_GROUP_CAP: usize = 3;
 /// 1 行に出す種目名の数。溢れたら「他N種目」を付ける。
 const MENU_NAME_CAP: usize = 2;
 
-/// 「前回のメニューから始める」の候補 1 行。
+/// 候補リストの 1 行。**保存したメニューと過去の日で同じ形を使う。**
 ///
 /// **種目名まで出すのが肝。** 「8/5 胸 5種目」だけでは胸の日が 2 つ並んだときに
 /// 区別できず、候補をリストにした意味が消える。誤タップは事後の取り消しではなく
-/// 選び間違いを起こさせないことで防ぐ。
+/// 選び間違いを起こさせないことで防ぐ。保存したメニューでも同じで、「胸の日」と
+/// 「胸の日（軽め）」を名前だけで見分けさせない。
 #[derive(Clone, PartialEq)]
 struct MenuRow {
-    date: NaiveDate,
+    /// 左上。日なら "8/5 (火)"、保存したメニューなら名前。
+    title: String,
     /// "胸・腕"
     groups: String,
     /// "ベンチプレス, インクラインダンベルプレス 他3種目"
@@ -377,11 +379,11 @@ struct MenuRow {
 }
 
 impl MenuRow {
-    fn build(db: &Db, c: &core::MenuCandidate) -> Self {
+    fn build(db: &Db, title: String, exercises: &[ExerciseId]) -> Self {
         let mut seen: Vec<GroupId> = Vec::new();
         let mut ordered: Vec<(u32, String)> = Vec::new();
         let mut names: Vec<String> = Vec::new();
-        for id in &c.exercises {
+        for id in exercises {
             // core 側で存在を確認済みだが、ここでも落とさず素通しできるようにしておく
             let Some(e) = db.exercise(*id) else { continue };
             names.push(e.name.clone());
@@ -412,11 +414,24 @@ impl MenuRow {
             |rest| format!(" 他{rest}種目"),
         );
         Self {
-            date: c.date,
+            title,
             groups,
             names,
         }
     }
+}
+
+/// 空の日に出す候補一式。**2 つの出所を 1 つの `Memo` にまとめる。**
+///
+/// ★ 別々の `Memo` に割らないこと。「カードが 0 枚」「未来日ではない」の 2 つのガードは
+/// どちらの出所にも等しく効かなければならず、分けると片方だけ抜けたときに
+/// **未来日に実施済みのデータが生える**（adr/ux/copy-whole-day-menu.md）。
+#[derive(Clone, Default, PartialEq)]
+struct Candidates {
+    /// 保存したトレーニングメニュー。**全件出す**（ユーザーが作ったものを隠さない）。
+    routines: Vec<(RoutineId, MenuRow)>,
+    /// 直近の記録。最大 [`MENU_CANDIDATES`] 件。
+    days: Vec<(NaiveDate, MenuRow)>,
 }
 
 /// 先頭 `cap` 件だけ連結し、溢れた分は `overflow` の文言で畳む。
@@ -591,7 +606,7 @@ pub fn DayEditor() -> impl IntoView {
         scroll_to_id(card_dom_id(ex));
     };
 
-    // 「前回のメニューから始める」の候補。
+    // 「メニューから始める」の候補。保存したメニューと直近の記録の 2 つの出所を持つ。
     //
     // カードがある日は候補を出さないので、履歴を走査せず即座に抜ける。セットの数値は
     // 1 文字ごとに commit するため、ここを通さないと打鍵のたびに `recent_menus` が走る。
@@ -599,21 +614,33 @@ pub fn DayEditor() -> impl IntoView {
     // ★ 逆に**空の日では短絡しない**（`cards` が空なので下へ素通りする）。空の日の
     //   体重・メモ入力では毎文字 db を読み直すままで、そこは守っていない。候補は数件・
     //   走査も 180 日で打ち切られるので実測では問題にならないが、取り違えないこと。
-    let menus = Memo::new(move |_| {
+    let candidates = Memo::new(move |_| {
         if !cards.get().is_empty() {
-            return Vec::new();
+            return Candidates::default();
         }
         let before = dates.selected.get();
         // ★ 未来日には出さない。まだやっていないトレーニングが「実施済み」として
-        //   カレンダーのドット・月フッタ・グラフに乗ってしまう
+        //   カレンダーのドット・月フッタ・グラフに乗ってしまう。
+        //   **保存したメニューにも同じく効く**（同じ Memo に入れてあるのはこのため）
         if before > dates.today.get() {
-            return Vec::new();
+            return Candidates::default();
         }
-        db.with(|d| {
-            core::recent_menus(d, before, MENU_CANDIDATES)
+        db.with(|d| Candidates {
+            routines: core::usable_routines(d)
                 .into_iter()
-                .map(|c| MenuRow::build(d, &c))
-                .collect::<Vec<_>>()
+                .map(|c| {
+                    let title = if c.name.trim().is_empty() {
+                        "（名前なし）".to_string()
+                    } else {
+                        c.name
+                    };
+                    (c.id, MenuRow::build(d, title, &c.exercises))
+                })
+                .collect(),
+            days: core::recent_menus(d, before, MENU_CANDIDATES)
+                .into_iter()
+                .map(|c| (c.date, MenuRow::build(d, fmt_date(c.date), &c.exercises)))
+                .collect(),
         })
     });
 
@@ -632,6 +659,33 @@ pub fn DayEditor() -> impl IntoView {
         load_cards(to);
         // pick() と同じ。トレ中の視点を先頭種目に合わせる
         scroll_to_id(card_dom_id(copied[0]));
+    };
+
+    // 保存したメニューを展開する。セットは**種目ごとの直近の記録**から入る。
+    let start_routine = move |id: RoutineId| {
+        let to = dates.selected.get_untracked();
+        let is_today = to == dates.today.get_untracked();
+        let at = is_today.then(now_ms);
+        let mut opened = Vec::new();
+        db.update(|d| opened = core::apply_routine(d, id, to, at));
+        if opened.is_empty() {
+            return;
+        }
+        // ★ **`load_cards(to)` を呼んではいけない。** あちらは `session.logs` から
+        //   カードを組み直すので、**履歴がまだ無い種目の空カードが全部消える**
+        //   （セットが空のログは書かない仕様なので `logs` に現れない）。
+        //   `apply_routine` の返り値がそのまま「その日に出すべきカード」。
+        let date = core::date_key(to);
+        cards.set(
+            opened
+                .iter()
+                .map(|ex| CardRef {
+                    date: date.clone(),
+                    ex: *ex,
+                })
+                .collect(),
+        );
+        scroll_to_id(card_dom_id(opened[0]));
     };
 
     view! {
@@ -732,34 +786,71 @@ pub fn DayEditor() -> impl IntoView {
                 //   <For> がカードを使い回して入力欄が古いまま残り、次の 1 打鍵の
                 //   commit() がコピー結果を上書きして消す。表示条件は見た目の話ではない
                 {move || {
-                    let rows = menus.get();
-                    (!rows.is_empty())
-                        .then(|| {
-                            view! {
-                                <section class="menu-copy" data-testid="menu-copy">
-                                    <h3 class="menu-copy-label">"前回のメニューから始める"</h3>
-                                    {rows
-                                        .into_iter()
-                                        .map(|r| {
-                                            let from = r.date;
-                                            view! {
-                                                <button
-                                                    class="menu-cand"
-                                                    data-testid="menu-candidate"
-                                                    on:click=move |_| copy_menu(from)
-                                                >
-                                                    <span class="cand-head">
-                                                        <b>{fmt_date(r.date)}</b>
-                                                        <i>{r.groups}</i>
-                                                    </span>
-                                                    <span class="cand-names">{r.names}</span>
-                                                </button>
-                                            }
-                                        })
-                                        .collect::<Vec<_>>()}
-                                </section>
-                            }
-                        })
+                    let c = candidates.get();
+                    if c.routines.is_empty() && c.days.is_empty() {
+                        return None;
+                    }
+                    // ★ メニューが 1 本も無い人の画面は**今までと 1 文字も変えない**。
+                    //   見出しを 2 つに割るのは、並ぶ出所が実際に 2 つあるときだけ
+                    let split = !c.routines.is_empty();
+                    Some(
+                        view! {
+                            <section class="menu-copy" data-testid="menu-copy">
+                                {split
+                                    .then(|| {
+                                        view! {
+                                            <h3 class="menu-copy-label">"トレーニングメニュー"</h3>
+                                        }
+                                    })}
+                                {c
+                                    .routines
+                                    .into_iter()
+                                    .map(|(id, r)| {
+                                        view! {
+                                            <button
+                                                class="menu-cand"
+                                                data-testid="routine-candidate"
+                                                on:click=move |_| start_routine(id)
+                                            >
+                                                <span class="cand-head">
+                                                    <b>{r.title}</b>
+                                                    <i>{r.groups}</i>
+                                                </span>
+                                                <span class="cand-names">{r.names}</span>
+                                            </button>
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()}
+                                {(!c.days.is_empty())
+                                    .then(|| {
+                                        view! {
+                                            <h3 class="menu-copy-label">
+                                                {if split { "最近の記録から" } else { "前回のメニューから始める" }}
+                                            </h3>
+                                        }
+                                    })}
+                                {c
+                                    .days
+                                    .into_iter()
+                                    .map(|(from, r)| {
+                                        view! {
+                                            <button
+                                                class="menu-cand"
+                                                data-testid="menu-candidate"
+                                                on:click=move |_| copy_menu(from)
+                                            >
+                                                <span class="cand-head">
+                                                    <b>{r.title}</b>
+                                                    <i>{r.groups}</i>
+                                                </span>
+                                                <span class="cand-names">{r.names}</span>
+                                            </button>
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()}
+                            </section>
+                        },
+                    )
                 }}
 
                 <div class="add-wrap">

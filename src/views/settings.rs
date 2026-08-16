@@ -1,4 +1,4 @@
-//! 種目タブ。部位グループと種目の管理。
+//! 設定タブ。トレーニングメニュー・部位グループ・種目の管理。
 //!
 //! 設計上の要点:
 //!
@@ -17,7 +17,7 @@
 //!   2 つに絞るのが要点で、44px のボタンを何個も並べると部位を見渡すという一覧本来の
 //!   役目が潰れる（adr/ux/menu-groups-as-single-open-accordion.md）
 //! - **並び替えの手段を持たない。** `Group.order` / `Exercise.order` はプリセットの宣言順
-//!   → 以後は追加順で固定される。この order は種目タブの表示順だけでなく、記録タブ
+//!   → 以後は追加順で固定される。この order は設定タブの表示順だけでなく、記録タブ
 //!   「種目を追加」シートの部位セクション順とその中の種目順、推移タブの種目セレクタも
 //!   決めている（adr/ux/menu-groups-as-single-open-accordion.md）
 //! - 編集フォームは一覧の外に置いた 1 枚のシートに集約する。一覧の中に入力欄を置くと、
@@ -25,12 +25,16 @@
 
 use leptos::prelude::*;
 
-use crate::model::{Db, Exercise, ExerciseId, Group, GroupId};
+use crate::model::{Db, Exercise, ExerciseId, Group, GroupId, RoutineId};
 use crate::storage;
 
 use super::help::InstallHelpLink;
 use super::icon::{self, icon};
-use super::{Sheet, kb_blur, kb_focus, scroll_into_view_if_needed, use_db, use_kb, use_open_group};
+use super::routine::{RoutineEditor, routine_exercise_names};
+use super::{
+    SettingsPage, Sheet, kb_blur, kb_focus, scroll_into_view_if_needed, use_db, use_kb,
+    use_open_group, use_settings_page,
+};
 
 /// 部位を追加するときの既定色。プリセットの 6 色を順に回す。
 const COLOR_CHOICES: [&str; 6] = [
@@ -193,6 +197,8 @@ enum Editor {
     NewGroup,
     Exercise(ExerciseId),
     NewExercise(GroupId),
+    Routine(RoutineId),
+    NewRoutine,
 }
 
 /// シートの見出し。閉じている（`None`）ときは空文字。
@@ -205,6 +211,8 @@ fn editor_title(target: Option<Editor>) -> &'static str {
         Some(Editor::NewGroup) => "部位を追加",
         Some(Editor::Exercise(_)) => "種目を編集",
         Some(Editor::NewExercise(_)) => "種目を追加",
+        Some(Editor::Routine(_)) => "メニューを編集",
+        Some(Editor::NewRoutine) => "メニューを追加",
         None => "",
     }
 }
@@ -212,6 +220,40 @@ fn editor_title(target: Option<Editor>) -> &'static str {
 /// 部位カードの DOM id。開いた部位を画面に入れるために引く。
 fn grp_dom_id(group: GroupId) -> String {
     format!("grp-{group}")
+}
+
+/// 設定トップの節 1 行。押すと節へ入る（または対応するシートを開く）。
+///
+/// ★ 右端の数は「その節に何件あるか」。0 件でも出す — 「まだ 0 件」が読めることが、
+/// 入って初めて空だと分かるより速い。`None` を渡す行（シートを開くだけの行）は出さない。
+fn section_row(
+    label: &'static str,
+    count: Option<Signal<String>>,
+    testid: &'static str,
+    open: impl Fn() + 'static,
+) -> impl IntoView {
+    view! {
+        <button class="row" data-testid=testid on:click=move |_| open()>
+            <span class="row-label">{label}</span>
+            {count
+                .map(|c| view! { <span class="row-count muted">{move || c.get()}</span> })}
+            // シェブロンは「押すと先がある」ことだけを示す。部位ヘッダのものと同じ向き
+            {icon(icon::CHEVRON_RIGHT)}
+        </button>
+    }
+}
+
+/// 節の見出し + 「‹ 設定」。**節の中では h1 がその節名**になる（h1 は常に画面に 1 つ）。
+fn back_head(title: &'static str, back: impl Fn() + 'static) -> impl IntoView {
+    view! {
+        <header class="settings-head">
+            <button class="icon-btn" aria-label="設定へ戻る" data-testid="settings-back"
+                on:click=move |_| back()>
+                {icon(icon::CHEVRON_LEFT)}
+            </button>
+            <h1>{title}</h1>
+        </header>
+    }
 }
 
 /// 選択肢ボタン 1 個。今は部位の選択にだけ使う。
@@ -236,7 +278,7 @@ fn opt_button(
 // ── 画面 ────────────────────────────────────────────────────────────────────
 
 #[component]
-pub fn Menu() -> impl IntoView {
+pub fn Settings() -> impl IntoView {
     let db = use_db();
     let editor: RwSignal<Option<Editor>> = RwSignal::new(None);
     let backup_open = RwSignal::new(false);
@@ -258,60 +300,142 @@ pub fn Menu() -> impl IntoView {
 
     let group_ids = Memo::new(move |_| db.with(ordered_group_ids));
     let archived = Memo::new(move |_| db.with(archived_ids));
+    // メニューは `Vec` の順がそのまま表示順（`order` を持たない）
+    let routine_ids =
+        Memo::new(move |_| db.with(|d| d.routines.iter().map(|r| r.id).collect::<Vec<_>>()));
+
+    // 開いているページ。シグナル自体は `App` が持つ（`OpenGroupCtx` と同じ理由 —
+    // タブを往復してもトップへ戻されない）
+    let page = use_settings_page();
+    // 節へ入る / 戻る。
+    //
+    // ★ 編集シートを閉じるのは**保険**。シートは modal（`show_modal()`）で開いている間は
+    //   背景が inert なので、この経路は今の UI からは踏めない（E2E で確認した）。それでも
+    //   書くのは、ページを替える口がここ 1 つだからで、非 modal な導線を足した誰かが
+    //   「別の節に居るのに前の節の編集シートが載っている」を作らずに済む。
+    let go = move |to: SettingsPage| {
+        editor.set(None);
+        page.set(to);
+    };
 
     view! {
-        <section class="menu" data-testid="screen-menu">
+        <section class="settings" data-testid="screen-settings">
             // プリセットの投入は初回起動時に storage::load が済ませる。再投入の導線は持たない
             // （改名済みプリセットが別種目として復活する挙動があり、得より害が大きかった）
-            <header class="menu-head">
-                <h1>"種目"</h1>
-            </header>
+            //
+            // ★ この画面は**節の一覧が入口**（adr/ux/settings-as-a-list-of-sections.md）。
+            //   4 つを 1 画面に縦積みしていた頃は、メニューを 1 本足すのに 6 部位 28 種目の
+            //   一覧を跨いでスクロールすることになっていた。
+            //   h1 は常に 1 つ（記録タブと同じ規則、adr/ux/focus-ring-and-heading-order.md）。
+            //   節の中では h1 がその節名になり、左上に「‹ 設定」が出る
+            {move || match page.get() {
+                SettingsPage::Root => {
+                    view! {
+                        <header class="settings-head">
+                            <h1>"設定"</h1>
+                        </header>
 
-            // ★ 種目一覧の**上**に置く。下だと 6 部位 28 種目のスクロールの底になり、
-            //   データを失う前に見つけてもらえない
-            <div class="add-wrap">
-                <button
-                    class="secondary"
-                    data-testid="open-backup"
-                    on:click=move |_| {
-                        // 編集シートと二重に開かないよう、ここで閉じておく
-                        editor.set(None);
-                        backup_open.set(true);
+                        <div class="rows" data-testid="settings-rows">
+                            // ★ 先頭に置く。データを失う前に見つけてもらう必要があるので、
+                            //   ここだけは他の節より上（旧レイアウトの sticky と同じ意図）
+                            {section_row(
+                                "データの書き出し / 読み込み",
+                                None,
+                                "open-backup",
+                                move || {
+                                    editor.set(None);
+                                    backup_open.set(true);
+                                },
+                            )}
+                            {section_row(
+                                "トレーニングメニュー",
+                                Some(Signal::derive(move || routine_ids.get().len().to_string())),
+                                "settings-row-routines",
+                                move || go(SettingsPage::Routines),
+                            )}
+                            {section_row(
+                                "種目",
+                                Some(
+                                    Signal::derive(move || {
+                                        db.with(|d| d.exercises.iter().filter(|e| !e.archived).count())
+                                            .to_string()
+                                    }),
+                                ),
+                                "settings-row-exercises",
+                                move || go(SettingsPage::Exercises),
+                            )}
+                            // 手順シートを開くだけなので、節ではなく行として並べる
+                            <InstallHelpLink />
+                        </div>
                     }
-                >
-                    "データの書き出し / 読み込み"
-                </button>
-            </div>
-
-            <p class="menu-note muted">
-                "アーカイブした種目は「種目を追加」に出なくなりますが、過去の記録は残り推移タブから参照できます"
-            </p>
-
-            // ★ 末尾ではなく冒頭に置く。末尾は .add-wrap（sticky）の帯に覆われ、
-            //   ArchivedSection の有無で縦位置も動く
-            <InstallHelpLink />
-
-            <For
-                each=move || group_ids.get()
-                key=|id| *id
-                children=move |id| {
-                    view! { <GroupBlock group=id editor=editor open_group=open_group /> }
+                        .into_any()
                 }
-            />
+                SettingsPage::Routines => {
+                    view! {
+                        {back_head("トレーニングメニュー", move || go(SettingsPage::Root))}
 
-            <div class="add-wrap">
-                <button
-                    class="secondary"
-                    data-testid="menu-add-group"
-                    on:click=move |_| editor.set(Some(Editor::NewGroup))
-                >
-                    "＋ 部位を追加"
-                </button>
-            </div>
+                        <For
+                            each=move || routine_ids.get()
+                            key=|id| *id
+                            children=move |id| view! { <RoutineBlock routine=id editor=editor /> }
+                        />
+                        {move || {
+                            routine_ids
+                                .get()
+                                .is_empty()
+                                .then(|| {
+                                    view! {
+                                        <p class="settings-note muted" data-testid="routines-empty">
+                                            "よくやる種目の組み合わせに名前を付けておくと、記録タブで 1 タップで呼び出せます"
+                                        </p>
+                                    }
+                                })
+                        }}
+                        <div class="add-wrap">
+                            <button
+                                class="secondary"
+                                data-testid="settings-add-routine"
+                                on:click=move |_| editor.set(Some(Editor::NewRoutine))
+                            >
+                                "＋ メニューを追加"
+                            </button>
+                        </div>
+                    }
+                        .into_any()
+                }
+                SettingsPage::Exercises => {
+                    view! {
+                        {back_head("種目", move || go(SettingsPage::Root))}
 
-            {move || {
-                let ids = archived.get();
-                (!ids.is_empty()).then(|| view! { <ArchivedSection ids=ids open_group=open_group /> })
+                        <p class="settings-note muted">
+                            "アーカイブした種目は「種目を追加」に出なくなりますが、過去の記録は残り推移タブから参照できます"
+                        </p>
+                        <For
+                            each=move || group_ids.get()
+                            key=|id| *id
+                            children=move |id| {
+                                view! { <GroupBlock group=id editor=editor open_group=open_group /> }
+                            }
+                        />
+
+                        <div class="add-wrap">
+                            <button
+                                class="secondary"
+                                data-testid="settings-add-group"
+                                on:click=move |_| editor.set(Some(Editor::NewGroup))
+                            >
+                                "＋ 部位を追加"
+                            </button>
+                        </div>
+
+                        {move || {
+                            let ids = archived.get();
+                            (!ids.is_empty())
+                                .then(|| view! { <ArchivedSection ids=ids open_group=open_group /> })
+                        }}
+                    }
+                        .into_any()
+                }
             }}
 
             <super::backup::BackupSheet open=backup_open />
@@ -322,8 +446,8 @@ pub fn Menu() -> impl IntoView {
                 open=Signal::derive(move || editor.get().is_some())
                 on_close=Callback::new(move |_| editor.set(None))
                 title=Signal::derive(move || editor_title(editor.get()).to_string())
-                testid="menu-sheet"
-                close_testid="menu-sheet-close"
+                testid="settings-sheet"
+                close_testid="settings-sheet-close"
             >
                 {move || {
                     editor
@@ -353,9 +477,100 @@ pub fn Menu() -> impl IntoView {
                                 }
                                     .into_any()
                             }
+                            Editor::Routine(id) => {
+                                view! {
+                                    <RoutineEditor
+                                        id=Some(id)
+                                        on_close=Callback::new(move |_| editor.set(None))
+                                    />
+                                }
+                                    .into_any()
+                            }
+                            Editor::NewRoutine => {
+                                view! {
+                                    <RoutineEditor
+                                        id=None
+                                        on_close=Callback::new(move |_| editor.set(None))
+                                    />
+                                }
+                                    .into_any()
+                            }
                         })
                 }}
             </Sheet>
+        </section>
+    }
+}
+
+/// メニュー 1 本ぶん。**行全体が編集シートを開くボタン。**
+///
+/// ★ 部位のようなアコーディオンにしない。部位に開閉が要るのは 28 種目を畳むためで、
+/// メニューは 4〜6 種目なので 2 段の 1 行に収まる。開いても中に操作は無いので、
+/// 「開く」と「編集」を分けるとタップが 1 つ増えるだけになる。
+#[component]
+fn RoutineBlock(routine: RoutineId, editor: RwSignal<Option<Editor>>) -> impl IntoView {
+    let db = use_db();
+
+    let name = Memo::new(move |_| {
+        db.with(|d| d.routine(routine).map(|r| r.name.clone()))
+            .unwrap_or_default()
+    });
+    let names = Memo::new(move |_| db.with(|d| routine_exercise_names(d, routine)));
+    // ★ 件数は**記録タブで実際に開く数**を出す。`names` の長さ（保存されている種目の数）を
+    //   出すと、アーカイブ済みを 1 つ含むだけで「2 種目」と書いてあるのに 1 枚しか開かない
+    //   ことになる。判定は `core::expandable_count` に聞く（同じ条件を書き写さない）
+    let open_count = Memo::new(move |_| db.with(|d| crate::core::expandable_count(d, routine)));
+    // 名前は出すのに開かない種目（＝アーカイブ済み）の数。0 なら注記を出さない
+    let hidden = Memo::new(move |_| names.get().len().saturating_sub(open_count.get()));
+
+    view! {
+        <section class="card rtn" data-testid="routine-item">
+            <button
+                class="rtn-open"
+                data-testid="routine-open"
+                on:click=move |_| editor.set(Some(Editor::Routine(routine)))
+            >
+                <span class="rtn-head">
+                    <b data-testid="routine-name">
+                        {move || {
+                            let n = name.get();
+                            if n.trim().is_empty() { "（名前なし）".to_string() } else { n }
+                        }}
+                    </b>
+                    <i class="muted" data-testid="routine-count">
+                        {move || format!("{} 種目", open_count.get())}
+                    </i>
+                </span>
+                // ★ 名前はアーカイブ済みも出す。アーカイブは可逆なので、ここで隠すと
+                //   「入れたはずの種目が無い」に見える。件数と食い違う分は下の注記で説明する
+                <span class="rtn-names muted" data-testid="routine-names">
+                    {move || names.get().join(", ")}
+                </span>
+                {move || {
+                    // ★ 出ない理由は必ず画面に出す。無いと「作ったのに使えない」原因を
+                    //   探しようがない（記録タブ側には何も出せない — 行ごと消えるので）
+                    if open_count.get() == 0 {
+                        return Some(
+                            view! {
+                                <span class="rtn-warn" data-testid="routine-unusable">
+                                    "使える種目がないため記録タブに出ません"
+                                </span>
+                            }
+                                .into_any(),
+                        );
+                    }
+                    let n = hidden.get();
+                    (n > 0)
+                        .then(|| {
+                            view! {
+                                <span class="rtn-warn" data-testid="routine-partial">
+                                    {format!("アーカイブ済みの {n} 種目は記録タブに出ません")}
+                                </span>
+                            }
+                                .into_any()
+                        })
+                }}
+            </button>
         </section>
     }
 }
@@ -436,7 +651,7 @@ fn GroupBlock(
                             <div class="grp-foot">
                                 <button
                                     class="link-btn"
-                                    data-testid="menu-add-exercise"
+                                    data-testid="settings-add-exercise"
                                     on:click=move |_| editor.set(Some(Editor::NewExercise(group)))
                                 >
                                     "＋ 種目を追加"
@@ -852,7 +1067,7 @@ fn ExerciseEditor(
                 "この種目をアーカイブ"
             </button>
         </div>
-        <p class="menu-note muted">
+        <p class="settings-note muted">
             "アーカイブは記録を消しません。過去のログは残り、「種目を追加」に出なくなります"
         </p>
     }
@@ -893,7 +1108,7 @@ fn NewExerciseEditor(
     };
 
     view! {
-        <p class="menu-note muted">{format!("{group_name} に追加します")}</p>
+        <p class="settings-note muted">{format!("{group_name} に追加します")}</p>
 
         <label class="field">
             <span>"名前"</span>

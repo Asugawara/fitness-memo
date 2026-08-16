@@ -43,6 +43,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [経過日数をローカル暦の日差にし、時刻粒度を同じ日の中だけに閉じる](data-model/elapsed-in-local-calendar-days.md) | 採用 |
 | [テキスト取り込みは「足すだけ」に固定し、部位を増やさず `at` を書かない](data-model/text-import-is-merge-only.md) | 破棄（[取り込みごと撤去](ux/migrate-by-ocr-paste.md)） |
 | [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](data-model/notes-on-logs-and-sets.md) | 採用 |
+| [トレーニングメニューを「名前 + 種目 ID の並び」だけのデータにする](data-model/routines-as-named-exercise-lists.md) | 採用 |
 
 ### storage — 永続化
 
@@ -78,7 +79,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [カレンダーの空日からも記録を追加できるようにする](ux/calendar-add-from-empty-day.md) | 採用（導線は [記録タブをカレンダー + 選択日エディタの単一画面にする](ux/record-tab-calendar-with-day-editor.md) で改訂） |
 | [記録タブをカレンダー + 選択日エディタの単一画面にする](ux/record-tab-calendar-with-day-editor.md) | 採用 |
 | [セット追加は直前行の重量をコピーして回数欄へフォーカスする](ux/set-entry-prefill-and-focus.md) | 採用（削除確認の判定は [セット削除は確認を挟まない（カード削除の確認は残す）](ux/set-delete-without-confirmation.md) で改訂） |
-| [1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](ux/copy-whole-day-menu.md) | 採用 |
+| [1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](ux/copy-whole-day-menu.md) | 採用（候補の出所は [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) で拡張） |
 | [ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする](ux/install-guide-banner-and-sheet.md) | 採用 |
 | [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](ux/destructive-affordance-quiet-at-rest.md) | 採用 |
 | [体重を推移グラフの第2軸に常時重ねる](ux/body-weight-second-axis-always-on.md) | 採用 |
@@ -88,9 +89,12 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [タブ切替に方向つき View Transition を掛ける](ux/directional-tab-transitions.md) | 破棄（0.2s の演出が視線を取るので当日撤去。切替は即時） |
 | [フォーカスリングを明示し、記録タブの見出しを 1 本の階層にする](ux/focus-ring-and-heading-order.md) | 採用 |
 | [他アプリからの移行はスクショの文字起こしを貼り付けて受ける](ux/migrate-by-ocr-paste.md) | 破棄（読み取りが成立せず操作量も見合わないため撤去） |
-| [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](ux/menu-groups-as-single-open-accordion.md) | 採用 |
+| [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](ux/menu-groups-as-single-open-accordion.md) | 採用（タブ名は [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) で「設定」に改称、置き場所は [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](ux/settings-as-a-list-of-sections.md) で「種目」節の中へ） |
 | [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](ux/exercise-and-set-notes-behind-one-toggle.md) | 採用 |
 | [記録タブのカードとセットをドラッグで並び替え、`Vec` の並びをそのまま保存する](ux/drag-to-reorder-in-record-tab.md) | 採用 |
+| [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) | 採用（メニューを作る導線は [その日の記録から直接メニューを作れるようにする](ux/save-a-day-as-a-routine.md)、画面構成は [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](ux/settings-as-a-list-of-sections.md) で拡張） |
+| [その日の記録から直接メニューを作れるようにする](ux/save-a-day-as-a-routine.md) | 採用 |
+| [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](ux/settings-as-a-list-of-sections.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

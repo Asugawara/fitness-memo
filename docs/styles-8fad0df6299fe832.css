@@ -901,6 +901,17 @@ h3 {
   display: none;
 }
 
+/* 「この日をメニューにする」。★ sticky にしない（.add-wrap と違って通常フロー）ので
+   .kb-open で隠す必要も無い — キーボードに覆われて困る fixed 要素ではないし、
+   隠すとレイアウトが跳ねるだけ（.menu-copy と同じ判断）。
+   ★ 上に余白を取って sticky の帯から離す。帯は上端 14px が透明なので、詰めると
+   リンクが帯の透明部分と重なって「見えているのに押せない」ように錯覚する */
+.day-foot {
+  display: flex;
+  justify-content: center;
+  margin-top: 4px;
+}
+
 /* 中身は .icon（20px の span）なので、UA ボタンの text-align 任せにせず
    自前で中央に置く。テキストのグリフを入れていた頃と見え方は変わらない。
    ★ この「中身は必ず .icon」はフォーカスリングの前提でもある。リングは 44px の箱では
@@ -1476,29 +1487,229 @@ h3 {
   border-radius: 50%;
 }
 
-/* ── 種目タブ ───────────────────────────────────────────────────────────── */
+/* ── 設定タブ ───────────────────────────────────────────────────────────── */
 
-.menu > .menu-note {
+.settings > .settings-note {
   margin: 0 0 12px;
 }
 
-/* 見出しだけの 1 行。space-between だった名残の justify-content は落としてある
-   （右側に置いていた「プリセットを追加」ボタンを外したため） */
-.menu-head {
+/* 見出しの 1 行。節の中では左端に「‹ 設定」（.icon-btn）が入る。
+   space-between だった名残の justify-content は落としてある
+   （右側に置いていた「プリセットを追加」ボタンを外したため）。
+   ★ 戻るボタンは 44px 角なので、その分だけ左の余白を詰めて h1 の位置を
+     トップ（戻るボタンが無い）と揃える */
+.settings-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   margin-bottom: 10px;
+  margin-left: -10px;
+}
+
+/* 戻るボタンが無いトップは、上の負マージンを打ち消して元の位置に戻す */
+.settings-head:first-child {
+  margin-left: 0;
+}
+
+/* ── 設定トップの節一覧 ─────────────────────────────────────────────────── */
+
+/* ★ 設定タブの入口は**節の一覧**（adr/ux/settings-as-a-list-of-sections.md）。
+   4 つを 1 画面に縦積みしていた頃は、メニューを 1 本足すのに 6 部位 28 種目の
+   一覧を跨いでスクロールしていた。 */
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 節 1 行。カードと同じ面に見せる（.menu-cand と同じ作り）。
+   ★ 高さはタップ標的の規約値 44px より大きく取る。行が 4 つしか無い画面なので、
+     詰めるより押しやすさを取る */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 12px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: inherit;
+  font: inherit;
+}
+
+.row-label {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.row-count {
+  flex: none;
+  font-size: 13px;
+}
+
+/* シェブロンは「押すと先がある」ことだけを示すので、本文より弱く */
+.row > .icon {
+  flex: none;
+  color: var(--muted);
+}
+
+/* ホーム画面ヘルプも同じ行に並べる（`.settings-help` の余白規則は使わない） */
+.rows .settings-help {
+  margin: 0;
 }
 
 /* h1 の UA 既定は 2em なので、今日タブ（.day-head h1）と同じ 20px に揃える */
-.menu-head h1 {
+.settings-head h1 {
   font-size: 20px;
 }
 
-.menu-note {
+.settings-note {
   margin: 6px 0;
   font-size: 12px;
+}
+
+/* 「トレーニングメニュー」「種目」の節見出し。h1 の下の 1 階層だけを立てる
+   （adr/ux/focus-ring-and-heading-order.md）。上の余白を厚くして、直前の節の
+   末尾ボタンと視覚的に切る */
+.settings-section {
+  margin: 20px 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ── トレーニングメニュー（設定タブ） ───────────────────────────────────── */
+
+/* メニュー 1 本。中身は行全体を占める 1 個のボタンだけなので、.grp と同じく
+   .card の縦 padding を外してボタン側に持たせる */
+.rtn {
+  padding: 0 12px;
+}
+
+/* ★ 行全体が編集の入口。部位のように「開く」と「編集」を分けない（開いても中に
+   操作が無いのでタップが 1 つ増えるだけ）。色は .grp-toggle と揃えて --text */
+.rtn-open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+}
+
+.rtn-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.rtn-head b {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.rtn-head i {
+  flex: none;
+  font-style: normal;
+  font-size: 13px;
+}
+
+/* 種目名は溢れても行を増やさない。行の高さが揃っていないとメニューを読み比べられない
+   （.menu-cand .cand-names と同じ理由） */
+.rtn-names {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「記録タブに出ません」。出ない理由が画面から読めないと、作ったのに使えない
+   メニューの原因を探しようがない */
+.rtn-warn {
+  font-size: 12px;
+  color: var(--warn);
+}
+
+/* メニュー編集シートの保存帯。★ シート内で sticky にする。
+   このシートは種目ピッカーが 6 部位ぶん伸びるので、通常フローだと「保存するには
+   ピッカーを全部スクロールし切る」になる（他のエディタは入力欄 1 個なので不要）。
+
+   ★ 貼り付け先は `.sheet-body`（`overflow-y: auto` のスクロール容器）の下端。
+     `.sheet` 自体は `position: fixed` なので、ここは viewport ではなくシートの中に閉じる。
+   ★ 上下左右の負マージンで `.sheet-body` の padding（8px 14px 16px）を打ち消し、
+     帯を端まで塗る。塗り切らないと下を流れる種目ボタンが帯の脇から覗く。
+   ★ `bottom` は 0 ではなく **-16px**。sticky は scrollport（= padding box）の下端に
+     貼るので、0 だと `.sheet-body` の padding-bottom 16px が帯の**下**に残り、
+     そこを種目ボタンが流れていくのが見える（実測で確認した）。 */
+.rtn-save {
+  position: sticky;
+  bottom: -16px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px -14px -16px;
+  padding: 10px 14px 12px;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+
+/* 保存できない理由。ボタンの隣に出すので `.warn-box` の枠は要らない
+   （枠を付けると帯の中に箱が入れ子になって、押す場所がぼやける） */
+.rtn-invalid {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  color: var(--warn);
+}
+
+/* 編集シートの「選択中」。★ この並びがそのまま記録タブのカードの並びになるので、
+   番号を出して順序を読めるようにする（並び替えの UI は持たない — 外して入れ直すか、
+   記録タブでドラッグする）。
+
+   ★ 番号は UA のリストマーカーではなく counter + ::before で出す。
+     `li { display: flex }` は要素の display を list-item から変えるので**マーカーが
+     消える**（実測: ::marker の content が normal のまま、テキストの左端が li の左端と
+     一致する = 何も描かれていない）。padding-left で空けた分がただの死んだ余白になる。
+     ::before なら flex アイテムとして並ぶので、行の構造を変えずに番号が出る。 */
+.rtn-picked {
+  counter-reset: rtn;
+  margin: 10px 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rtn-picked li {
+  counter-increment: rtn;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 幅を固定して種目名の左端を揃える（揃っていないと並びを縦に追えない） */
+.rtn-picked li::before {
+  content: counter(rtn);
+  flex: none;
+  min-width: 16px;
+  text-align: right;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.rtn-picked li span {
+  flex: 1;
 }
 
 /* 部位ブロック。縦の余白はヘッダ（.grp-toggle の 52px）と各行（44px）が自前で持つ
@@ -1700,9 +1911,9 @@ h3 {
 
 /* ── ホーム画面に追加のヘルプ ───────────────────────────────────────────────── */
 
-/* 種目タブ冒頭の導線。.link-btn が 44px のタップ領域を自前で持つので、
-   ここで上下の余白を足すと種目タブの頭だけ間延びする */
-.menu-help {
+/* 設定タブ冒頭の導線。.link-btn が 44px のタップ領域を自前で持つので、
+   ここで上下の余白を足すと設定タブの頭だけ間延びする */
+.settings-help {
   margin: 0 0 4px;
   font-size: 12px;
 }

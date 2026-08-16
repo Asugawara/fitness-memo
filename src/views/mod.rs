@@ -6,8 +6,9 @@ pub mod chart;
 pub mod day;
 pub mod help;
 pub mod icon;
-pub mod menu;
 pub mod progress;
+pub mod routine;
+pub mod settings;
 
 use std::cell::Cell;
 use std::time::Duration;
@@ -22,8 +23,8 @@ use crate::storage;
 
 use calendar::Calendar;
 use icon::icon;
-use menu::Menu;
 use progress::Progress;
+use settings::Settings;
 
 // ── コンテキスト ────────────────────────────────────────────────────────────
 
@@ -99,18 +100,41 @@ impl DateCtx {
 #[derive(Clone, Copy)]
 pub struct KbCtx(pub RwSignal<bool>);
 
-/// 種目タブで開いている部位。**同時に開くのは 1 つ**
+/// 設定タブで開いている部位。**同時に開くのは 1 つ**
 /// （adr/ux/menu-groups-as-single-open-accordion.md）。
 ///
-/// ★ `Menu` の中ではなくここに置くのが要点。`match tab.get()` はタブを切り替えるたびに
-///   `Menu` を作り直すので、コンポーネント内のシグナルにすると記録⇄種目を往復するたびに
-///   全部閉じる。筋トレ中はその往復が常なので、戻るたびに部位を探して押し直すことになる。
+/// ★ `Settings` の中ではなくここに置くのが要点。`match tab.get()` はタブを切り替える
+///   たびに `Settings` を作り直すので、コンポーネント内のシグナルにすると記録⇄設定を
+///   往復するたびに全部閉じる。筋トレ中はその往復が常なので、戻るたびに部位を探して
+///   押し直すことになる。
 /// ★ それでも**永続化はしない**。`Db` 由来の ID を UI 状態のキーに入れると `Db` から
 ///   部位が消えたときに宙に浮く（adr/storage/ui-state-in-separate-key.md が
 ///   前提の崩れる例として名指ししている形）。
 ///   ここはプロセス内の寿命に留める。
 #[derive(Clone, Copy)]
 pub struct OpenGroupCtx(pub RwSignal<Option<GroupId>>);
+
+/// 設定タブで開いているページ（adr/ux/settings-as-a-list-of-sections.md）。
+///
+/// ★ `OpenGroupCtx` とまったく同じ理由でここに置く。`Settings` の中に持つと、
+///   記録⇄設定を往復するたびに一覧のトップへ戻され、入っていた節をもう一度
+///   開き直すことになる。**永続化はしないのも同じ**（プロセス内の寿命に留める）。
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum SettingsPage {
+    #[default]
+    Root,
+    Routines,
+    Exercises,
+}
+
+#[derive(Clone, Copy)]
+pub struct SettingsPageCtx(pub RwSignal<SettingsPage>);
+
+pub fn use_settings_page() -> RwSignal<SettingsPage> {
+    use_context::<SettingsPageCtx>()
+        .expect("SettingsPageCtx が provide されていない")
+        .0
+}
 
 pub fn use_db() -> RwSignal<Db> {
     use_context::<DbCtx>()
@@ -511,11 +535,15 @@ pub fn Sheet(
 ///
 /// `Record` はカレンダーと選択日のエディタを 1 画面に載せたもの。
 /// 以前は「今日」と「カレンダー」が別タブで、過去日を直すたびに往復していた。
+///
+/// `Settings` は旧「種目タブ」。トレーニングメニューを作る場所を足した時点で、
+/// 種目マスタ・部位・書き出し読み込み・ホーム画面への追加を抱える画面になったので
+/// 名前を実態に合わせた（adr/ux/start-from-a-saved-routine.md）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
     Record,
     Progress,
-    Menu,
+    Settings,
 }
 
 /// 現在のタブ。
@@ -556,8 +584,10 @@ pub fn App() -> impl IntoView {
     let kb = KbCtx(RwSignal::new(false));
     provide_context(kb);
 
-    // ★ 種目タブの外に置く（タブ往復で閉じないため）。理由は OpenGroupCtx を参照
+    // ★ 設定タブの外に置く（タブ往復で閉じない / トップへ戻らないため）。
+    //   理由は OpenGroupCtx と SettingsPage を参照
     provide_context(OpenGroupCtx(RwSignal::new(None)));
+    provide_context(SettingsPageCtx(RwSignal::new(SettingsPage::default())));
 
     let tab = RwSignal::new(Tab::Record);
     let tabs = TabCtx(tab);
@@ -583,7 +613,7 @@ pub fn App() -> impl IntoView {
             //   数週間分の入力を失ってから気づくことになる
             if storage::save_failed() {
                 notice.set(Some(
-                    "記録を保存できていません。種目タブの「データの書き出し / 読み込み」から今すぐ控えを取ってください"
+                    "記録を保存できていません。設定タブの「データの書き出し / 読み込み」から今すぐ控えを取ってください"
                         .to_string(),
                 ));
             }
@@ -632,14 +662,14 @@ pub fn App() -> impl IntoView {
                 {move || match tab.get() {
                     Tab::Record => view! { <Calendar /> }.into_any(),
                     Tab::Progress => view! { <Progress /> }.into_any(),
-                    Tab::Menu => view! { <Menu /> }.into_any(),
+                    Tab::Settings => view! { <Settings /> }.into_any(),
                 }}
             </main>
 
             <nav class="bottom-tabs" data-testid="bottom-tabs">
                 {tab_button(Tab::Record, "記録", "tab-record")}
                 {tab_button(Tab::Progress, "推移", "tab-progress")}
-                {tab_button(Tab::Menu, "種目", "tab-menu")}
+                {tab_button(Tab::Settings, "設定", "tab-settings")}
             </nav>
         </div>
     }

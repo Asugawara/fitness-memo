@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
-// 記録タブ（カレンダー + 選択日エディタ）と推移・種目タブの E2E。
-// src/views/{day,calendar,mod,progress,chart,menu}.rs の data-testid を使う。
+// 記録タブ（カレンダー + 選択日エディタ）と推移・設定タブの E2E。
+// src/views/{day,calendar,mod,progress,chart,settings}.rs の data-testid を使う。
 //
 // 「前日の記録がある状態」は seedPastLogs() で localStorage に直接注入して作る。
 // UI から過去日へ書き込む経路そのものの検証（ExerciseLog.at が null になること）は
@@ -35,7 +35,7 @@ async function blurActive(page) {
 }
 
 /**
- * 種目タブの部位カード。
+ * 設定タブの部位カード。
  *
  * ★ hasText を group-item に直接掛けない。開いている部位のカードは所属種目の名前も
  *   含むので、部位名が種目名の部分文字列だと誤マッチする。has: で group-name に
@@ -48,12 +48,32 @@ function groupItem(page, name) {
 }
 
 /**
- * 種目タブの部位を開いてカードを返す。
+ * 設定タブの節（`settings-row-*`）へ入る。
+ *
+ * ★ 設定タブの入口は節の一覧（adr/ux/settings-as-a-list-of-sections.md）なので、
+ *   部位や種目を触るテストは必ずここを通す。
+ * ★ **既に入っていることがある。** 開いている節は `SettingsPageCtx` が持っていて
+ *   タブ往復では戻らない（`OpenGroupCtx` と同じ理由）ので、行が出ているときだけ押す。
+ */
+async function openSettingsSection(page, which) {
+  await blurActive(page);
+  await page.getByTestId('tab-settings').click();
+  // ★ **別の節に居ることがある。** 開いている節は `SettingsPageCtx` が持っていて
+  //   タブ往復では戻らないので、まずトップへ戻してから入る（「入っていない」
+  //   ではなく「違う節に入っている」が抜けると、行が見えないまま素通りする）
+  const back = page.getByTestId('settings-back');
+  if (await back.isVisible()) await back.click();
+  await page.getByTestId(`settings-row-${which}`).click();
+}
+
+/**
+ * 設定タブの部位を開いてカードを返す。**「種目」節に入るところからやる。**
  *
  * ★ 種目一覧は既定で全部閉じている（adr/ux/menu-groups-as-single-open-accordion.md）。group-toggle はトグルなので、
  *   既に開いているものを押すと閉じてしまう。aria-expanded を見てから押す。
  */
 async function openGroup(page, name) {
+  await openSettingsSection(page, 'exercises');
   const item = groupItem(page, name);
   const toggle = item.getByTestId('group-toggle');
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
@@ -651,14 +671,14 @@ test('10. 同じ日に同じ種目を再度追加してもカードは増えず�
   await expect(row0.getByTestId('set-weight')).toHaveValue('70');
 });
 
-test('11. 種目タブでの改名・部位変更・新規追加が記録タブに反映され、アーカイブは推移タブから参照できる', async ({ page }) => {
-  await page.getByTestId('tab-menu').click();
-  await expect(page.getByTestId('screen-menu')).toBeVisible();
+test('11. 設定タブでの改名・部位変更・新規追加が記録タブに反映され、アーカイブは推移タブから参照できる', async ({ page }) => {
+  await page.getByTestId('tab-settings').click();
+  await expect(page.getByTestId('screen-settings')).toBeVisible();
 
   // 改名 + 部位変更（肩→腕）を1つの種目に対して行う
   await openGroup(page, '肩');
   await page.getByTestId('exercise-name').filter({ hasText: exactText('サイドレイズ') }).click();
-  const menuSheet = page.getByTestId('menu-sheet');
+  const menuSheet = page.getByTestId('settings-sheet');
   await expect(menuSheet).toBeVisible();
 
   await page.getByTestId('exercise-rename').fill('サイドレイズ改');
@@ -673,10 +693,10 @@ test('11. 種目タブでの改名・部位変更・新規追加が記録タブ�
   await expect(menuSheet.getByTestId('kind-option')).toHaveCount(0);
   await expect(menuSheet).not.toContainText('種類');
 
-  await page.getByTestId('menu-sheet-close').click();
+  await page.getByTestId('settings-sheet-close').click();
 
   // 新規部位 + 新規種目を追加する
-  await page.getByTestId('menu-add-group').click();
+  await page.getByTestId('settings-add-group').click();
   await page.getByTestId('new-group-name').fill('テスト部位');
   await page.getByTestId('new-group-submit').click();
 
@@ -684,7 +704,7 @@ test('11. 種目タブでの改名・部位変更・新規追加が記録タブ�
   //   見えず行き止まりに見える（adr/ux/menu-groups-as-single-open-accordion.md）
   const testGroupItem = groupItem(page, 'テスト部位');
   await expect(testGroupItem.getByTestId('group-toggle')).toHaveAttribute('aria-expanded', 'true');
-  await testGroupItem.getByTestId('menu-add-exercise').click();
+  await testGroupItem.getByTestId('settings-add-exercise').click();
   await page.getByTestId('new-exercise-name').fill('テスト種目');
   await page.getByTestId('new-exercise-submit').click();
 
@@ -710,7 +730,7 @@ test('11. 種目タブでの改名・部位変更・新規追加が記録タブ�
   // アーカイブ: 今日タブの追加シートには出なくなるが、推移タブのセレクタでは
   // 末尾の「アーカイブ済み」セクションから参照できる（過去ログの exercise_id 参照を
   // 保つための論理削除なので、参照できなくなると過去データが見えなくなる）
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   // 開閉状態はタブを跨いで保たれる（OpenGroupCtx が App 側にある）ので、
   // openGroup は aria-expanded を見て既に開いていれば押さない
   await openGroup(page, 'テスト部位');
@@ -718,7 +738,7 @@ test('11. 種目タブでの改名・部位変更・新規追加が記録タブ�
   await page.getByTestId('archive-exercise').click();
   // ★ <dialog> は常時マウントなので消えない。「閉じている」は toBeHidden で見る
   //   （閉じた dialog は UA の display:none が効く）
-  await expect(page.getByTestId('menu-sheet')).toBeHidden();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
 
   await page.getByTestId('tab-record').click();
   await page.getByTestId('add-exercise').click();
@@ -734,7 +754,7 @@ test('11. 種目タブでの改名・部位変更・新規追加が記録タブ�
   // 部位グループの削除ガード: アーカイブ済み種目も所属種目として数えるので削除できない。
   // ここが漏れるとアーカイブ済み種目の group_id が宙に浮き、過去ログの部位帰属
   // （カレンダーのドット色・部位別グラフ・今日タブの部位チップ）が壊れる
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   // 部位の編集は右端の鉛筆から（group-name は <span> になったので押せない）
   await groupItem(page, 'テスト部位').getByTestId('group-edit').click();
   await page.getByTestId('delete-group').click();
@@ -747,21 +767,21 @@ test('11. 種目タブでの改名・部位変更・新規追加が記録タブ�
   await expect(page.getByTestId('delete-blocked-archived')).toHaveCount(0);
 });
 
-test('種目タブは部位だけを並べ、部位を開くとその部位の種目が出る（1 つだけ開く）', async ({ page }) => {
-  await page.getByTestId('tab-menu').click();
+test('設定タブは部位だけを並べ、部位を開くとその部位の種目が出る（1 つだけ開く）', async ({ page }) => {
+  await openSettingsSection(page, 'exercises');
 
   // ★ 改修の本体。既定で種目は 1 つも出ていない。6 部位 28 種目が全部並ぶと、
   //   どの部位があるかを見るだけで長いスクロールが要る（adr/ux/menu-groups-as-single-open-accordion.md）
   await expect(page.getByTestId('group-item')).toHaveCount(6);
   await expect(page.getByTestId('exercise-item')).toHaveCount(0);
-  await expect(page.getByTestId('menu-add-exercise')).toHaveCount(0);
+  await expect(page.getByTestId('settings-add-exercise')).toHaveCount(0);
 
   // 閉じていても種目数はヘッダに出る（開かないと中身の量が分からない、を避ける）
   await expect(groupItem(page, '胸').getByTestId('group-count')).toHaveText('5 種目');
 
   const chest = await openGroup(page, '胸');
   await expect(chest.getByTestId('exercise-item')).toHaveCount(5);
-  await expect(chest.getByTestId('menu-add-exercise')).toBeVisible();
+  await expect(chest.getByTestId('settings-add-exercise')).toBeVisible();
   // 他の部位は閉じたままなので、画面全体で数えても 5 件
   await expect(page.getByTestId('exercise-item')).toHaveCount(5);
 
@@ -778,7 +798,7 @@ test('種目タブは部位だけを並べ、部位を開くとその部位の�
 });
 
 test('並び替えの矢印は種目にも部位にも無く、部位ヘッダの標的は 2 つだけ', async ({ page }) => {
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   await openGroup(page, '胸');
 
   // 退行の固定。一覧に 44px のボタンを並べ直さない（adr/ux/menu-groups-as-single-open-accordion.md）
@@ -798,14 +818,14 @@ test('アーカイブから戻すと、戻した先の部位が画面に入り�
   //   画面へ入ってくる」ことなので、端末によって一覧が丸ごと収まってしまうと
   //   （Pixel 7 は 915px 高）前提そのものが作れず、テストが何も見なくなる
   await page.setViewportSize({ width: 390, height: 480 });
-  await page.getByTestId('tab-menu').click();
+  await openSettingsSection(page, 'exercises');
   const chest = await openGroup(page, '胸');
   await expect(chest.getByTestId('exercise-name').first()).toHaveText('ベンチプレス');
 
   await page.getByTestId('exercise-name').filter({ hasText: exactText('ベンチプレス') }).click();
   await page.getByTestId('archive-exercise').click();
   // シートは常時マウントなので toHaveCount(0) にはならない（adr/ux/native-dialog-for-sheets.md）
-  await expect(page.getByTestId('menu-sheet')).toBeHidden();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
 
   // 戻す先が閉じていて、かつ画面の外にある状態を作る。アーカイブ済みセクションは
   // 一覧の一番下なので、そこまでスクロールすると先頭の胸は上へ抜ける
@@ -834,17 +854,17 @@ test('自動で開いた部位は画面の中に入る（新規作成・部位�
   // 上のテストと同じ理由でビューポートを固定する（末尾に作った部位が
   // fold の下に来る状況を、どの project でも同じに作るため）
   await page.setViewportSize({ width: 390, height: 480 });
-  await page.getByTestId('tab-menu').click();
+  await openSettingsSection(page, 'exercises');
 
   // 新規部位は一覧の末尾に作られる。開くだけでスクロールしないと sticky な
   // .add-wrap の裏か fold の下に隠れて、「＋ 種目を追加」に到達できない
-  await page.getByTestId('menu-add-group').click();
+  await page.getByTestId('settings-add-group').click();
   await page.getByTestId('new-group-name').fill('有酸素');
   await page.getByTestId('new-group-submit').click();
   const cardio = groupItem(page, '有酸素');
   await expect(cardio.getByTestId('group-toggle')).toHaveAttribute('aria-expanded', 'true');
   await expect(cardio).toBeInViewport();
-  await expect(cardio.getByTestId('menu-add-exercise')).toBeInViewport();
+  await expect(cardio.getByTestId('settings-add-exercise')).toBeInViewport();
 
   // 部位を移すと移動先が開く（adr/ux/menu-groups-as-single-open-accordion.md の自動展開のうちテストが無かったもの）
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -855,7 +875,7 @@ test('自動で開いた部位は画面の中に入る（新規作成・部位�
     .getByTestId('group-option')
     .filter({ hasText: exactText('有酸素') })
     .click();
-  await page.getByTestId('menu-sheet-close').click();
+  await page.getByTestId('settings-sheet-close').click();
   await expect(cardio.getByTestId('group-toggle')).toHaveAttribute('aria-expanded', 'true');
   await expect(cardio).toBeInViewport();
   await expect(
@@ -869,8 +889,8 @@ test('自動で開いた部位は画面の中に入る（新規作成・部位�
 });
 
 test('開いていた部位を削除するとアコーディオンが閉じる', async ({ page }) => {
-  await page.getByTestId('tab-menu').click();
-  await page.getByTestId('menu-add-group').click();
+  await openSettingsSection(page, 'exercises');
+  await page.getByTestId('settings-add-group').click();
   await page.getByTestId('new-group-name').fill('空の部位');
   await page.getByTestId('new-group-submit').click();
 
@@ -890,12 +910,12 @@ test('開いていた部位を削除するとアコーディオンが閉じる',
 test('開いた部位はタブを往復しても開いたまま', async ({ page }) => {
   // ★ 筋トレ中は記録⇄種目の往復が常なので、戻るたびに部位を探して押し直すのは
   //   「最短距離」に反する。シグナルを App 側（OpenGroupCtx）に置くことで保つ
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   await openGroup(page, '肩');
 
   await page.getByTestId('tab-record').click();
   await expect(page.getByTestId('screen-record')).toBeVisible();
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
 
   await expect(groupItem(page, '肩').getByTestId('group-toggle')).toHaveAttribute(
     'aria-expanded',
@@ -909,13 +929,13 @@ test('アイコンの SVG が描画されている', async ({ page }) => {
   //   bogus comment にして**エラーも出さずに**アイコンが 1 つも出なくなる
   //   （adr/architecture/help-figures-as-included-svg.md /
   //   adr/architecture/lucide-icons-as-included-svg.md）。個数を固定して黙って消えるのを防ぐ
-  await page.getByTestId('tab-menu').click();
+  await openSettingsSection(page, 'exercises');
   await expect(page.locator('[data-testid=group-toggle] .icon > svg')).toHaveCount(6);
   await expect(page.locator('[data-testid=group-edit] .icon > svg')).toHaveCount(6);
 
   await groupItem(page, '胸').getByTestId('group-edit').click();
-  await expect(page.locator('[data-testid=menu-sheet-close] .icon > svg')).toHaveCount(1);
-  await page.getByTestId('menu-sheet-close').click();
+  await expect(page.locator('[data-testid=settings-sheet-close] .icon > svg')).toHaveCount(1);
+  await page.getByTestId('settings-sheet-close').click();
 
   // 記録タブの月移動も同じ機構
   await page.getByTestId('tab-record').click();
@@ -923,14 +943,14 @@ test('アイコンの SVG が描画されている', async ({ page }) => {
   await expect(page.locator('[data-testid=cal-next] .icon > svg')).toHaveCount(1);
 });
 
-test('種目タブにクラスなしの button を作らない', async ({ page }) => {
+test('設定タブにクラスなしの button を作らない', async ({ page }) => {
   // adr/ux/declare-color-scheme-for-ua-widgets.md。UA 既定のボタンは約 20px しかない
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   await openGroup(page, '胸');
-  await expect(page.locator('[data-testid=screen-menu] button:not([class])')).toHaveCount(0);
+  await expect(page.locator('[data-testid=screen-settings] button:not([class])')).toHaveCount(0);
 
   await groupItem(page, '胸').getByTestId('group-edit').click();
-  await expect(page.locator('[data-testid=menu-sheet] button:not([class])')).toHaveCount(0);
+  await expect(page.locator('[data-testid=settings-sheet] button:not([class])')).toHaveCount(0);
 });
 
 test('12. 重量入力の中間状態("6.")でクラッシュせず、"6.5"まで打つと指標に反映される', async ({ page }) => {
@@ -1580,7 +1600,7 @@ test('記録タブの h1 は 1 個だけで、選択日は h2 にぶら下がる
 test('他タブの h1 もそれぞれ 1 個', async ({ page }) => {
   await page.getByTestId('tab-progress').click();
   await expect(page.locator('main h1')).toHaveCount(1);
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   await expect(page.locator('main h1')).toHaveCount(1);
 });
 
@@ -1688,8 +1708,8 @@ test('タブを切り替えても View Transition は走らない', async ({ pag
   });
   await page.reload();
 
-  await page.getByTestId('tab-menu').click();
-  await expect(page.getByTestId('screen-menu')).toBeVisible();
+  await page.getByTestId('tab-settings').click();
+  await expect(page.getByTestId('screen-settings')).toBeVisible();
   await page.getByTestId('tab-progress').click();
   await expect(page.getByTestId('screen-progress')).toBeVisible();
 
@@ -1788,12 +1808,478 @@ test('コピーできる種目が残っていない日は候補に出ない（�
   // アーカイブするとコピー対象から外れる。件数だけ数えて行を出していると、
   // 「1種目」と表示されるのに押しても何も起きない死んだボタンになる
   await blurActive(page);
-  await page.getByTestId('tab-menu').click();
+  await page.getByTestId('tab-settings').click();
   await openGroup(page, '脚');
   await page.getByTestId('exercise-name').filter({ hasText: exactText('スクワット') }).click();
   await page.getByTestId('archive-exercise').click();
-  await expect(page.getByTestId('menu-sheet')).toBeHidden();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
 
   await page.getByTestId('tab-record').click();
   await expect(page.getByTestId('menu-copy')).toHaveCount(0);
+});
+
+// ── トレーニングメニュー ────────────────────────────────────────────────────
+// adr/ux/start-from-a-saved-routine.md
+
+/** 設定タブでメニューを 1 本作る。`names` の順がそのまま展開順になる。 */
+async function createRoutine(page, name, names) {
+  await openSettingsSection(page, 'routines');
+  await page.getByTestId('settings-add-routine').click();
+  await expect(page.getByTestId('settings-sheet')).toBeVisible();
+  await page.getByTestId('routine-name-input').fill(name);
+  for (const n of names) {
+    await page.getByTestId('routine-pick').filter({ hasText: exactText(n) }).click();
+  }
+  await page.getByTestId('routine-save').click();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
+}
+
+test('★ 保存したメニューは種目ごとに別々の日の「前回」からセットを引く', async ({ page }) => {
+  // ★ この機能の核。ベンチは 3 日前、スクワットは 10 日前にやっている。
+  //   1 日を丸ごと写す menu-candidate と違い、種目ごとに別の日から入る
+  await seedPastLogs(page, [
+    {
+      daysAgo: 3,
+      exerciseName: 'ベンチプレス',
+      sets: [
+        { weight: 60, reps: 10 },
+        { weight: 60, reps: 8 },
+      ],
+    },
+    { daysAgo: 10, exerciseName: 'スクワット', sets: [{ weight: 80, reps: 5 }] },
+  ]);
+
+  await createRoutine(page, '胸と脚の日', ['ベンチプレス', 'スクワット']);
+
+  await page.getByTestId('tab-record').click();
+  const routines = page.getByTestId('routine-candidate');
+  await expect(routines).toHaveCount(1);
+  await expect(routines.first()).toContainText('胸と脚の日');
+  // 種目名まで出す（「胸の日」と「胸の日（軽め）」を名前だけで選び分けさせない）
+  await expect(routines.first()).toContainText('ベンチプレス');
+  await expect(routines.first()).toContainText('胸');
+
+  await routines.first().click();
+
+  const cards = page.getByTestId('exercise-card');
+  await expect(cards).toHaveCount(2);
+  // 並びはメニューの並び（タップ順）
+  await expect(cards.nth(0)).toContainText('ベンチプレス');
+  await expect(cards.nth(1)).toContainText('スクワット');
+
+  // ★ 入力欄の値で見る。Db は正しいのに <For> がカードを使い回して入力欄が
+  //   古いまま、という状態を today-metric は素通ししてしまう
+  const bench = cards.nth(0).getByTestId('set-row');
+  await expect(bench).toHaveCount(2);
+  await expect(bench.nth(0).getByTestId('set-weight')).toHaveValue('60');
+  await expect(bench.nth(0).getByTestId('set-reps')).toHaveValue('10');
+  await expect(bench.nth(1).getByTestId('set-reps')).toHaveValue('8');
+
+  const squat = cards.nth(1).getByTestId('set-row');
+  await expect(squat).toHaveCount(1);
+  await expect(squat.nth(0).getByTestId('set-weight')).toHaveValue('80');
+  await expect(squat.nth(0).getByTestId('set-reps')).toHaveValue('5');
+
+  // 1 種目でも入ったら候補は消える（menu-candidate と同じ「空のときだけ」）
+  await expect(page.getByTestId('menu-copy')).toHaveCount(0);
+
+  // signal に載っただけでなく Db にコミットされている
+  await flushToStorage(page);
+  await page.reload();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(2);
+});
+
+test('メニューに履歴の無い種目が入っていても、空のカードとして出る', async ({ page }) => {
+  // ★ 黙って飛ばすと「3 種目入れたのに 2 枚しか出ない」理由が画面から読めない。
+  //   0 セットのログを書くと migrate が次回起動で落として「出ているのに消える」
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  await createRoutine(page, '胸の日', ['ベンチプレス', 'チェストフライ']);
+
+  await page.getByTestId('tab-record').click();
+  await page.getByTestId('routine-candidate').first().click();
+
+  const cards = page.getByTestId('exercise-card');
+  await expect(cards).toHaveCount(2);
+  await expect(cards.nth(1)).toContainText('チェストフライ');
+  await expect(cards.nth(1)).toContainText('前回 —');
+  // 空の 1 行が出るだけで、値は入らない
+  await expect(cards.nth(1).getByTestId('set-row').nth(0).getByTestId('set-reps')).toHaveValue('');
+});
+
+test('メニューが 1 本も無いときの候補リストは今までと同じ見た目', async ({ page }) => {
+  // ★ メニューを使わない利用者の画面を変えない。見出しを 2 つに割るのは
+  //   出所が実際に 2 つあるときだけ
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+
+  const list = page.getByTestId('menu-copy');
+  await expect(list).toBeVisible();
+  await expect(list).toContainText('前回のメニューから始める');
+  await expect(list).not.toContainText('トレーニングメニュー');
+  await expect(page.getByTestId('routine-candidate')).toHaveCount(0);
+});
+
+test('メニューがあると候補は「トレーニングメニュー」と「最近の記録から」に分かれる', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  await createRoutine(page, '胸の日', ['ベンチプレス']);
+
+  await page.getByTestId('tab-record').click();
+  const list = page.getByTestId('menu-copy');
+  await expect(list).toContainText('トレーニングメニュー');
+  await expect(list).toContainText('最近の記録から');
+  await expect(list).not.toContainText('前回のメニューから始める');
+  // メニューが先頭。curated なほうを先に読ませる
+  await expect(page.getByTestId('routine-candidate')).toHaveCount(1);
+  await expect(page.getByTestId('menu-candidate')).toHaveCount(1);
+});
+
+test('未来日にはメニューの候補も出さない', async ({ page }) => {
+  // ★ ガードが日候補にしか効いていないと、まだやっていないトレーニングが
+  //   「実施済み」としてカレンダーのドット・グラフに乗る
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  await createRoutine(page, '胸の日', ['ベンチプレス']);
+
+  await page.getByTestId('tab-record').click();
+  await expect(page.getByTestId('routine-candidate')).toHaveCount(1);
+
+  // 翌月へ送って未来の日を選ぶ（月内の未来日は今日の位置に依存するため）
+  await page.getByTestId('cal-next').click();
+  await page.getByTestId('cal-day').filter({ hasText: exactText('15') }).click();
+  await expect(page.getByTestId('past-banner')).toBeVisible();
+  await expect(page.getByTestId('menu-copy')).toHaveCount(0);
+});
+
+test('メニューは編集・削除でき、削除しても記録は消えない', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  await createRoutine(page, '胸の日', ['ベンチプレス']);
+
+  // 行全体が編集の入口（開閉と編集を分けない）
+  await page.getByTestId('routine-open').click();
+  await expect(page.getByTestId('settings-sheet')).toBeVisible();
+  await page.getByTestId('routine-name-input').fill('プッシュの日');
+  await page.getByTestId('routine-pick').filter({ hasText: exactText('チェストフライ') }).click();
+  await page.getByTestId('routine-save').click();
+  await expect(page.getByTestId('routine-name')).toHaveText('プッシュの日');
+  await expect(page.getByTestId('routine-count')).toHaveText('2 種目');
+
+  // 削除は確認を挟む（組んだ並びは元に戻せない）
+  await page.getByTestId('routine-open').click();
+  await page.getByTestId('delete-routine').click();
+  await page.getByTestId('delete-routine-confirm').click();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
+  await expect(page.getByTestId('routine-item')).toHaveCount(0);
+
+  // ★ 記録は 1 件も消えない
+  await page.getByTestId('tab-record').click();
+  await expect(page.getByTestId('menu-candidate')).toHaveCount(1);
+});
+
+test('種目が 0 個のメニューも、名前が空のメニューも保存できない', async ({ page }) => {
+  await openSettingsSection(page, 'routines');
+  await page.getByTestId('settings-add-routine').click();
+
+  // 名前だけ。記録タブに出せないので、作れても「押せない行」が残るだけになる
+  await page.getByTestId('routine-name-input').fill('からっぽ');
+  await page.getByTestId('routine-save').click();
+  await expect(page.getByTestId('routine-invalid')).toHaveText('種目を 1 つ以上選んでください');
+
+  // ★ 種目だけ（名前なし）も止める。無名を許すと「（名前なし）」の行が複数並び、
+  //   誤タップ対策の柱にしている「行を見て選び分けられること」が痩せる
+  await page.getByTestId('routine-name-input').fill('   ');
+  await page.getByTestId('routine-pick').filter({ hasText: exactText('ベンチプレス') }).click();
+  await page.getByTestId('routine-save').click();
+  await expect(page.getByTestId('routine-invalid')).toHaveText('メニュー名を入れてください');
+
+  await expect(page.getByTestId('settings-sheet')).toBeVisible();
+  await expect(page.getByTestId('routine-item')).toHaveCount(0);
+});
+
+test('一部の種目だけアーカイブしたメニューは、開く数を出して差分の理由も出す', async ({ page }) => {
+  // ★ 「2 種目」と書いてあるのに 1 枚しか開かない、が起きないこと。
+  //   件数は core::expandable_count（＝記録タブが実際に開く数）を通す
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  await createRoutine(page, '胸の日', ['ベンチプレス', 'チェストフライ']);
+  await expect(page.getByTestId('routine-count')).toHaveText('2 種目');
+
+  await openGroup(page, '胸');
+  await page.getByTestId('exercise-name').filter({ hasText: exactText('チェストフライ') }).click();
+  await page.getByTestId('archive-exercise').click();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
+
+  await openSettingsSection(page, 'routines');
+
+  // 件数は開く数に減り、名前は残したまま（アーカイブは可逆なので隠さない）、
+  // 食い違いの理由を出す
+  await expect(page.getByTestId('routine-count')).toHaveText('1 種目');
+  await expect(page.getByTestId('routine-names')).toContainText('チェストフライ');
+  await expect(page.getByTestId('routine-partial')).toHaveText(
+    'アーカイブ済みの 1 種目は記録タブに出ません',
+  );
+
+  // 記録タブで実際に開くのも 1 枚
+  await page.getByTestId('tab-record').click();
+  await page.getByTestId('routine-candidate').first().click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
+});
+
+test('全種目をアーカイブしたメニューは記録タブに出ず、設定タブに理由が出る', async ({ page }) => {
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'スクワット', sets: [{ weight: 80, reps: 5 }] },
+  ]);
+  await createRoutine(page, '脚の日', ['スクワット']);
+
+  await openGroup(page, '脚');
+  await page.getByTestId('exercise-name').filter({ hasText: exactText('スクワット') }).click();
+  await page.getByTestId('archive-exercise').click();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
+
+  await openSettingsSection(page, 'routines');
+
+  // ★ 出ない理由が画面から読めること。無いと「作ったのに使えない」原因を探せない
+  await expect(page.getByTestId('routine-unusable')).toBeVisible();
+
+  await page.getByTestId('tab-record').click();
+  await expect(page.getByTestId('routine-candidate')).toHaveCount(0);
+});
+
+test('メニューは書き出して読み戻しても残る', async ({ page }) => {
+  await createRoutine(page, '胸の日', ['ベンチプレス', 'チェストフライ']);
+  // flushToStorage は screen-record を待つので、記録タブへ戻してから呼ぶ
+  await page.getByTestId('tab-record').click();
+  await flushToStorage(page);
+
+  const raw = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
+  const db = JSON.parse(raw);
+  expect(db.routines).toHaveLength(1);
+  expect(db.routines[0].name).toBe('胸の日');
+  expect(db.routines[0].exercises).toHaveLength(2);
+
+  // 書き出し形式 = 保存形式なので、この JSON がそのまま読み戻せる
+  await page.reload();
+  await expect(page.getByTestId('tab-settings')).toBeVisible();
+  await openSettingsSection(page, 'routines');
+  await expect(page.getByTestId('routine-name')).toHaveText('胸の日');
+});
+
+test('メニューを 1 本も作っていない保存データは今までとバイト単位で同じ', async ({ page }) => {
+  // ★ routines を常に書くと、メニューを使わない利用者の JSON が変わる
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  await flushToStorage(page);
+
+  const raw = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
+  expect(raw).not.toContain('routines');
+});
+
+test('履歴ゼロでメニューを押したあとタブを往復すると、カードは消えるが候補は戻る', async ({ page }) => {
+  // ★ 初回起動の利用者では**全種目**が履歴なしになるので、
+  //   adr/ux/copy-whole-day-menu.md が却下した「タブ切替で消える」状況がそのまま起きる。
+  //   受け入れているのは、失うのがタップ 1 回だけで、記録が 1 バイトも消えないから。
+  //   その回復経路が本当に生きていることをここで固定する
+  await createRoutine(page, '胸の日', ['ベンチプレス', 'チェストフライ']);
+
+  await page.getByTestId('tab-record').click();
+  await page.getByTestId('routine-candidate').first().click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(2);
+  // カードが出ている間は候補を出さない
+  await expect(page.getByTestId('menu-copy')).toHaveCount(0);
+
+  // 1 セットも打たずにタブを往復する
+  await blurActive(page);
+  await page.getByTestId('tab-progress').click();
+  await page.getByTestId('tab-record').click();
+
+  // カードは消える（空のログは保存しない仕様）が、記録は 1 件も生まれていない
+  await expect(page.getByTestId('exercise-card')).toHaveCount(0);
+  await flushToStorage(page);
+  const raw = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
+  expect(JSON.parse(raw).sessions).toEqual({});
+
+  // ★ 候補が戻るので、もう 1 タップで同じ状態に復帰できる
+  await expect(page.getByTestId('routine-candidate')).toHaveCount(1);
+  await page.getByTestId('routine-candidate').first().click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(2);
+
+  // 1 文字打てば以後は永続化される（実際の使い方はこちら）
+  await page.getByTestId('exercise-card').first().getByTestId('set-reps').first().fill('10');
+  await blurActive(page);
+  await flushToStorage(page);
+  await page.reload();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
+});
+
+test('★ その日の記録から 1 タップでメニューを作れる', async ({ page }) => {
+  // adr/ux/save-a-day-as-a-routine.md
+  await seedPastLogs(page, [
+    { daysAgo: 0, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 0, exerciseName: 'スクワット', sets: [{ weight: 80, reps: 5 }] },
+  ]);
+
+  await page.getByTestId('day-to-routine').click();
+  const sheet = page.getByTestId('day-routine-sheet');
+  await expect(sheet).toBeVisible();
+
+  // その日の種目が**その日のログ順で**初期選択になっている
+  const picked = sheet.getByTestId('routine-picked').locator('li');
+  await expect(picked).toHaveCount(2);
+  await expect(picked.nth(0)).toContainText('ベンチプレス');
+  await expect(picked.nth(1)).toContainText('スクワット');
+
+  await page.getByTestId('routine-name-input').fill('全身の日');
+  await page.getByTestId('routine-save').click();
+  await expect(sheet).toBeHidden();
+
+  // ★ 記録は 1 件も動かない（メニューを作るのは記録の操作ではない）
+  await expect(page.getByTestId('exercise-card')).toHaveCount(2);
+  await flushToStorage(page);
+  const raw = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
+  const db = JSON.parse(raw);
+  expect(db.routines).toHaveLength(1);
+  expect(db.routines[0].name).toBe('全身の日');
+  expect(db.routines[0].exercises).toHaveLength(2);
+
+  // 設定タブにも、次の日の候補にも出る
+  await openSettingsSection(page, 'routines');
+  await expect(page.getByTestId('routine-name')).toHaveText('全身の日');
+});
+
+test('シートの中で種目を足し引きしてから保存できる', async ({ page }) => {
+  // その日やった bonus 種目を外す／その日やらなかった種目を足す、が同じ画面でできる
+  await seedPastLogs(page, [
+    { daysAgo: 0, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 0, exerciseName: 'プランク', sets: [{ weight: 0, reps: 60 }] },
+  ]);
+
+  await page.getByTestId('day-to-routine').click();
+  const sheet = page.getByTestId('day-routine-sheet');
+  // プランクを外して、チェストフライを足す
+  await sheet.getByTestId('routine-remove').nth(1).click();
+  await sheet.getByTestId('routine-pick').filter({ hasText: exactText('チェストフライ') }).click();
+  await page.getByTestId('routine-name-input').fill('胸の日');
+  await page.getByTestId('routine-save').click();
+  await expect(sheet).toBeHidden();
+
+  await openSettingsSection(page, 'routines');
+  await expect(page.getByTestId('routine-names')).toHaveText('ベンチプレス, チェストフライ');
+});
+
+test('記録が無い日には「この日をメニューにする」を出さない', async ({ page }) => {
+  // ★ 判定は cards ではなく core::day_exercises。「種目を追加」で出しただけで
+  //   まだ何も打っていないカードで出すと、何も保存されないリンクになる
+  await expect(page.getByTestId('day-to-routine')).toHaveCount(0);
+
+  // 種目を追加しただけ（セットは空）ではまだ出ない
+  await addExercise(page, 'ベンチプレス');
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
+  await expect(page.getByTestId('day-to-routine')).toHaveCount(0);
+
+  // 1 セット打つと出る
+  const card = page.getByTestId('exercise-card').first();
+  await card.getByTestId('set-weight').first().fill('60');
+  await card.getByTestId('set-reps').first().fill('10');
+  await blurActive(page);
+  await expect(page.getByTestId('day-to-routine')).toBeVisible();
+});
+
+test('アーカイブ済み種目の記録はメニューに入れない', async ({ page }) => {
+  // 「前回のメニューから始める」の候補と同じ copyable を通す
+  await seedPastLogs(page, [
+    { daysAgo: 0, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 0, exerciseName: 'スクワット', sets: [{ weight: 80, reps: 5 }] },
+  ]);
+
+  await blurActive(page);
+  await page.getByTestId('tab-settings').click();
+  await openGroup(page, '脚');
+  await page.getByTestId('exercise-name').filter({ hasText: exactText('スクワット') }).click();
+  await page.getByTestId('archive-exercise').click();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
+
+  await page.getByTestId('tab-record').click();
+  await page.getByTestId('day-to-routine').click();
+  const picked = page.getByTestId('day-routine-sheet').getByTestId('routine-picked').locator('li');
+  await expect(picked).toHaveCount(1);
+  await expect(picked.nth(0)).toContainText('ベンチプレス');
+});
+
+test('「この日をメニューにする」は sticky な帯に覆われず force なしで押せる', async ({ page }) => {
+  // ★ .add-wrap は sticky で包含ブロックが .day。その中で帯より後ろに置くと、
+  //   .day の末尾までスクロールしきるまで帯の下に潜りうる。だから .day の外に出して
+  //   ある（InstallBanner と同じ回避、adr/ux/save-a-day-as-a-routine.md）。
+  //   この位置関係を固定するテスト
+  await seedPastLogs(page, [
+    { daysAgo: 0, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+  ]);
+  // カードを増やして、リンクが確実に折り返しの下へ行く状況を作る
+  for (const name of ['ダンベルプレス', 'チェストフライ', 'プッシュアップ']) {
+    await addExercise(page, name);
+  }
+  await blurActive(page);
+
+  const link = page.getByTestId('day-to-routine');
+  await link.scrollIntoViewIfNeeded();
+  const box = await link.boundingBox();
+  const add = await page.locator('.add-wrap').boundingBox();
+  expect(box, 'リンクが描画されていない').not.toBeNull();
+  // 「種目を追加」の下端よりリンクの上端が下にある（= 重なっていない）
+  expect(box.y).toBeGreaterThanOrEqual(add.y + add.height);
+
+  // force なしで押せる（actionability チェックを通る）
+  await link.click();
+  await expect(page.getByTestId('day-routine-sheet')).toBeVisible();
+});
+
+// ── 設定タブの節一覧（adr/ux/settings-as-a-list-of-sections.md）──────────────
+
+test('★ 設定タブの入口は節の一覧で、中身は入るまで出ない', async ({ page }) => {
+  await blurActive(page);
+  await page.getByTestId('tab-settings').click();
+
+  // トップは 4 行だけ。種目もメニューも 1 件も出ていない
+  // （`.row` で数える。手順シートの <dialog> も同じ親に出るので `> *` だと 5 になる）
+  await expect(page.getByTestId('settings-rows').locator('.row')).toHaveCount(4);
+  await expect(page.getByTestId('group-item')).toHaveCount(0);
+  await expect(page.getByTestId('routine-item')).toHaveCount(0);
+  await expect(page.getByTestId('settings-add-group')).toHaveCount(0);
+  await expect(page.getByTestId('settings-add-routine')).toHaveCount(0);
+  // 入る前に件数が読める（入って初めて空だと分かる、を避ける）
+  await expect(page.getByTestId('settings-row-exercises')).toContainText('28');
+  await expect(page.getByTestId('settings-row-routines')).toContainText('0');
+
+  // 節へ入ると h1 がその節名になる（h1 は常に 1 つ）
+  await page.getByTestId('settings-row-exercises').click();
+  await expect(page.locator('main h1')).toHaveCount(1);
+  await expect(page.locator('main h1')).toHaveText('種目');
+  await expect(page.getByTestId('group-item')).toHaveCount(6);
+  await expect(page.getByTestId('settings-rows')).toHaveCount(0);
+
+  // 「‹」でトップへ戻る
+  await page.getByTestId('settings-back').click();
+  await expect(page.locator('main h1')).toHaveText('設定');
+  await expect(page.getByTestId('group-item')).toHaveCount(0);
+});
+
+test('開いていた節はタブを往復しても戻らない', async ({ page }) => {
+  // ★ OpenGroupCtx と同じ理由。往復のたびにトップへ戻されると、入り直す手数が毎回要る
+  await openSettingsSection(page, 'exercises');
+  await expect(page.getByTestId('group-item')).toHaveCount(6);
+
+  await blurActive(page);
+  await page.getByTestId('tab-record').click();
+  await page.getByTestId('tab-settings').click();
+
+  await expect(page.locator('main h1')).toHaveText('種目');
+  await expect(page.getByTestId('group-item')).toHaveCount(6);
 });

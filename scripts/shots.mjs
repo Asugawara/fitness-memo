@@ -28,16 +28,15 @@ const BASE = `http://localhost:${PORT}/`;
  * 記録タブだけ指定があるのは、先頭で撮るとカレンダーしか入らず、この画面の要である
  * 「カレンダーと入力欄が縦に並んで 1 画面」（adr/ux/record-tab-calendar-with-day-editor.md）が写らないため。
  *
- * `expand` は種目タブ用で、撮る前にその部位を開き、そのカードを画面中央に寄せる。
- * 全部閉じた絵だと「部位しか無いアプリ」に見え、逆に開いた絵だけでは折りたたまれて
- * いることが伝わらない。閉じた部位と開いた部位が同時に写るのが、この画面の一番正確な絵
- * （adr/ux/menu-groups-as-single-open-accordion.md）。**先頭の部位を開くと上に閉じた
- * カードが写らない**ので、真ん中あたりの「肩」（4 種目でカードも高すぎない）を開く。
+ * ★ 設定タブは**トップ（節の一覧）をそのまま撮る**。タップして最初に出るのがこれで、
+ *   各節の件数まで写る（adr/ux/settings-as-a-list-of-sections.md）。かつては部位を 1 つ
+ *   開いた絵にしていたが、その一覧は節の中へ移ったので、開いた絵は「設定」の代表では
+ *   なくなった。中身は README の本文が説明する。
  */
 const SHOTS = [
   { file: '1-record.png', testid: 'tab-record', screen: 'screen-record', center: 'today-date' },
   { file: '2-progress.png', testid: 'tab-progress', screen: 'screen-progress' },
-  { file: '3-menu.png', testid: 'tab-menu', screen: 'screen-menu', expand: '肩' },
+  { file: '3-menu.png', testid: 'tab-settings', screen: 'screen-settings' },
 ];
 
 /**
@@ -59,6 +58,21 @@ const SEED = [
   { daysAgo: 2, name: 'ラットプルダウン', sets: [[45, 12], [45, 10], [45, 10]] },
   { daysAgo: 0, name: 'ベンチプレス', sets: [[60, 10], [60, 10], [60, 8]] },
   { daysAgo: 0, name: 'ダンベルプレス', sets: [[22.5, 12], [22.5, 10]] },
+];
+
+/**
+ * 撮影用のトレーニングメニュー（adr/ux/start-from-a-saved-routine.md）。
+ *
+ * ★ 置かないと設定タブに「まだありません」の 1 行しか写らず、この画面の目玉が
+ *   README から読めない。上の SEED と同じ分割（胸 / 背中）で 2 本だけ置く。
+ *
+ * ★ ID は予約領域（1024 未満）の外に固定で書く。撮り直しても同じ絵になるように
+ *   するためで、`IdGen` を通さないのはここが撮影用の直接注入だから（実アプリの
+ *   採番経路ではない）。12 文字の base32 でないと `core::migrate` が弾く。
+ */
+const ROUTINES = [
+  { id: '00000000zzz1', name: '胸の日', names: ['ベンチプレス', 'ダンベルプレス', 'チェストフライ'] },
+  { id: '00000000zzz2', name: '背中の日', names: ['懸垂', 'ラットプルダウン', 'デッドリフト'] },
 ];
 
 /**
@@ -124,7 +138,7 @@ try {
     document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
   });
 
-  await page.evaluate(({ seed, weights }) => {
+  await page.evaluate(({ seed, weights, routines }) => {
     // ★ storage.rs の KEY と一致していること。schema 世代ごとにキーを切る運用
     //   （adr/storage/storage-key-per-schema-generation.md）なので、ここが古いと getItem が null を返して黙って落ちる
     const KEY = 'fitness-memo/v3';
@@ -156,8 +170,17 @@ try {
       session.body_weight = kg;
       db.sessions[key] = session;
     }
+    db.routines = routines.map(({ id, name, names }) => ({
+      id,
+      name,
+      exercises: names.map((n) => {
+        const ex = db.exercises.find((e) => e.name === n);
+        if (!ex) throw new Error(`プリセットに無い種目: ${n}`);
+        return ex.id;
+      }),
+    }));
     localStorage.setItem(KEY, JSON.stringify(db));
-  }, { seed: SEED, weights: BODY_WEIGHTS });
+  }, { seed: SEED, weights: BODY_WEIGHTS, routines: ROUTINES });
 
   await page.reload();
 
@@ -168,18 +191,11 @@ try {
   );
   if (!standalone) throw new Error('display-mode: standalone の偽装が効いていない');
 
-  for (const { file, testid, screen, center, expand } of SHOTS) {
+  for (const { file, testid, screen, center } of SHOTS) {
     await page.getByTestId(testid).click();
     await page.getByTestId(screen).waitFor({ state: 'visible' });
     // タブを切り替えてもスクロール位置は持ち越されるので、毎回先頭へ戻してから決める
     await page.evaluate(() => window.scrollTo(0, 0));
-    if (expand) {
-      const card = page.getByTestId('group-item').filter({
-        has: page.getByTestId('group-name').filter({ hasText: new RegExp(`^${expand}$`) }),
-      });
-      await card.getByTestId('group-toggle').click();
-      await card.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
-    }
     if (center) {
       await page
         .getByTestId(center)

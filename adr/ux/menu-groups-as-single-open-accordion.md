@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-09
 - **カテゴリ**: ux
-- **関連**: [記録タブをカレンダー + 選択日エディタの単一画面にする](record-tab-calendar-with-day-editor.md), [ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする](install-guide-banner-and-sheet.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [`color-scheme` を宣言し、クラスなしの `<button>` を作らない](declare-color-scheme-for-ua-widgets.md), [アイコンに lucide を採り、`assets/icons/*.svg` を `include_str!` で埋め込む](../architecture/lucide-icons-as-included-svg.md)
+- **関連**: [記録タブをカレンダー + 選択日エディタの単一画面にする](record-tab-calendar-with-day-editor.md), [ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする](install-guide-banner-and-sheet.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [`color-scheme` を宣言し、クラスなしの `<button>` を作らない](declare-color-scheme-for-ua-widgets.md), [アイコンに lucide を採り、`assets/icons/*.svg` を `include_str!` で埋め込む](../architecture/lucide-icons-as-included-svg.md), [メニュー編集シートの「選択中」をドラッグで並べ替え、種目ピッカーを複数開けるアコーディオンにする](routine-editor-drag-and-accordion.md)
 
 ## 背景
 

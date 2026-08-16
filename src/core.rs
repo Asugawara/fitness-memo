@@ -1628,8 +1628,13 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
     //
     // ★ 書かないと**機種変更でメニューだけ消える**。記録は行に出るので残るが、
     //   メニューは `Db` にしか無い（adr/data-model/routines-as-named-exercise-lists.md）。
-    //   種目の並びは**行の順序**で表す。列を増やして順番を書くより、シート上で
-    //   行を入れ替えれば並びが変わるほうが直感に合う
+    //
+    // ★ **並び順は `セット` 列に書く**（1 始まり）。行の順序だけに頼ってはいけない —
+    //   **メニュー名は一意ではない**（画面から同名のものを作れるし、`merge_db` は
+    //   名前だけでは寄せない方針なので実際に並ぶ）。名前でひとまとまりにすると、
+    //   「胸の日」が 2 本あるファイルを読み戻したときに**中身が融合した別物**になる。
+    //   番号が 1 に戻るところが区切りになるので、同名が続いても分けられる。
+    //   記録行の `セット` と意味が並行（どちらも「何番目か」）なので列は増やさない
     for r in &db.routines {
         if r.exercises.is_empty() {
             // 名前だけのメニュー（種目を選ぶ前に閉じた状態）。`migrate` が残すと決めた形
@@ -1639,18 +1644,23 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
             );
             continue;
         }
+        let mut no = 0usize;
         for id in &r.exercises {
             // 引けない種目は書かない（種目マスタ行と同じ規則。ID が名前として出るのを防ぐ）
             let Some(ex) = db.exercise(*id) else {
                 continue;
             };
+            no += 1;
+            let pos = no.to_string();
             let group = db
                 .group(ex.group_id)
                 .map(|g| g.name.as_str())
                 .unwrap_or_default();
             push_row(
                 &mut out,
-                ["", group, &ex.name, "", "", "", "", "", "", "", "", &r.name],
+                [
+                    "", group, &ex.name, &pos, "", "", "", "", "", "", "", &r.name,
+                ],
             );
         }
     }
@@ -1926,7 +1936,8 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
     // メニュー名 → 種目の並び（**行の順序**がそのまま並び順）。
     // ★ `Vec` で持つのは順序が意味を持つから。`HashMap` の値に `HashSet` を使うと
     //   「胸の日」を開いたときのカードの並びが毎回変わる
-    let mut staged_routines: Vec<(String, Vec<ExerciseId>)> = Vec::new();
+    // (メニュー名, 種目の並び, 直前の行の番号)
+    let mut staged_routines: Vec<(String, Vec<ExerciseId>, u32)> = Vec::new();
     // ★ 読めなかったセル。**黙って捨てない**ための計数（下の `NoRecords` 判定で使う）
     let mut unread = 0usize;
 
@@ -1953,13 +1964,22 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
         // ★ 記録行より先に判定する。日付が入っている行にメニュー名が混ざっていても、
         //   それは記録として扱う（メニューは日付を持たないものと決めてある）
         if date.is_none() && !routine_name.is_empty() {
-            let members = match staged_routines.iter().position(|(n, _)| n == routine_name) {
-                Some(i) => &mut staged_routines[i].1,
-                None => {
-                    staged_routines.push((routine_name.to_string(), Vec::new()));
-                    &mut staged_routines.last_mut().expect("今 push した").1
-                }
+            let pos = parse_cell_count(at(cols.set_no)).unwrap_or(0);
+            // ★ **名前でまとめてはいけない。** メニュー名は一意ではない（画面から同名を
+            //   作れるし、`merge_db` は名前だけでは寄せない方針なので実際に並ぶ）。
+            //   名前でまとめると「胸の日」が 2 本あるファイルを読み戻したときに
+            //   **中身が融合した別物**になる。名前が変わるか、番号が増えなくなったら
+            //   次のメニューとして開く
+            let start_new = match staged_routines.last() {
+                Some((name, _, last_pos)) => name != routine_name || pos <= *last_pos,
+                None => true,
             };
+            if start_new {
+                staged_routines.push((routine_name.to_string(), Vec::new(), pos));
+            } else if let Some(last) = staged_routines.last_mut() {
+                last.2 = pos;
+            }
+            let members = &mut staged_routines.last_mut().expect("直前に確保した").1;
             if !ex_name.is_empty()
                 && let Some(id) = resolve_exercise(
                     &mut out,
@@ -2076,7 +2096,7 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
     //   寄せないことを意図して選んでいる（adr/data-model/routines-as-named-exercise-lists.md）。
     //   ここで名前に寄せると、その判断を取り込み経路だけ裏口から覆すことになる。
     //   自分のファイルを戻すぶんには名前も種目も一致するので重複しない。
-    for (name, exercises) in staged_routines {
+    for (name, exercises, _) in staged_routines {
         out.routines.push(Routine {
             id: ids.alloc(),
             name,
@@ -5277,6 +5297,46 @@ mod tests {
             vec![("胸の日", vec![bench, fly]), ("これから作る", Vec::new()),],
             "メニューが往復していない: {tsv}"
         );
+    }
+
+    /// ★ **メニュー名は一意ではない**（画面から同名を作れるし、`merge_db` は名前だけでは
+    ///   寄せない）。名前でまとめると、同名 2 本のファイルを読み戻したときに
+    ///   **中身が融合した別物**になる。`セット` 列の番号が 1 に戻るところで区切る。
+    #[test]
+    fn tsv_round_trips_two_routines_that_share_a_name() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let fly = crate::presets::preset_exercise_id("チェストフライ").expect("プリセット");
+        let push = crate::presets::preset_exercise_id("プッシュアップ").expect("プリセット");
+        let mut g = ids();
+        let mut db = crate::presets::seeded_db();
+        db.routines.push(Routine {
+            id: g.alloc(),
+            name: "胸の日".into(),
+            exercises: vec![bench, fly],
+        });
+        db.routines.push(Routine {
+            id: g.alloc(),
+            name: "胸の日".into(),
+            exercises: vec![bench, push],
+        });
+
+        let tsv = export_tsv(&db, jst());
+        let mut mine = crate::presets::seeded_db();
+        let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
+        merge_db(&mut mine, incoming);
+
+        assert_eq!(
+            mine.routines
+                .iter()
+                .map(|x| (x.name.as_str(), x.exercises.clone()))
+                .collect::<Vec<_>>(),
+            vec![("胸の日", vec![bench, fly]), ("胸の日", vec![bench, push])],
+            "同名のメニューが融合した: {tsv}"
+        );
+
+        // 2 回目で増えない（融合していると毎回 1 本ずつ増える）
+        let again = parse_import(&tsv, &mut ids(), &mine).expect("2 回目");
+        assert!(merge_db(&mut mine, again).is_noop(), "2 回目で増えている");
     }
 
     /// ★ メニューは名前だけでは寄せない規則なので、2 回入れて増えないことを別に見る

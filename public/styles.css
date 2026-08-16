@@ -197,11 +197,20 @@ h3 {
    まずこの一覧に並べて順序を決めること。
 
    現在の重なり順:
-     [data-drag="lift"]    1  … ドラッグ中のカード / セット行。兄弟より前へ出るだけで
-                                sticky の「種目を追加」より下なのが正しい
+     [data-drag="lift"]    1  … ドラッグ中のカード / セット行 / メニューの「選択中」。
+                                兄弟より前へ出るだけで、sticky の帯より下なのが正しい
      .add-wrap（sticky）   9  … タブバーより下
      .bottom-tabs         10
-     .sheet（<dialog>）   top layer … z-index を持たない（持っても効かない） */
+     .sheet（<dialog>）   top layer … z-index を持たない（持っても効かない）
+
+   ★ シートの中は <dialog> が作る別の重なり文脈なので、上の並びとは勝ち負けしない。
+     その中だけの順:
+     [data-drag="lift"]    1  … ドラッグ中の「選択中」の行
+     .rtn-save（sticky）   2  … メニュー編集シートの保存帯。**掴んだ行より上**。
+                                ここを 1 のままにすると DOM 順（.rtn-save が後ろ）に
+                                頼ることになり、どちらが上かが「たまたま」で決まる。
+                                帯の下へ潜るのが正しい向きなのは .add-wrap と同じで、
+                                下端へ運ぶ指は帯に届く前に端の自動スクロールに入る */
 .bottom-tabs {
   position: fixed;
   left: 0;
@@ -661,21 +670,26 @@ h3 {
 }
 
 /* ── ドラッグで並び替える（adr/ux/drag-to-reorder-in-record-tab.md）───────────
-   掴む場所はセット行の番号（.set-no）と種目カードの見出し行（.card-head）。
-   どちらも既にある要素で、新しいボタンは 1 つも足していない。 */
+   掴む場所はセット行の番号（.set-no）と種目カードの見出し行（.card-head）、それに
+   メニュー編集シートの「選択中」の番号（.rtn-no、
+   adr/ux/routine-editor-drag-and-accordion.md）。どれも既にある要素で、新しいボタンは
+   1 つも足していない。 */
 
 /* ★ この 4 つは**ハンドルにだけ**当てる。入力欄まで広げないこと。
    - touch-action: none … これが無いとドラッグの途中でブラウザがスクロールを始める。
      styles.css 冒頭の `button, input { touch-action: manipulation }` とは対象が違う
-     （こちらは <span> と <header>）ので競合しない。**代償として、この 2 か所からは
-     ページのスクロールを始められなくなる**。全幅の .card-head を即時ドラッグ開始に
-     しないのはそのため（day.rs の PRESS_DELAY_CARD）
+     （こちらは <span> と <header>）ので競合しない。**代償として、この 3 か所からは
+     スクロールを始められなくなる**（.rtn-no はシートの中のスクロール、他はページ）。
+     全幅の .card-head を即時ドラッグ開始にしないのはそのためで、細い .set-no /
+     .rtn-no は縦フリックの起点になりにくいので待たせていない（views/drag.rs の
+     PRESS_DELAY_CARD）
    - -webkit-touch-callout: none … 無いと長押しで「コピー / 調べる」が出て
      pointercancel が飛び、掴んだ手が離れる
    - user-select … 掴んで動かすたびに種目名が選択されるのを止める。継承するので
      .card-head 1 か所で <h3> と .group-name まで効く
    - tap-highlight … 掴むたびに青い矩形が光るのを消す */
 .set-no,
+.rtn-no,
 .card-head {
   touch-action: none;
   -webkit-touch-callout: none;
@@ -688,11 +702,13 @@ h3 {
    これ以上の装飾は足さない（静止時のカードは今までと 1px も変わらない） */
 @media (hover: hover) {
   .set-no,
+  .rtn-no,
   .card-head {
     cursor: grab;
   }
 
   .set-no:active,
+  .rtn-no:active,
   .card-head:active {
     cursor: grabbing;
   }
@@ -709,14 +725,16 @@ h3 {
    強いので打ち消せず、掴んだ要素まで 120ms 遅れて指について来る。ここで**そもそも
    一致させない**のが正しい。滑るのは押しのけられる側だけ、という意味がそのまま出る。 */
 .sets-editor[data-dragging="true"] > .set-row:not([data-drag]),
-.cards[data-dragging="true"] > .card:not([data-drag]) {
+.cards[data-dragging="true"] > .card:not([data-drag]),
+.rtn-picked[data-dragging="true"] > li:not([data-drag]) {
   transition: transform 120ms ease-out;
 }
 
 /* ★ position + z-index が要る。transform だけでは兄弟の描画順は DOM 順のままなので、
    上へ動かすと直前のカードの下に潜る。値はこのファイル冒頭の重なり順の一覧を参照。 */
 .set-row[data-drag="lift"],
-.card[data-drag="lift"] {
+.card[data-drag="lift"],
+.rtn-picked > li[data-drag="lift"] {
   position: relative;
   z-index: 1;
 }
@@ -728,7 +746,8 @@ h3 {
   border-color: var(--accent);
 }
 
-.set-row[data-drag="lift"] {
+.set-row[data-drag="lift"],
+.rtn-picked > li[data-drag="lift"] {
   background: var(--bg);
   border-radius: 8px;
 }
@@ -738,7 +757,8 @@ h3 {
    全部**だから。0s なら中点を越えた瞬間に入れ替わり、情報は何も失われない */
 @media (prefers-reduced-motion: reduce) {
   .sets-editor[data-dragging="true"] > .set-row:not([data-drag]),
-  .cards[data-dragging="true"] > .card:not([data-drag]) {
+  .cards[data-dragging="true"] > .card:not([data-drag]),
+  .rtn-picked[data-dragging="true"] > li:not([data-drag]) {
     transition-duration: 0s;
   }
 }
@@ -966,6 +986,19 @@ h3 {
   padding: 0;
 }
 
+/* アイコン付きのリンクボタン（今は「このメニューを削除」だけ）。
+   ★ .icon-btn と同じ事情で inline-flex が要る。文字だけのボタンは UA の text-align:
+     center で収まっていたが、20px の <span class="icon"> を混ぜると baseline 配置に
+     なってアイコンだけ下がる（adr/architecture/lucide-icons-as-included-svg.md の
+     「.icon-btn に display: inline-flex が必要になった」と同じ）。
+   ★ :has() で絞るのは、アイコンを持たない .link-btn（「＋ 種目を追加」など多数）の
+     レイアウトを 1px も動かさないため。同じ形が .icon-btn:has(> .icon) にある */
+.link-btn:has(> .icon) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* ── ボトムシート ───────────────────────────────────────────────────────── */
 
 /* ★ ネイティブ <dialog> を show_modal() で開く（adr/ux/native-dialog-for-sheets.md）。top layer に載るので
@@ -1090,6 +1123,30 @@ h3 {
   margin-bottom: 12px;
 }
 
+/* メニュー編集シートの部位ブロックだけ折りたたむ（.grp-toggle + aria-expanded の
+   フックは設定タブと同じ、開ける数だけが違う。
+   adr/ux/routine-editor-drag-and-accordion.md）。
+
+   ★ 記録タブの「種目を追加」シート（.sheet-group のまま）には当てない。あちらは
+     1 タップで 1 種目を出す画面で、往復しないので畳む理由が無い。 */
+.rtn-group {
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+/* .grp-toggle は設定タブでは flex アイテム（.card-head の中）なので flex: 1 で伸びるが、
+   ここは <h3> の中の唯一の子。display: flex がブロックレベルにするので幅は足りているが、
+   .grp-toggle 側の display が変わっても崩れないよう明示しておく。
+   高さは 52px を継ぐ（閉じた 6 部位が 1 画面に収まる） */
+.rtn-group .grp-toggle {
+  width: 100%;
+}
+
+/* 開いた中身の余白。閉じている間は 1px も持たない */
+.rtn-group > .pick-list {
+  padding-bottom: 12px;
+}
+
 .sheet-group h3 {
   display: flex;
   align-items: center;
@@ -1105,6 +1162,25 @@ h3 {
   height: 8px;
   border-radius: 50%;
   background: var(--dot, var(--muted));
+}
+
+/* ★ 折りたたむ側（.rtn-group）の見出しは中身が .grp-toggle 1 個なので、見出し自身は
+   寸法も装飾も持たない。上の 2 つ（色・余白・部位の丸）は「種目を追加」シートの
+   平坦な見出し用で、そのまま効くと丸が 2 つ並び、ボタンの 52px の外に余白が付く。
+   ★ 詳細度は上と同じ (0,1,1) なので、**この位置（後ろ）である必要がある**。 */
+.rtn-group > h3 {
+  display: block;
+  margin: 0;
+  font-size: inherit;
+  /* このファイル冒頭の `h1, h2, h3 { font-weight: 600 }` も外す。残すと件数
+     （.grp-count）まで太くなり、設定タブの同じ行と見た目が食い違う。
+     部位名だけが太いのは .grp-name 自身が 600 を持っているから */
+  font-weight: inherit;
+  color: inherit;
+}
+
+.rtn-group > h3::before {
+  content: none;
 }
 
 .pick-list {
@@ -1654,7 +1730,8 @@ h3 {
 .rtn-save {
   position: sticky;
   bottom: -16px;
-  z-index: 1;
+  /* 2 は「掴んだ行（1）より上」。冒頭の重なり順の一覧を参照 */
+  z-index: 2;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -1675,16 +1752,19 @@ h3 {
 }
 
 /* 編集シートの「選択中」。★ この並びがそのまま記録タブのカードの並びになるので、
-   番号を出して順序を読めるようにする（並び替えの UI は持たない — 外して入れ直すか、
-   記録タブでドラッグする）。
+   番号を出して順序を読めるようにし、**その番号を掴んで並べ替える**
+   （adr/ux/routine-editor-drag-and-accordion.md）。
 
-   ★ 番号は UA のリストマーカーではなく counter + ::before で出す。
+   ★ 番号は UA のリストマーカーではなく、行の中の <span>（.rtn-no）で出す。
      `li { display: flex }` は要素の display を list-item から変えるので**マーカーが
      消える**（実測: ::marker の content が normal のまま、テキストの左端が li の左端と
-     一致する = 何も描かれていない）。padding-left で空けた分がただの死んだ余白になる。
-     ::before なら flex アイテムとして並ぶので、行の構造を変えずに番号が出る。 */
+     一致する = 何も描かれていない）。
+     かつては ::before + counter() で出していたが、ドラッグ中は模型の Vec を入れ替えず
+     transform だけで見せるので、**counter では「中点を越えた瞬間に番号が入れ替わる」が
+     表現できない**（counter は DOM 順でしか数えられない）。番号 = 順番という前提が
+     指を離すまで嘘になるので、記録タブのセット番号と同じくテキストで描いている
+     （routine.rs の `visual_index` を通す closure）。 */
 .rtn-picked {
-  counter-reset: rtn;
   margin: 10px 0;
   padding-left: 0;
   list-style: none;
@@ -1694,23 +1774,34 @@ h3 {
 }
 
 .rtn-picked li {
-  counter-increment: rtn;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-/* 幅を固定して種目名の左端を揃える（揃っていないと並びを縦に追えない） */
-.rtn-picked li::before {
-  content: counter(rtn);
+/* 掴む場所。幅を固定して種目名の左端も揃える（揃っていないと並びを縦に追えない） */
+.rtn-no {
+  position: relative;
   flex: none;
   min-width: 16px;
   text-align: right;
   color: var(--muted);
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 
-.rtn-picked li span {
+/* ★ 16px は指で掴むには細い。**レイアウトを 1px も動かさずに**ヒット領域だけ広げる
+   （position: relative は flex アイテムの配置に影響しない）。.set-no::before と同じ作り。
+   左 -14px は .sheet-body の padding と同じで、シートの左端まで届く。右 -6px は
+   gap 8px の内側なので種目名に食い込まない。上下 -12px は行の高さ（✕ ボタンの 44px で
+   決まる）の内側に収まり、gap 2px を挟む隣の行のハンドルとは重ならない。 */
+.rtn-no::before {
+  content: "";
+  position: absolute;
+  inset: -12px -6px -12px -14px;
+}
+
+.rtn-name {
   flex: 1;
 }
 

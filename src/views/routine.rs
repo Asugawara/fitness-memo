@@ -15,10 +15,15 @@
 //!   メニューにはその制約が無い。
 
 use leptos::prelude::*;
+use web_sys::PointerEvent;
 
-use crate::model::{Db, ExerciseId, Routine, RoutineId};
+use crate::model::{Db, ExerciseId, GroupId, Routine, RoutineId};
+use crate::reorder;
 use crate::storage;
 
+use super::drag::{
+    self, Drag, Scroller, capture, holds, measure_slots, release, start_edge_scroll,
+};
 use super::icon::{self, icon};
 use super::{Sheet, kb_blur, kb_focus, use_dates, use_db, use_kb};
 
@@ -50,6 +55,16 @@ fn set_routine(db: &mut Db, id: RoutineId, name: String, exercises: Vec<Exercise
 /// 消しても過去のログは 1 バイトも欠けない（種目のアーカイブとはここが違う）。
 fn delete_routine(db: &mut Db, id: RoutineId) {
     db.routines.retain(|r| r.id != id);
+}
+
+/// 「選択中」の 1 行の DOM id。掴んだときに並び全体の箱を測るのに使う
+/// （`views::drag::measure_slots`）。
+///
+/// ★ `ExerciseId` だけで一意になる。同じ種目は 2 度入らないので（`toggle` が push 前に
+/// 位置を見る。取り込んだデータも `core::normalize_routines` が重複を落とす）、
+/// これはそのまま `<For>` のキーにもなる。
+fn picked_dom_id(ex: ExerciseId) -> String {
+    format!("rtn-picked-{ex}")
 }
 
 /// メニュー 1 行に出す種目名。
@@ -180,11 +195,28 @@ pub fn RoutineEditor(
     };
 
     let name = RwSignal::new(name0);
-    // ★ タップ順を保つ。この並びがそのまま記録タブのカードの並びになる
+    // ★ 初期はタップ順。この並びがそのまま記録タブのカードの並びになるので、
+    //   下の「選択中」をドラッグして組み替えられる
     let picked: RwSignal<Vec<ExerciseId>> = RwSignal::new(picked0);
     // 保存を止めた理由。**文言まで持つ**（bool にすると理由ごとに分岐が増える）
     let invalid: RwSignal<Option<&'static str>> = RwSignal::new(None);
     let confirming = RwSignal::new(false);
+    // 「選択中」のドラッグ。全行が押しのけ量を読むのでここが持つ。
+    //
+    // ★ タブ切替やシートを閉じたときの後始末を `on_cleanup` に書かないのは、
+    //   ここに長押しのタイマーが無いから（ハンドルが細いので待たせていない）。
+    //   端の自動スクロールのループは `drag` が畳まれた次のフレームに自分で止まり、
+    //   `EDGE_SCROLLING` もそこで下りる（`views::drag::edge_scroll_tick`）。
+    let picked_drag: RwSignal<Option<Drag>> = RwSignal::new(None);
+    // シートの中だけで開いている部位。
+    //
+    // ★ **`OpenGroupCtx` を使わない。** あれはアプリ全体で 1 本の signal なので、
+    //   ここで開いた部位が設定タブの種目一覧にも漏れる（逆も同じ）。
+    // ★ **`Vec` にして複数開ける。** 設定タブの「1 つだけ開く」
+    //   （adr/ux/menu-groups-as-single-open-accordion.md）とは別規則にする。あちらは
+    //   種目マスタを 1 つずつ見に行く画面だが、こちらは**メニューを 1 本組む間に胸と脚を
+    //   行き来する**のが普通の使い方で、排他にすると往復のたびに開き直すことになる。
+    let open_groups: RwSignal<Vec<GroupId>> = RwSignal::new(Vec::new());
 
     let toggle = move |ex: ExerciseId| {
         picked.update(|p| match p.iter().position(|x| *x == ex) {
@@ -195,6 +227,25 @@ pub fn RoutineEditor(
         });
         invalid.set(None);
     };
+
+    // 「選択中」の並びを 1 つ動かす。**ドロップとキーボードの両方がここを通る。**
+    //
+    // ★ 落ちた先が元の位置なら signal に触らない。触ると `<For>` の keyed diff が
+    //   空回りするだけで、タップで並びが変わらないことはこの分岐が保証する
+    //   （閾値ではない。adr/ux/drag-to-reorder-in-record-tab.md）。
+    let move_picked = move |from: usize, to: usize| {
+        if from != to {
+            picked.update(|p| reorder::move_item(p, from, to));
+        }
+    };
+
+    // 「選択中」が 1 つでもあるか。
+    //
+    // ★ **`Memo` にする。** `picked.get()` を直に条件にすると、種目を 1 つ足すたびに
+    //   `<ol>` ごと作り直され、`<For>` のキーが効かなくなる（＝ドラッグ中に DOM が
+    //   入れ替わって pointer capture が落ちる経路が復活する）。真偽が変わったときだけ
+    //   作り直せばよい。
+    let has_picked = Memo::new(move |_| picked.with(|p| !p.is_empty()));
 
     let save = move |_| {
         // ★ 保存時の trim は他の 4 つのエディタ（部位 / 種目の追加・改名）と同じ。
@@ -248,26 +299,175 @@ pub fn RoutineEditor(
             />
         </label>
 
-        // 選んだ種目を**タップ順で**並べる。ここが記録タブでのカードの並びになるので、
-        // 順番が見えないと「どういう順で出るか」が保存するまで分からない
+        // 選んだ種目を並べる。ここが記録タブでのカードの並びになるので、順番が見えないと
+        // 「どういう順で出るか」が保存するまで分からない。**番号を掴んで並べ替えられる。**
+        //
+        // ★ `<For key=…>` にすること。素の `map` だと `picked` が動くたびに `<ol>` ごと
+        //   作り直され、ドラッグ中に DOM が差し替わって **pointer capture が落ちる**
+        //   （adr/ux/drag-to-reorder-in-record-tab.md の「keyed diff は insertBefore で
+        //   入れ直す」と同じ話が、こちらでは毎回確実に起きる）。
         {move || {
-            let list = picked.get();
-            (!list.is_empty())
+            has_picked
+                .get()
                 .then(|| {
                     view! {
-                        <ol class="rtn-picked" data-testid="routine-picked">
-                            {list
-                                .into_iter()
-                                .map(|ex| {
-                                    let label = db
-                                        .with(|d| d.exercise(ex).map(|e| e.name.clone()))
-                                        .unwrap_or_else(|| "（削除された種目）".to_string());
+                        <ol
+                            class="rtn-picked"
+                            data-testid="routine-picked"
+                            // 押しのけの transition を生やす CSS フック。
+                            // **ドラッグ中の親にだけ**（styles.css の該当節）
+                            data-dragging=move || {
+                                picked_drag.with(|d| d.is_some().then_some("true"))
+                            }
+                        >
+                            <For
+                                each=move || picked.get()
+                                key=|ex| *ex
+                                children=move |ex| {
+                                    let label = move || {
+                                        db.with(|d| d.exercise(ex).map(|e| e.name.clone()))
+                                            .unwrap_or_else(|| "（削除された種目）".to_string())
+                                    };
+                                    // 模型上の位置。ドラッグ中も入れ替えないのでこれは動かない
+                                    let slot = move || {
+                                        picked.with(|p| p.iter().position(|x| *x == ex))
+                                    };
+                                    // ★ 番号は**画面で見えている位置**を出す。ドラッグ中は
+                                    //   `Vec` を入れ替えないので模型の添字とずれ、そのまま
+                                    //   描くと「2 番目に見えている行に 1 と書いてある」に
+                                    //   なる。番号をハンドルにした前提（番号 ＝ 順番）が
+                                    //   指を離すまで嘘になるので `visual_index` を通す。
+                                    //   CSS の `counter()` ではこれが表現できない
+                                    //   （中点を越えた瞬間に入れ替わってほしいが、
+                                    //   counter は DOM 順でしか数えられない）ので、
+                                    //   記録タブのセット番号と同じくテキストで描く
+                                    let index = move || {
+                                        let Some(i) = slot() else { return 0 };
+                                        picked_drag
+                                            .with(|d| d.as_ref().map_or(i, |d| d.seen_at(i))) + 1
+                                    };
+                                    let grab = move |ev: PointerEvent| {
+                                        if picked_drag.with_untracked(Option::is_some)
+                                            || !capture(&ev)
+                                        {
+                                            return;
+                                        }
+                                        // ★ id の並びと `from` は同じ 1 回の読み出しから
+                                        //   作る。別々に読むと、その間に選択が動いたとき
+                                        //   添字がずれる
+                                        let (ids, here) = picked
+                                            .with_untracked(|p| {
+                                                (
+                                                    p.iter()
+                                                        .map(|e| picked_dom_id(*e))
+                                                        .collect::<Vec<_>>(),
+                                                    p.iter().position(|x| *x == ex),
+                                                )
+                                            });
+                                        // ★ ここが記録タブと違う唯一の場所。この並びは
+                                        //   `.sheet-body`（`overflow-y: auto`）の中にある
+                                        //   ので、`window` のスクロール量を足しても
+                                        //   1px も動かない
+                                        let scroller = Scroller::of(&ev);
+                                        let (Some(from), Some(slots)) = (
+                                            here,
+                                            measure_slots(&ids, &scroller),
+                                        ) else {
+                                            // 測れないまま始めると、押しのけ量が 1 つ
+                                            // ずれた並びがそれらしく動く。掴まないほうがまし
+                                            return;
+                                        };
+                                        picked_drag
+                                            .set(
+                                                Some(
+                                                    Drag::start(
+                                                        ev.pointer_id(),
+                                                        from,
+                                                        f64::from(ev.client_y()),
+                                                        slots,
+                                                        scroller,
+                                                    ),
+                                                ),
+                                            );
+                                        start_edge_scroll(picked_drag);
+                                    };
+                                    let track = move |ev: PointerEvent| {
+                                        if !holds(picked_drag, &ev) {
+                                            return;
+                                        }
+                                        picked_drag
+                                            .update(|d| {
+                                                if let Some(d) = d {
+                                                    d.advance(f64::from(ev.client_y()));
+                                                }
+                                            });
+                                    };
+                                    let drop_picked = move |ev: PointerEvent| {
+                                        let Some(d) = picked_drag.get_untracked() else {
+                                            return;
+                                        };
+                                        if d.pointer_id != ev.pointer_id() {
+                                            return;
+                                        }
+                                        picked_drag.set(None);
+                                        move_picked(d.from, d.to);
+                                    };
+                                    // ドラッグの代わり。行の ✕ にフォーカスがあれば効く
+                                    // （番号は `<button>` にできないので、既にフォーカス
+                                    // できる要素へ載せる。記録タブと同じ作り）
+                                    let nudge = move |ev: web_sys::KeyboardEvent| {
+                                        let Some(up) = drag::alt_arrow(&ev) else { return };
+                                        ev.prevent_default();
+                                        let Some(from) = slot() else { return };
+                                        let len = picked.with_untracked(Vec::len);
+                                        move_picked(from, reorder::neighbor(from, up, len));
+                                    };
                                     view! {
-                                        <li>
-                                            <span>{label.clone()}</span>
+                                        <li
+                                            id=picked_dom_id(ex)
+                                            data-testid="routine-picked-row"
+                                            data-drag=move || {
+                                                picked_drag
+                                                    .with(|d| {
+                                                        (d.as_ref()?.from == slot()?)
+                                                            .then_some("lift")
+                                                    })
+                                            }
+                                            style:transform=move || {
+                                                picked_drag
+                                                    .with(|d| d.as_ref()?.transform(slot()?))
+                                            }
+                                            on:keydown=nudge
+                                        >
+                                            // ★ 掴む場所は番号。新しい 44px のボタンを
+                                            //   足さないための選択で、「番号 ＝ 記録タブでの
+                                            //   並び順」なので意味も一致する。細いので
+                                            //   長押しは要らない（`.set-no` と同じ判断。
+                                            //   adr/ux/routine-editor-drag-and-accordion.md）
+                                            <span
+                                                class="rtn-no"
+                                                data-testid="routine-handle"
+                                                on:pointerdown=grab
+                                                on:pointermove=track
+                                                on:pointerup=drop_picked
+                                                on:pointercancel=move |_| release(picked_drag)
+                                                on:lostpointercapture=move |_| {
+                                                    release(picked_drag)
+                                                }
+                                            >
+                                                {index}
+                                            </span>
+                                            <span class="rtn-name" data-testid="routine-picked-name">
+                                                {label}
+                                            </span>
+                                            // ★ ここは ✕ のまま。**trash にしない** —
+                                            //   これは「このメニューから外す」で種目自体は
+                                            //   1 つも消えないので、trash だと種目を削除した
+                                            //   ように読める（下の「このメニューを削除」との
+                                            //   違いが消える）
                                             <button
                                                 class="icon-btn"
-                                                aria-label=format!("{label} を外す")
+                                                aria-label=move || format!("{} を外す", label())
                                                 data-testid="routine-remove"
                                                 on:click=move |_| toggle(ex)
                                             >
@@ -275,16 +475,25 @@ pub fn RoutineEditor(
                                             </button>
                                         </li>
                                     }
-                                })
-                                .collect::<Vec<_>>()}
+                                }
+                            />
                         </ol>
                     }
                 })
         }}
 
-        // 記録タブの「種目を追加」シートと同じ部位ごとの一覧。押すと選択が入れ替わる。
-        // ★ アーカイブ済みは出さない（あちらと同じ規則）。既にメニューへ入っている
-        //   アーカイブ済み種目は上の「選択中」に出るので、外すことはできる
+        // 部位ごとの種目ピッカー。押すと選択が入れ替わる。
+        // ★ アーカイブ済みは出さない（記録タブの「種目を追加」と同じ規則）。既にメニューへ
+        //   入っているアーカイブ済み種目は上の「選択中」に出るので、外すことはできる
+        //
+        // ★ **折りたたむ。既定は全部閉。** 開きっぱなしだと 6 部位 28 種目が縦に伸びて、
+        //   組み終わったメニューを見返すには毎回スクロールし切ることになる（保存帯を
+        //   sticky にしたのと同じ問題が「選択中」に対して起きる）。
+        // ★ 見た目とフックは設定タブの `GroupBlock` に揃える（`.grp-toggle` +
+        //   `aria-expanded` でシェブロンを回す。`<details>`/`<summary>` は使わない）。
+        //   `GroupBlock` 自体を再利用しないのは、あれが `views::settings` の private な
+        //   `Editor` enum を prop に取っていて、鉛筆（部位の改名）まで一緒に付いてくるから。
+        //   ここに改名の入口は要らない。
         {move || {
             db.with(|d| {
                 let mut groups = d.groups.clone();
@@ -292,36 +501,85 @@ pub fn RoutineEditor(
                 groups
                     .into_iter()
                     .map(|g| {
+                        let gid = g.id;
                         let mut exercises: Vec<_> = d
                             .exercises
                             .iter()
-                            .filter(|e| e.group_id == g.id && !e.archived)
+                            .filter(|e| e.group_id == gid && !e.archived)
                             .cloned()
                             .collect();
                         exercises.sort_by_key(|e| e.order);
+                        let count = exercises.len();
+                        // ★ `open_groups` を読むのは**この内側の closure だけ**にする。
+                        //   外側（`db.with(..)` のブロック）で読むと、1 部位開くたびに
+                        //   ピッカー全体が作り直される
+                        let open = move || open_groups.with(|v| v.contains(&gid));
                         view! {
-                            <section class="sheet-group">
-                                <h3 style=format!("--dot:{}", g.color)>{g.name}</h3>
-                                <div class="pick-list">
-                                    {exercises
-                                        .into_iter()
-                                        .map(|e| {
-                                            let ex = e.id;
+                            <section class="sheet-group rtn-group">
+                                // ★ **`<h3>` は残す。** ここは畳む前から部位の見出しで、
+                                //   `<button>` に置き換えると 6 部位ぶんの見出しが a11y
+                                //   ツリーから消える（`views::settings` の `GroupBlock` に
+                                //   見出しが無いのは、あちらが `.card-head` の中に鉛筆と
+                                //   並べているから）。`<button>` は phrasing content なので
+                                //   `<h3>` の中に置けて、WAI-ARIA APG のアコーディオンも
+                                //   「見出し > ボタン」を求めている
+                                <h3>
+                                <button
+                                    class="grp-toggle"
+                                    data-testid="routine-group-toggle"
+                                    aria-expanded=move || if open() { "true" } else { "false" }
+                                    on:click=move |_| {
+                                        open_groups
+                                            .update(|v| match v.iter().position(|x| *x == gid) {
+                                                Some(i) => {
+                                                    v.remove(i);
+                                                }
+                                                None => v.push(gid),
+                                            })
+                                    }
+                                >
+                                    // 開いた状態は CSS で 90 度回す（chevron-down を持たない）
+                                    {icon(icon::CHEVRON_RIGHT)}
+                                    <span
+                                        class="dot"
+                                        style=format!("--dot:{}", g.color)
+                                    ></span>
+                                    <span class="grp-name" data-testid="routine-group-name">
+                                        {g.name}
+                                    </span>
+                                    <span class="grp-count muted">
+                                        {format!("{count} 種目")}
+                                    </span>
+                                </button>
+                                </h3>
+                                {move || {
+                                    open()
+                                        .then(|| {
+                                            let list = exercises.clone();
                                             view! {
-                                                <button
-                                                    class="pick"
-                                                    class:added=move || {
-                                                        picked.with(|p| p.contains(&ex))
-                                                    }
-                                                    data-testid="routine-pick"
-                                                    on:click=move |_| toggle(ex)
-                                                >
-                                                    {e.name}
-                                                </button>
+                                                <div class="pick-list">
+                                                    {list
+                                                        .into_iter()
+                                                        .map(|e| {
+                                                            let ex = e.id;
+                                                            view! {
+                                                                <button
+                                                                    class="pick"
+                                                                    class:added=move || {
+                                                                        picked.with(|p| p.contains(&ex))
+                                                                    }
+                                                                    data-testid="routine-pick"
+                                                                    on:click=move |_| toggle(ex)
+                                                                >
+                                                                    {e.name}
+                                                                </button>
+                                                            }
+                                                        })
+                                                        .collect::<Vec<_>>()}
+                                                </div>
                                             }
                                         })
-                                        .collect::<Vec<_>>()}
-                                </div>
+                                }}
                             </section>
                         }
                     })
@@ -333,12 +591,18 @@ pub fn RoutineEditor(
             id.map(|id| {
                 view! {
                     <div class="sheet-actions">
-                        // 破壊的操作は静止時に警告色を持たない（adr/ux/destructive-affordance-quiet-at-rest.md）
+                        // 破壊的操作は静止時に警告色を持たない（adr/ux/destructive-affordance-quiet-at-rest.md）。
+                        // ★ **アイコンを足す。** 文字だけのリンクがシートの一番下、
+                        //   保存帯の直前に 1 行あるだけで、上に並ぶ種目ボタンの列に
+                        //   埋もれて「どこで消せるのか」が読み取れなかった。
+                        //   trash の線色は `currentColor` なので、この行の色
+                        //   （`.danger`）は 1 文字も変えていない
                         <button
                             class="link-btn danger"
                             data-testid="delete-routine"
                             on:click=move |_| confirming.set(true)
                         >
+                            {icon(icon::TRASH_2)}
                             "このメニューを削除"
                         </button>
                     </div>

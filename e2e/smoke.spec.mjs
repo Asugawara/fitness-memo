@@ -1820,6 +1820,70 @@ test('コピーできる種目が残っていない日は候補に出ない（�
 
 // ── トレーニングメニュー ────────────────────────────────────────────────────
 // adr/ux/start-from-a-saved-routine.md
+// adr/ux/routine-editor-drag-and-accordion.md
+
+/**
+ * メニュー編集シートの種目ピッカーを全部開く。
+ *
+ * ★ **既定は全部閉じている**（adr/ux/routine-editor-drag-and-accordion.md）。
+ *   `routine-pick` は開いている部位にしか存在しないので、押す前に必ずここを通す。
+ * ★ 設定タブの部位（1 つだけ開く）と違い**複数同時に開ける**ので、全部押して回れる。
+ *   どの種目がどの部位かをテスト側で知らずに済むのが狙い。
+ * ★ `scope` は `page` でもシートの Locator でもよい（どちらも getByTestId を持つ）。
+ */
+async function openAllPickGroups(scope) {
+  const toggles = scope.getByTestId('routine-group-toggle');
+  const n = await toggles.count();
+  expect(n, 'ピッカーの部位が 1 つも出ていない').toBeGreaterThan(0);
+  for (let i = 0; i < n; i++) {
+    const toggle = toggles.nth(i);
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  }
+}
+
+/** メニュー編集シートの部位アコーディオン 1 つ。名前は完全一致で絞る。 */
+function pickGroup(page, name) {
+  return page.getByTestId('routine-group-toggle').filter({
+    has: page.getByTestId('routine-group-name').filter({ hasText: exactText(name) }),
+  });
+}
+
+/**
+ * 「選択中」の行のハンドル（番号）を掴んで dy だけ動かして離す。
+ *
+ * ★ **`page.mouse` で出す。** Chromium / WebKit とも本物の PointerEvent
+ *   （pointerType: "mouse", isPrimary: true, button: 0）になり、setPointerCapture が
+ *   実際に働く。`dispatchEvent` で合成した PointerEvent では capture が
+ *   NotFoundError で失敗し、実装が意図どおり「掴まない」ので検証にならない
+ *   （e2e/reorder.spec.mjs の冒頭に同じ断り書きがある）。
+ * ★ 固定の待ち時間を入れない。`data-drag="lift"` が付くのを待てば掴めたことまで
+ *   一緒に確かめられ、待っている間は指が 1px も動かない。
+ * ★ 指を離す前に `hold` を呼べる。ドラッグ中の見え方（番号の入れ替わり）を見るため。
+ */
+async function dragPicked(page, index, dy, hold) {
+  const row = page.getByTestId('routine-picked-row').nth(index);
+  const handle = row.getByTestId('routine-handle');
+  await handle.scrollIntoViewIfNeeded();
+  const box = await handle.boundingBox();
+  expect(box, 'ハンドルが画面に出ていること').not.toBeNull();
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await expect(row).toHaveAttribute('data-drag', 'lift');
+  await page.mouse.move(x, y + dy, { steps: 8 });
+  if (hold) await hold();
+  await page.mouse.up();
+  await expect(row).not.toHaveAttribute('data-drag', 'lift');
+}
+
+/** 「選択中」の 1 行の高さ。ドラッグの dy はここから出す（CSS を書き写さない）。 */
+async function pickedRowHeight(page) {
+  const box = await page.getByTestId('routine-picked-row').first().boundingBox();
+  expect(box, '「選択中」に行が無い').not.toBeNull();
+  return box.height;
+}
 
 /** 設定タブでメニューを 1 本作る。`names` の順がそのまま展開順になる。 */
 async function createRoutine(page, name, names) {
@@ -1827,6 +1891,7 @@ async function createRoutine(page, name, names) {
   await page.getByTestId('settings-add-routine').click();
   await expect(page.getByTestId('settings-sheet')).toBeVisible();
   await page.getByTestId('routine-name-input').fill(name);
+  await openAllPickGroups(page);
   for (const n of names) {
     await page.getByTestId('routine-pick').filter({ hasText: exactText(n) }).click();
   }
@@ -1887,6 +1952,216 @@ test('★ 保存したメニューは種目ごとに別々の日の「前回」�
   await flushToStorage(page);
   await page.reload();
   await expect(page.getByTestId('exercise-card')).toHaveCount(2);
+});
+
+test('★ 「選択中」をドラッグで並べ替えると、記録タブのカードの並びがそうなる', async ({ page }) => {
+  // adr/ux/routine-editor-drag-and-accordion.md
+  // ★ この並びは記録タブでの**消化順**そのもの。外して入れ直す以外に直す手段が
+  //   無かったので、途中に 1 種目を差し込むには後ろを全部やり直すことになっていた
+  await seedPastLogs(page, [
+    { daysAgo: 3, exerciseName: 'ベンチプレス', sets: [{ weight: 60, reps: 10 }] },
+    { daysAgo: 3, exerciseName: 'スクワット', sets: [{ weight: 80, reps: 5 }] },
+  ]);
+  await createRoutine(page, '胸と脚の日', ['ベンチプレス', 'スクワット']);
+
+  await page.getByTestId('routine-open').click();
+  await expect(page.getByTestId('settings-sheet')).toBeVisible();
+  await expect(page.getByTestId('routine-picked-name')).toHaveText(['ベンチプレス', 'スクワット']);
+
+  // 1 行ぶん下へ動かせば隣の中点（高さの半分 + 隙間）は確実に越える
+  await dragPicked(page, 0, await pickedRowHeight(page));
+  await expect(page.getByTestId('routine-picked-name')).toHaveText(['スクワット', 'ベンチプレス']);
+  // 番号も入れ替わっている（番号 ＝ 順番、が指を離した後も保たれる）
+  await expect(page.getByTestId('routine-handle')).toHaveText(['1', '2']);
+
+  await page.getByTestId('routine-save').click();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
+  await expect(page.getByTestId('routine-names')).toHaveText('スクワット, ベンチプレス');
+
+  // ★ 記録タブで開いたカードの並びがそうなる（この機能の目的そのもの）
+  await page.getByTestId('tab-record').click();
+  await page.getByTestId('routine-candidate').first().click();
+  await expect(page.getByTestId('card-name')).toHaveText(['スクワット', 'ベンチプレス']);
+
+  // 保存された Db の並びも同じ（signal に載っただけではない）
+  await flushToStorage(page);
+  const raw = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
+  const db = JSON.parse(raw);
+  const byId = new Map(db.exercises.map((e) => [e.id, e.name]));
+  expect(db.routines[0].exercises.map((id) => byId.get(id))).toEqual([
+    'スクワット',
+    'ベンチプレス',
+  ]);
+});
+
+test('ドラッグ中は番号が入れ替わって見える（落ちる先が先に読める）', async ({ page }) => {
+  // ★ ドラッグ中は Vec を入れ替えず transform だけで見せるので、模型の添字と
+  //   見えている位置がずれる。そのまま描くと「2 番目に見えている行に 1 と書いてある」に
+  //   なり、番号をハンドルにした前提（番号 ＝ 順番）が指を離すまで嘘になる。
+  //   CSS の counter() ではこれが出せないので、テキストで描いている
+  await createRoutine(page, '3 種目', ['ベンチプレス', 'スクワット', 'プランク']);
+  await page.getByTestId('routine-open').click();
+  await expect(page.getByTestId('routine-handle')).toHaveText(['1', '2', '3']);
+
+  await dragPicked(page, 0, await pickedRowHeight(page), async () => {
+    // ★ **指を離す前に**読む。掴んだ行は 2 番目に見えているので "2"
+    await expect(page.getByTestId('routine-handle')).toHaveText(['2', '1', '3']);
+    // 掴んだ行だけが持ち上がっていて、押しのけられた行には印が付かない
+    await expect(page.locator('[data-testid=routine-picked-row][data-drag="lift"]')).toHaveCount(1);
+  });
+
+  await expect(page.getByTestId('routine-handle')).toHaveText(['1', '2', '3']);
+  await expect(page.getByTestId('routine-picked-name')).toHaveText([
+    'スクワット',
+    'ベンチプレス',
+    'プランク',
+  ]);
+});
+
+test('ハンドルに触っただけでは並びが変わらない', async ({ page }) => {
+  // ★ 閾値ではなく「落ちた先が元の位置なら signal に触らない」という分岐が保証する
+  await createRoutine(page, '胸と脚の日', ['ベンチプレス', 'スクワット']);
+  await page.getByTestId('routine-open').click();
+
+  await dragPicked(page, 0, 0);
+  await expect(page.getByTestId('routine-picked-name')).toHaveText(['ベンチプレス', 'スクワット']);
+  // 指ブレ（数 px）でも動かない
+  await dragPicked(page, 0, 3);
+  await expect(page.getByTestId('routine-picked-name')).toHaveText(['ベンチプレス', 'スクワット']);
+});
+
+test('ドラッグの代わりに Alt + ↑↓ でも並べ替えられる', async ({ page }) => {
+  // ★ 掴む場所（番号）は <button> にできないので、既にフォーカスできる行の ✕ に載せる。
+  //   WCAG 2.1.1 の非ドラッグ経路であり、記録タブのカード / セット行と同じ作り
+  await createRoutine(page, '胸と脚の日', ['ベンチプレス', 'スクワット']);
+  await page.getByTestId('routine-open').click();
+
+  await page.getByTestId('routine-remove').nth(1).focus();
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect(page.getByTestId('routine-picked-name')).toHaveText(['スクワット', 'ベンチプレス']);
+
+  // 端では何も起きない
+  await page.getByTestId('routine-remove').nth(0).focus();
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect(page.getByTestId('routine-picked-name')).toHaveText(['スクワット', 'ベンチプレス']);
+});
+
+test('★ シートの下端まで運ぶと「選択中」がシートの中で自動スクロールする', async ({ page }) => {
+  // ★ **記録タブの実装をそのまま持ってこられなかった唯一の理由がここ。**
+  //   この並びは `.sheet-body`（overflow-y: auto）という入れ子のスクロール容器の中に
+  //   あるので、`window` を動かしても 1px も進まないし、帯を innerHeight で決めると
+  //   上端の帯がシートの外に出る（views/drag.rs の Scroller）。
+  await createRoutine(page, '長い日', [
+    'ベンチプレス',
+    'ダンベルプレス',
+    'インクラインベンチプレス',
+    'チェストフライ',
+    'プッシュアップ',
+    '懸垂',
+    'ラットプルダウン',
+    'デッドリフト',
+  ]);
+  await page.getByTestId('routine-open').click();
+  await expect(page.getByTestId('routine-picked-row')).toHaveCount(8);
+
+  const body = page.locator('#settings-sheet-body');
+  await expect(body).toBeVisible();
+  expect(
+    await body.evaluate((el) => el.scrollHeight > el.clientHeight),
+    'シートの中がスクロールする状態になっていない（この検証が成立しない）',
+  ).toBe(true);
+  // ★ 開き直したシートは必ず先頭から出る。`<dialog>` は常時マウントなので
+  //   `.sheet-body` は scrollTop を覚えたままになり、これが無いと**見出しも名前欄も
+  //   画面外**の状態で開く（実測: iPhone 15 Pro で 446）。views/mod.rs の `Sheet`
+  expect(await body.evaluate((el) => el.scrollTop)).toBe(0);
+
+  // 先頭を掴んで、シート下端の帯（内側 72px）に指を置いたまま待つ。
+  // ★ 測る前に scrollIntoViewIfNeeded を通す。シートは 0.22s かけてせり上がるので、
+  //   その前に boundingBox を読むと**別の場所を掴む**（actionability の stable 待ちが要る）
+  const handle = page.getByTestId('routine-picked-row').first().getByTestId('routine-handle');
+  await handle.scrollIntoViewIfNeeded();
+  const box = await body.boundingBox();
+  const hb = await handle.boundingBox();
+  await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+  await page.mouse.down();
+  await expect(page.getByTestId('routine-picked-row').first()).toHaveAttribute('data-drag', 'lift');
+  await page.mouse.move(hb.x + hb.width / 2, box.y + box.height - 12, { steps: 8 });
+
+  // ★ 指は 1px も動かないままスクロールが進む（rAF ループが回っている証拠）
+  await expect
+    .poll(() => body.evaluate((el) => el.scrollTop), { timeout: 5000 })
+    .toBeGreaterThan(50);
+  await page.mouse.up();
+
+  // 先頭がだいぶ後ろへ落ちている（何番目かは待ち時間で変わるので順位だけ見る）
+  const names = await page.getByTestId('routine-picked-name').allTextContents();
+  expect(names.indexOf('ベンチプレス')).toBeGreaterThan(1);
+  expect(names).toHaveLength(8);
+});
+
+test('種目ピッカーは既定で全部閉じており、部位は複数同時に開ける', async ({ page }) => {
+  // ★ 設定タブの「1 つだけ開く」（adr/ux/menu-groups-as-single-open-accordion.md）とは
+  //   **別規則**。メニューを 1 本組む間は胸と脚を行き来するので、排他だと往復のたびに
+  //   開き直すことになる
+  await openSettingsSection(page, 'routines');
+  await page.getByTestId('settings-add-routine').click();
+  await expect(page.getByTestId('settings-sheet')).toBeVisible();
+
+  const chest = pickGroup(page, '胸');
+  const legs = pickGroup(page, '脚');
+
+  // 既定で全部閉じている（開いている部位にしか種目ボタンは無い）
+  await expect(page.getByTestId('routine-group-toggle')).toHaveCount(6);
+  await expect(page.getByTestId('routine-pick')).toHaveCount(0);
+  await expect(chest).toHaveAttribute('aria-expanded', 'false');
+
+  await chest.click();
+  await expect(chest).toHaveAttribute('aria-expanded', 'true');
+  await expect(
+    page.getByTestId('routine-pick').filter({ hasText: exactText('ベンチプレス') }),
+  ).toHaveCount(1);
+  // 開いていない部位の種目はまだ出ていない
+  await expect(
+    page.getByTestId('routine-pick').filter({ hasText: exactText('スクワット') }),
+  ).toHaveCount(0);
+
+  // ★ 2 つ目を開いても 1 つ目は閉じない
+  await legs.click();
+  await expect(chest).toHaveAttribute('aria-expanded', 'true');
+  await expect(legs).toHaveAttribute('aria-expanded', 'true');
+
+  // 開いたまま両方から選べる
+  await page.getByTestId('routine-pick').filter({ hasText: exactText('ベンチプレス') }).click();
+  await page.getByTestId('routine-pick').filter({ hasText: exactText('スクワット') }).click();
+  await expect(page.getByTestId('routine-picked-name')).toHaveText(['ベンチプレス', 'スクワット']);
+
+  // もう一度押すと閉じる（押した部位だけ）
+  await chest.click();
+  await expect(chest).toHaveAttribute('aria-expanded', 'false');
+  await expect(legs).toHaveAttribute('aria-expanded', 'true');
+  await expect(
+    page.getByTestId('routine-pick').filter({ hasText: exactText('ベンチプレス') }),
+  ).toHaveCount(0);
+  // 閉じても選択は落ちない（「選択中」が真実源）
+  await expect(page.getByTestId('routine-picked-name')).toHaveText(['ベンチプレス', 'スクワット']);
+});
+
+test('シートで開いた部位は、設定タブの種目一覧にも記録タブにも漏れない', async ({ page }) => {
+  // ★ `OpenGroupCtx`（アプリ全体で 1 本）を使わず RoutineEditor ローカルに持つ理由。
+  //   共有すると「メニューを組むために開いた胸」が種目一覧でも開きっぱなしになる
+  await openSettingsSection(page, 'routines');
+  await page.getByTestId('settings-add-routine').click();
+  await pickGroup(page, '胸').click();
+  await expect(pickGroup(page, '胸')).toHaveAttribute('aria-expanded', 'true');
+  await page.getByTestId('settings-sheet-close').click();
+  await expect(page.getByTestId('settings-sheet')).toBeHidden();
+
+  await openSettingsSection(page, 'exercises');
+  const toggles = page.getByTestId('group-toggle');
+  await expect(toggles).toHaveCount(6);
+  for (let i = 0; i < 6; i++) {
+    await expect(toggles.nth(i)).toHaveAttribute('aria-expanded', 'false');
+  }
 });
 
 test('メニューに履歴の無い種目が入っていても、空のカードとして出る', async ({ page }) => {
@@ -1966,6 +2241,7 @@ test('メニューは編集・削除でき、削除しても記録は消えな�
   await page.getByTestId('routine-open').click();
   await expect(page.getByTestId('settings-sheet')).toBeVisible();
   await page.getByTestId('routine-name-input').fill('プッシュの日');
+  await openAllPickGroups(page);
   await page.getByTestId('routine-pick').filter({ hasText: exactText('チェストフライ') }).click();
   await page.getByTestId('routine-save').click();
   await expect(page.getByTestId('routine-name')).toHaveText('プッシュの日');
@@ -1973,6 +2249,11 @@ test('メニューは編集・削除でき、削除しても記録は消えな�
 
   // 削除は確認を挟む（組んだ並びは元に戻せない）
   await page.getByTestId('routine-open').click();
+  // ★ trash のアイコンが 1 つ描かれている。テキストリンクだけでは、シート最下部の
+  //   この 1 行が「どこで消せるのか」として読み取れない
+  //   （XML 宣言が混ざると svg が 0 個になる罠も同時に塞ぐ。
+  //   adr/architecture/lucide-icons-as-included-svg.md）
+  await expect(page.locator('[data-testid=delete-routine] .icon > svg')).toHaveCount(1);
   await page.getByTestId('delete-routine').click();
   await page.getByTestId('delete-routine-confirm').click();
   await expect(page.getByTestId('settings-sheet')).toBeHidden();
@@ -1995,6 +2276,7 @@ test('種目が 0 個のメニューも、名前が空のメニューも保存�
   // ★ 種目だけ（名前なし）も止める。無名を許すと「（名前なし）」の行が複数並び、
   //   誤タップ対策の柱にしている「行を見て選び分けられること」が痩せる
   await page.getByTestId('routine-name-input').fill('   ');
+  await openAllPickGroups(page);
   await page.getByTestId('routine-pick').filter({ hasText: exactText('ベンチプレス') }).click();
   await page.getByTestId('routine-save').click();
   await expect(page.getByTestId('routine-invalid')).toHaveText('メニュー名を入れてください');
@@ -2166,6 +2448,7 @@ test('シートの中で種目を足し引きしてから保存できる', async
   const sheet = page.getByTestId('day-routine-sheet');
   // プランクを外して、チェストフライを足す
   await sheet.getByTestId('routine-remove').nth(1).click();
+  await openAllPickGroups(sheet);
   await sheet.getByTestId('routine-pick').filter({ hasText: exactText('チェストフライ') }).click();
   await page.getByTestId('routine-name-input').fill('胸の日');
   await page.getByTestId('routine-save').click();

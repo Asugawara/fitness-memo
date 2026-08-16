@@ -123,7 +123,7 @@
      SOFTWARE.
      ──────────────────────────────────────────────────────────────────── -->
 
-<link rel="stylesheet" href="/fitness-memo/styles-82d386544d43315e.css" integrity="sha384-lDttmK2qXnEGlw7DeTX62yIQXMcIO72LtvTttO/4qlD4atkUgeAXqh8P966/rGy4"/>
+<link rel="stylesheet" href="/fitness-memo/styles-8fad0df6299fe832.css" integrity="sha384-hj1jZK0v+vJX1sm0DRdsXYfcCaPhwYL/YkLUO9WU+CgNVXelnD8hjs2czcfLNVzM"/>
 
 
 <!-- og:image の実体。クローラ専用なので stamp-sw.sh が SW のシェルから除外している -->
@@ -131,8 +131,8 @@
 
 
 <script type="module">
-import init, * as bindings from '/fitness-memo/fitness-memo-d26b141e4cf3e490.js';
-const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-d26b141e4cf3e490_bg.wasm' });
+import init, * as bindings from '/fitness-memo/fitness-memo-236ecf7845fbeac.js';
+const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-236ecf7845fbeac_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -141,7 +141,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-<link rel="modulepreload" href="/fitness-memo/fitness-memo-d26b141e4cf3e490.js" crossorigin="anonymous" integrity="sha384-rsqgpRhN//KkD4s1WEWbD7pufZjdJ/e253a3l5xMUZ6dMjYehAPZPoOM9QUgYsoC"><link rel="preload" href="/fitness-memo/fitness-memo-d26b141e4cf3e490_bg.wasm" crossorigin="anonymous" integrity="sha384-sXaRQzHxKnVZxbrw88s5OPDKeKumKolwJZHDZA4S9f8tQ1IPE7FlNjthalukm77i" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/fitness-memo/fitness-memo-236ecf7845fbeac.js" crossorigin="anonymous" integrity="sha384-ePPjQRkk5tWtwLD8/HO009r7oKrx8EEevPLAM/QeIKo/c8Z2Tgjxef+NFRbo9soo"><link rel="preload" href="/fitness-memo/fitness-memo-236ecf7845fbeac_bg.wasm" crossorigin="anonymous" integrity="sha384-yXojT4gjtUpfm22J9rqz7LG9She2rYMjWYMJRwMhPRy80uySnyvHp70Fz2CDl0FC" as="fetch" type="application/wasm"></head>
 <body>
 <!-- CSR なので配信される HTML の body にはテキストが 1 文字も無い。Googlebot は JS を
      実行するので通常は問題にならないが、**JS を実行しないクローラ（LLM 系の多くを含む）

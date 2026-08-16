@@ -1430,7 +1430,7 @@ pub fn export_filename(now: chrono::NaiveDateTime) -> String {
 pub const TSV_MIME: &str = "text/tab-separated-values";
 
 /// 見出し行。**この並びが外部仕様**なので、テストがバイト一致で固定している。
-const TSV_HEADER: [&str; 11] = [
+const TSV_HEADER: [&str; 12] = [
     "日付",
     "部位",
     "種目",
@@ -1442,6 +1442,9 @@ const TSV_HEADER: [&str; 11] = [
     "種目メモ",
     "体調メモ",
     "時刻",
+    // ★ 後から**足した**列（進化規則 1）。既存 11 列の意味は変えていないので、
+    //   この列を知らない古いアプリでも記録は今までどおり読める
+    "メニュー",
 ];
 
 /// 1 セルに落とす。**タブと改行を半角空白に潰す。**
@@ -1459,7 +1462,7 @@ fn flatten_cell(s: &str) -> String {
 }
 
 /// 1 行書く。★ 引数 11 個の関数を作らないための入れ物（`clippy::too_many_arguments`）。
-fn push_row(out: &mut String, cells: [&str; 11]) {
+fn push_row(out: &mut String, cells: [&str; 12]) {
     for (i, cell) in cells.iter().enumerate() {
         if i > 0 {
             out.push('\t');
@@ -1508,8 +1511,13 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
     let mut out = String::new();
     push_row(&mut out, TSV_HEADER);
 
-    // 記録に出てきた種目。末尾のマスタ行から除くのに使う
-    let mut logged: HashSet<ExerciseId> = HashSet::new();
+    // 記録とメニューに出てきた種目。末尾のマスタ行から除くのに使う
+    // （どちらの行も部位と種目名を書くので、マスタ行を重ねる必要が無い）
+    let mut logged: HashSet<ExerciseId> = db
+        .routines
+        .iter()
+        .flat_map(|r| r.exercises.iter().copied())
+        .collect();
 
     for (key, session) in &db.sessions {
         let Some(date) = parse_date_key(key) else {
@@ -1541,7 +1549,8 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
                 push_row(
                     &mut out,
                     [
-                        key, group, &ex.name, "", "", "", day_weight, "", log_note, day_note, &time,
+                        key, group, &ex.name, "", "", "", day_weight, "", log_note, day_note,
+                        &time, "",
                     ],
                 );
                 day_weight = "";
@@ -1562,7 +1571,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
                     &mut out,
                     [
                         key, group, &ex.name, &no, &w, &reps, day_weight, &set.note, log_note,
-                        day_note, &time,
+                        day_note, &time, "",
                     ],
                 );
                 day_weight = "";
@@ -1576,7 +1585,9 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
         if !wrote_any && !(day_weight.is_empty() && day_note.trim().is_empty()) {
             push_row(
                 &mut out,
-                [key, "", "", "", "", "", day_weight, "", "", day_note, ""],
+                [
+                    key, "", "", "", "", "", day_weight, "", "", day_note, "", "",
+                ],
             );
         }
     }
@@ -1596,7 +1607,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
             .unwrap_or_default();
         push_row(
             &mut out,
-            ["", group, &ex.name, "", "", "", "", "", "", "", ""],
+            ["", group, &ex.name, "", "", "", "", "", "", "", "", ""],
         );
     }
     // 種目を 1 つも持たない部位。画面から作れるので、書かないと静かに消える
@@ -1607,7 +1618,41 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
         if crate::presets::preset_group_id(&g.name) == Some(g.id) {
             continue;
         }
-        push_row(&mut out, ["", &g.name, "", "", "", "", "", "", "", "", ""]);
+        push_row(
+            &mut out,
+            ["", &g.name, "", "", "", "", "", "", "", "", "", ""],
+        );
+    }
+
+    // ── トレーニングメニュー行（日付が空・メニュー列が埋まる）──
+    //
+    // ★ 書かないと**機種変更でメニューだけ消える**。記録は行に出るので残るが、
+    //   メニューは `Db` にしか無い（adr/data-model/routines-as-named-exercise-lists.md）。
+    //   種目の並びは**行の順序**で表す。列を増やして順番を書くより、シート上で
+    //   行を入れ替えれば並びが変わるほうが直感に合う
+    for r in &db.routines {
+        if r.exercises.is_empty() {
+            // 名前だけのメニュー（種目を選ぶ前に閉じた状態）。`migrate` が残すと決めた形
+            push_row(
+                &mut out,
+                ["", "", "", "", "", "", "", "", "", "", "", &r.name],
+            );
+            continue;
+        }
+        for id in &r.exercises {
+            // 引けない種目は書かない（種目マスタ行と同じ規則。ID が名前として出るのを防ぐ）
+            let Some(ex) = db.exercise(*id) else {
+                continue;
+            };
+            let group = db
+                .group(ex.group_id)
+                .map(|g| g.name.as_str())
+                .unwrap_or_default();
+            push_row(
+                &mut out,
+                ["", group, &ex.name, "", "", "", "", "", "", "", "", &r.name],
+            );
+        }
     }
 
     out
@@ -1748,6 +1793,7 @@ struct TsvCols {
     set_note: Option<usize>,
     log_note: Option<usize>,
     day_note: Option<usize>,
+    routine: Option<usize>,
 }
 
 /// 見出し行 → 列の対応。知らない列は無視する（形式の進化規則 2）。
@@ -1768,6 +1814,7 @@ fn tsv_header(line: &str) -> Option<TsvCols> {
             "セットメモ" => &mut cols.set_note,
             "種目メモ" => &mut cols.log_note,
             "体調メモ" => &mut cols.day_note,
+            "メニュー" => &mut cols.routine,
             // 「時刻」は書き出し専用（[`export_tsv`] の doc 参照）。読まない
             _ => continue,
         };
@@ -1876,6 +1923,10 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
     let mut ex_ids: ExerciseCache = HashMap::new();
     // ログごとのセット。(日付, 種目) → [(セット番号, 行番号, セット)]
     let mut staged: HashMap<(String, ExerciseId), Vec<StagedSet>> = HashMap::new();
+    // メニュー名 → 種目の並び（**行の順序**がそのまま並び順）。
+    // ★ `Vec` で持つのは順序が意味を持つから。`HashMap` の値に `HashSet` を使うと
+    //   「胸の日」を開いたときのカードの並びが毎回変わる
+    let mut staged_routines: Vec<(String, Vec<ExerciseId>)> = Vec::new();
     // ★ 読めなかったセル。**黙って捨てない**ための計数（下の `NoRecords` 判定で使う）
     let mut unread = 0usize;
 
@@ -1896,6 +1947,38 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
         }
         let group_name = at(cols.group);
         let ex_name = at(cols.exercise);
+        let routine_name = at(cols.routine);
+
+        // トレーニングメニューの行（日付が空・メニュー列が埋まる）。
+        // ★ 記録行より先に判定する。日付が入っている行にメニュー名が混ざっていても、
+        //   それは記録として扱う（メニューは日付を持たないものと決めてある）
+        if date.is_none() && !routine_name.is_empty() {
+            let members = match staged_routines.iter().position(|(n, _)| n == routine_name) {
+                Some(i) => &mut staged_routines[i].1,
+                None => {
+                    staged_routines.push((routine_name.to_string(), Vec::new()));
+                    &mut staged_routines.last_mut().expect("今 push した").1
+                }
+            };
+            if !ex_name.is_empty()
+                && let Some(id) = resolve_exercise(
+                    &mut out,
+                    mine,
+                    &mut group_ids,
+                    &mut ex_ids,
+                    ids,
+                    group_name,
+                    ex_name,
+                )
+            {
+                // ★ 重複は初出だけ残す。同じ種目が 2 回入ると展開時にログが 2 本でき、
+                //   「1 日 1 種目 1 ログ」が破れる（`normalize_routines` も同じことをする）
+                if !members.contains(&id) {
+                    members.push(id);
+                }
+            }
+            continue;
+        }
 
         // 部位だけの行（種目を持たない部位のマスタ行）
         if date.is_none() && ex_name.is_empty() {
@@ -1986,6 +2069,21 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
         }
     }
 
+    // ── メニューを組み立てる ──
+    //
+    // ★ **ID は毎回新しく採る。** 名前で `mine` に寄せない。`merge_db` は
+    //   「ID 一致 → 名前と種目が**両方**一致 → 追加」で突き合わせる規則で、名前だけで
+    //   寄せないことを意図して選んでいる（adr/data-model/routines-as-named-exercise-lists.md）。
+    //   ここで名前に寄せると、その判断を取り込み経路だけ裏口から覆すことになる。
+    //   自分のファイルを戻すぶんには名前も種目も一致するので重複しない。
+    for (name, exercises) in staged_routines {
+        out.routines.push(Routine {
+            id: ids.alloc(),
+            name,
+            exercises,
+        });
+    }
+
     // ★ JSON の枝が `migrate` の中で通しているのと同じ関数を共有する。日付キーの
     //   再正規化・重複ログの畳み込み・空白メモの正規化・空セッション削除・`f32` で
     //   表せない重量の除去が、TSV 経由でも自動で効く。ここを自前で書き直すと必ずズレ、
@@ -2000,7 +2098,10 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
     //   ロケール書き戻しで全滅したファイルが `Ok(sessions: {})` で通り、画面は
     //   「新しく取り込むものはありません」と出す。**全部落ちたことに気づけない**のが
     //   このアプリでいちばん避けたい終わり方なので、読めなかったセルがあるなら言う
-    if out.sessions.is_empty() && (unread > 0 || out.exercises.is_empty()) {
+    if out.sessions.is_empty()
+        && out.routines.is_empty()
+        && (unread > 0 || out.exercises.is_empty())
+    {
         return Err(if unread > 0 {
             ImportError::Unreadable
         } else {
@@ -4793,7 +4894,7 @@ mod tests {
         let tsv = export_tsv(&crate::presets::seeded_db(), jst());
         assert_eq!(
             tsv.lines().next().expect("見出し行"),
-            "日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻"
+            "日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー"
         );
     }
 
@@ -5056,7 +5157,7 @@ mod tests {
         let tsv = export_tsv(&db, jst());
         assert_eq!(tsv.lines().count(), 2, "改行でレコードが割れている: {tsv}");
         let r = rows(&tsv);
-        assert_eq!(r[1].len(), 11, "タブで列がずれている");
+        assert_eq!(r[1].len(), 12, "タブで列がずれている");
         assert_eq!(r[1][7], "前半 きつい");
         assert_eq!(r[1][8], "1 本目 2 本目");
     }
@@ -5141,6 +5242,64 @@ mod tests {
         );
         // ★ 時刻列は書き出し専用。取り込みでは必ず落ちる
         assert_eq!(log.at, None, "TSV から at を復元してしまっている");
+    }
+
+    /// ★ メニューを書かないと**機種変更でメニューだけ消える**。記録は行に出るので
+    ///   残るが、メニューは `Db` にしか無い。
+    #[test]
+    fn tsv_round_trips_routines() {
+        let mut db = tsv_sample();
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let fly = crate::presets::preset_exercise_id("チェストフライ").expect("プリセット");
+        let mut g = ids();
+        db.routines.push(Routine {
+            id: g.alloc(),
+            name: "胸の日".into(),
+            exercises: vec![bench, fly],
+        });
+        // 名前だけのメニュー（種目を選ぶ前に閉じた状態）も落とさない
+        db.routines.push(Routine {
+            id: g.alloc(),
+            name: "これから作る".into(),
+            exercises: Vec::new(),
+        });
+
+        let tsv = export_tsv(&db, jst());
+        let mut mine = crate::presets::seeded_db();
+        let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
+        merge_db(&mut mine, incoming);
+
+        assert_eq!(
+            mine.routines
+                .iter()
+                .map(|x| (x.name.as_str(), x.exercises.clone()))
+                .collect::<Vec<_>>(),
+            vec![("胸の日", vec![bench, fly]), ("これから作る", Vec::new()),],
+            "メニューが往復していない: {tsv}"
+        );
+    }
+
+    /// ★ メニューは名前だけでは寄せない規則なので、2 回入れて増えないことを別に見る
+    ///   （`merge_db` は「名前と種目が両方一致」で初めて重複と判断する）。
+    #[test]
+    fn importing_a_tsv_with_routines_twice_adds_nothing() {
+        let mut db = tsv_sample();
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        db.routines.push(Routine {
+            id: ids().alloc(),
+            name: "胸の日".into(),
+            exercises: vec![bench],
+        });
+        let tsv = export_tsv(&db, jst());
+
+        let mut mine = crate::presets::seeded_db();
+        let first = parse_import(&tsv, &mut ids(), &mine).expect("1 回目");
+        merge_db(&mut mine, first);
+        let second = parse_import(&tsv, &mut ids(), &mine).expect("2 回目");
+        let report = merge_db(&mut mine, second);
+
+        assert!(report.is_noop(), "2 回目で増えている: {report:?}");
+        assert_eq!(mine.routines.len(), 1);
     }
 
     /// ★ 冪等性は**数**で見る（`MergeReport` の注記どおり）。

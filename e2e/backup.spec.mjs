@@ -71,7 +71,7 @@ async function importFile(page, text, name = 'fitness-memo-20260801-1200.tsv') {
 
 /** 1 日分の記録が入った TSV。取り込むと必ず「増える」側になる。 */
 const ONE_DAY_TSV =
-  '日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\n' +
+  '日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\n' +
   '2026-08-01\t胸\tベンチプレス\t1\t60\t10\t70.5\t\t\t調子よい\t\n' +
   '2026-08-01\t胸\tベンチプレス\t2\t60\t8\t\t\t\t\t\n';
 
@@ -94,7 +94,7 @@ test('書き出しは共有シートに files だけを .tsv で渡す', async (
   expect(shared.type).toBe(TSV_MIME);
   // 見出しは外部仕様（cargo test がバイト一致で固定しているのと同じ並び）
   expect(shared.text.split('\n')[0]).toBe(
-    '日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻',
+    '日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー',
   );
   // 保存形式は JSON のまま（書き出し形式とは別。adr/storage/tsv-export-for-spreadsheets.md）
   const stored = await page.evaluate((k) => localStorage.getItem(k), KEY);

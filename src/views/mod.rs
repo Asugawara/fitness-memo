@@ -402,6 +402,17 @@ pub fn Sheet(
                 //   ので、これだけでは「✕ の青枠」が「シート上辺の青線」に化けるだけになる。
                 //   リングは styles.css の `.sheet:focus-visible { outline: none }` が受け持つ
                 let _ = d.focus();
+                // ★ **開くたびに中身を先頭へ戻す。** `<dialog>` は常時マウント
+                //   （このコンポーネントの doc）なので `.sheet-body` の DOM 要素は
+                //   閉じても生き続け、`scrollTop` を覚えたままになる。前回の操作で
+                //   下まで送っていると、次に開いたシートは**見出しも入力欄も画面外**の
+                //   状態で現れる。実測（Playwright / iPhone 15 Pro）で、メニュー編集
+                //   シートを一度閉じて開き直すと `scrollTop` が 446 のまま出た
+                //   （Chromium は中身が空になる 1 tick で 0 に潰れるので出ない）。
+                //   ★ これはシート 5 枚すべての話で、長いシートほど強く効く。
+                if let Some(body) = d.query_selector(".sheet-body").ok().flatten() {
+                    body.set_scroll_top(0);
+                }
             }
         } else if d.open() {
             d.close();

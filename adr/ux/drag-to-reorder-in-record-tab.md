@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-13
 - **カテゴリ**: ux
-- **関連**: [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](menu-groups-as-single-open-accordion.md), [「1日1種目1ログ」を不変条件にする](../data-model/one-log-per-exercise-per-day.md), [`at` を `Option<i64>` にし当日入力時のみ埋める](../data-model/at-optional-same-day-only.md), [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md), [セット削除は確認を挟まない（カード削除の確認は残す）](set-delete-without-confirmation.md), [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [localStorage の単一キーに JSON 全体を持つ](../storage/localstorage-single-key-json.md), [グラフの座標計算を `chart_layout` に切り出してテスト可能にする](../architecture/chart-layout-as-a-testable-module.md), [キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md)
+- **関連**: [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](menu-groups-as-single-open-accordion.md), [「1日1種目1ログ」を不変条件にする](../data-model/one-log-per-exercise-per-day.md), [`at` を `Option<i64>` にし当日入力時のみ埋める](../data-model/at-optional-same-day-only.md), [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md), [セット削除は確認を挟まない（カード削除の確認は残す）](set-delete-without-confirmation.md), [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [localStorage の単一キーに JSON 全体を持つ](../storage/localstorage-single-key-json.md), [グラフの座標計算を `chart_layout` に切り出してテスト可能にする](../architecture/chart-layout-as-a-testable-module.md), [キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md), [メニュー編集シートの「選択中」をドラッグで並べ替え、種目ピッカーを複数開けるアコーディオンにする](routine-editor-drag-and-accordion.md)
 
 ## 背景
 
@@ -136,7 +136,10 @@ transform だけで見せる形なら、測るのは掴んだ 1 回だけで済�
 一度も触れないので、`remove` してから `insert` する式の添字ずれのような事故が検出されない
 （`core::short_elapsed` の doc にある `ms / 86_400_000` がその前例）。
 
-座標は **document 基準**（`rect.top + scrollY`）にした。iOS は慣性スクロール中の
+座標は **document 基準**（`rect.top + scrollY`）にした（この「document 基準」は後に
+[メニュー編集シートの「選択中」をドラッグで並べ替え、種目ピッカーを複数開けるアコーディオンにする](routine-editor-drag-and-accordion.md)
+で「スクロール容器の内容基準」へ一般化された。記録タブの容器はページ全体なので**この節の
+内容は 1 文字も変わっていない**）。iOS は慣性スクロール中の
 `pointerdown` で `pointercancel` を送らないことがあり、ドラッグ中にページが動くと
 viewport 基準のスナップショットは陳腐化する。document 基準なら毎 `pointermove` で
 `scrollY` を足し直すだけで整合が保てる。画面端の自動スクロールが成立するのも同じ理由。
@@ -298,7 +301,9 @@ assert しない限り死んでいても気づけない。**
 が「矢印を戻すのではなくこれを検討する」と名指しした案。しかし記録タブの並びは
 **今日この順でやるという計画**であって履歴の集計ではない。スーパーセットや「先に上げて
 から追い込む」順は履歴から導けないうえ、入力中に勝手に並びが変わるのは最も嫌われる。
-却下（**「種目を追加」シートの並びには今も有効な案**なので、そちらの将来案として残す）。
+却下（**「種目を追加」シートの並びには今も有効な案**なので、そちらの将来案として残す。
+[メニュー編集シートの「選択中」をドラッグで並べ替え、種目ピッカーを複数開けるアコーディオンにする](routine-editor-drag-and-accordion.md)
+はメニュー側のピッカーを折りたたみで畳んだが、**この案には触れていない**）。
 
 **並びを `fitness-memo/ui/v1` に持つ**: `Db` を汚さない。しかし
 [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md) が

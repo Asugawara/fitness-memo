@@ -69,6 +69,21 @@ async function importFile(page, text, name = 'fitness-memo-20260801-1200.tsv') {
   });
 }
 
+/**
+ * ★ 高さは**丸めて**見る。`boundingBox()` が返すのは CSS の指定値ではなく
+ *   **描画された箱**で、devicePixelRatio が整数でない端末（Pixel 7 は 2.625）では
+ *   デバイスピクセルへのスナップで端数が出る。実際に Pixel 7 で
+ *   `43.99993896484375`（44 に 0.00006px 足りない）を踏んでリリースが止まった。
+ *   守りたいのは「44px のタップ標的があること」で、1/16000 px の欠けではない。
+ *   丸めれば端末の DPR に依らず、**本当に小さくなった退行だけ**が落ちる。
+ */
+async function tapTargetHeight(locator) {
+  await expect(locator).toBeVisible();
+  const box = await locator.boundingBox();
+  expect(box, 'ボタンが描画されていない').not.toBeNull();
+  return Math.round(box.height);
+}
+
 /** 1 日分の記録が入った TSV。取り込むと必ず「増える」側になる。 */
 const ONE_DAY_TSV =
   '日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\n' +
@@ -311,9 +326,10 @@ test('「インポート」は押せるボタンで、input は目に触れな�
   // シート内の file input は 1 つだけ（隠したものと出したものが二重にならない）
   expect(await page.locator('[data-testid=backup-sheet] input[type=file]').count()).toBe(1);
 
-  const box = await page.getByTestId('backup-import').boundingBox();
-  expect(box, '「インポート」が描画されていない').not.toBeNull();
-  expect(box.height, 'タップ標的が 44px 未満').toBeGreaterThanOrEqual(44);
+  expect(
+    await tapTargetHeight(page.getByTestId('backup-import')),
+    'タップ標的が 44px 未満',
+  ).toBeGreaterThanOrEqual(44);
 });
 
 test('保存できなくなったら黙って動き続けず警告を出す', async ({ page }) => {
@@ -455,12 +471,15 @@ test('シート内のボタンは 44px のタップ標的を持つ', async ({ pa
   await openSheet(page);
 
   for (const id of ['backup-export', 'backup-import']) {
-    const box = await page.getByTestId(id).boundingBox();
-    expect(box, `${id} が描画されていない`).not.toBeNull();
-    expect(box.height, `${id} のタップ標的が 44px 未満`).toBeGreaterThanOrEqual(44);
+    expect(
+      await tapTargetHeight(page.getByTestId(id)),
+      `${id} のタップ標的が 44px 未満`,
+    ).toBeGreaterThanOrEqual(44);
   }
 
   await importFile(page, ONE_DAY_TSV);
-  const apply = await page.getByTestId('backup-apply').boundingBox();
-  expect(apply.height, '「取り込む」のタップ標的が 44px 未満').toBeGreaterThanOrEqual(44);
+  expect(
+    await tapTargetHeight(page.getByTestId('backup-apply')),
+    '「取り込む」のタップ標的が 44px 未満',
+  ).toBeGreaterThanOrEqual(44);
 });

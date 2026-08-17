@@ -108,15 +108,21 @@ pub enum Scroller {
 }
 
 impl Scroller {
-    /// 掴んだ要素から容器を決める。**祖先に `.sheet-body` があればそちら。**
+    /// 掴んだ並びの要素（DOM id で指定）から容器を決める。
+    /// **祖先に `.sheet-body` があればそちら、無ければページ全体。**
     ///
     /// ★ 呼び側に「自分がどのシートの中にいるか」を渡させない。`views::routine` の
     /// `RoutineEditor` は設定タブと記録タブの 2 つのシートから開かれるので、
     /// prop で受ける形にすると**片方だけ間違った容器を指しても画面上は動いて見える**
     /// （スクロールしない限り差が出ない）。DOM から引けば配線を間違えようがない。
-    pub fn of(ev: &PointerEvent) -> Self {
-        ev.target()
-            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+    ///
+    /// ★ `PointerEvent` の `target` からではなく **id から**引く。掴む場所が長押しの
+    /// 要る全幅のハンドルだと、実際に掴むのは 250ms 後のタイマーの中でイベントが手元に
+    /// 無い（`Press` は `Cell` に入るので `String` を持てず、イベントも持ち越せない）。
+    /// 並びの要素の id は測るために必ず作っているので、それを使い回す。
+    pub fn of_id(element_id: &str) -> Self {
+        document()
+            .get_element_by_id(element_id)
             .and_then(|el| el.closest(".sheet-body").ok().flatten())
             .map(|el| el.id())
             .filter(|id| !id.is_empty())

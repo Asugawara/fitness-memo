@@ -1849,15 +1849,17 @@ function pickGroup(page, name) {
 }
 
 /**
- * 「選択中」の行のハンドル（番号）を掴んで dy だけ動かして離す。
+ * 「選択中」の行を掴んで dy だけ動かして離す。掴み口は行のほぼ全部（`.rtn-grab`)で、
+ * ✕ はその外にある。
  *
  * ★ **`page.mouse` で出す。** Chromium / WebKit とも本物の PointerEvent
  *   （pointerType: "mouse", isPrimary: true, button: 0）になり、setPointerCapture が
  *   実際に働く。`dispatchEvent` で合成した PointerEvent では capture が
  *   NotFoundError で失敗し、実装が意図どおり「掴まない」ので検証にならない
  *   （e2e/reorder.spec.mjs の冒頭に同じ断り書きがある）。
- * ★ 固定の待ち時間を入れない。`data-drag="lift"` が付くのを待てば掴めたことまで
- *   一緒に確かめられ、待っている間は指が 1px も動かない。
+ * ★ 固定の待ち時間を入れない。`data-drag="lift"` が付くのを待てば**長押し
+ *   （PRESS_DELAY_CARD = 250ms）が効いたこと**まで一緒に確かめられ、待っている間は
+ *   指が 1px も動かないので slop（10px）で捨てられることもない。
  * ★ 指を離す前に `hold` を呼べる。ドラッグ中の見え方（番号の入れ替わり）を見るため。
  */
 async function dragPicked(page, index, dy, hold) {
@@ -1972,7 +1974,7 @@ test('★ 「選択中」をドラッグで並べ替えると、記録タブの�
   await dragPicked(page, 0, await pickedRowHeight(page));
   await expect(page.getByTestId('routine-picked-name')).toHaveText(['スクワット', 'ベンチプレス']);
   // 番号も入れ替わっている（番号 ＝ 順番、が指を離した後も保たれる）
-  await expect(page.getByTestId('routine-handle')).toHaveText(['1', '2']);
+  await expect(page.getByTestId('routine-no')).toHaveText(['1', '2']);
 
   await page.getByTestId('routine-save').click();
   await expect(page.getByTestId('settings-sheet')).toBeHidden();
@@ -2001,16 +2003,16 @@ test('ドラッグ中は番号が入れ替わって見える（落ちる先が�
   //   CSS の counter() ではこれが出せないので、テキストで描いている
   await createRoutine(page, '3 種目', ['ベンチプレス', 'スクワット', 'プランク']);
   await page.getByTestId('routine-open').click();
-  await expect(page.getByTestId('routine-handle')).toHaveText(['1', '2', '3']);
+  await expect(page.getByTestId('routine-no')).toHaveText(['1', '2', '3']);
 
   await dragPicked(page, 0, await pickedRowHeight(page), async () => {
     // ★ **指を離す前に**読む。掴んだ行は 2 番目に見えているので "2"
-    await expect(page.getByTestId('routine-handle')).toHaveText(['2', '1', '3']);
+    await expect(page.getByTestId('routine-no')).toHaveText(['2', '1', '3']);
     // 掴んだ行だけが持ち上がっていて、押しのけられた行には印が付かない
     await expect(page.locator('[data-testid=routine-picked-row][data-drag="lift"]')).toHaveCount(1);
   });
 
-  await expect(page.getByTestId('routine-handle')).toHaveText(['1', '2', '3']);
+  await expect(page.getByTestId('routine-no')).toHaveText(['1', '2', '3']);
   await expect(page.getByTestId('routine-picked-name')).toHaveText([
     'スクワット',
     'ベンチプレス',
@@ -2018,7 +2020,7 @@ test('ドラッグ中は番号が入れ替わって見える（落ちる先が�
   ]);
 });
 
-test('ハンドルに触っただけでは並びが変わらない', async ({ page }) => {
+test('行に触っただけでは並びが変わらない', async ({ page }) => {
   // ★ 閾値ではなく「落ちた先が元の位置なら signal に触らない」という分岐が保証する
   await createRoutine(page, '胸と脚の日', ['ベンチプレス', 'スクワット']);
   await page.getByTestId('routine-open').click();
@@ -2030,8 +2032,90 @@ test('ハンドルに触っただけでは並びが変わらない', async ({ pa
   await expect(page.getByTestId('routine-picked-name')).toHaveText(['ベンチプレス', 'スクワット']);
 });
 
+test('★ タップ / 素早くフリックしただけでは並びが変わらない（長押しで塞ぐ）', async ({ page }) => {
+  // ★ 掴み口を行のほぼ全部にしたので `touch-action: none` の帯が広く、即時開始だと
+  //   スクロールのつもりのフリックが**画面を動かさないまま**並びを変える。行の高さは
+  //   46px 前後なので閾値は約 24px ＝ フリックは確実に超える。250ms の長押しで塞ぐ
+  //   （記録タブの `.card-head` と同じ判断。views/drag.rs の PRESS_DELAY_CARD）
+  //
+  // ★ **このテストが固定できるのは「待ちがあること」までで、その長さではない。**
+  //   実測（Chromium）で `PRESS_DELAY_CARD` を 0ms に落としても緑のままだった —
+  //   `mouse.move(steps: 8)` の合成入力が 0ms の setTimeout より先に処理されるため。
+  //   落ちるのは待ちを丸ごと外して `pointerdown` で同期に掴む形にしたときで、
+  //   そこは確認済み（現実的な退行はこちら）。250ms が妥当かは実機で見るしかない
+  await createRoutine(page, '3 種目', ['ベンチプレス', 'スクワット', 'プランク']);
+  await page.getByTestId('routine-open').click();
+
+  const row = page.getByTestId('routine-picked-row').first();
+  const handle = row.getByTestId('routine-handle');
+  await handle.scrollIntoViewIfNeeded();
+  const box = await handle.boundingBox();
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  const order = ['ベンチプレス', 'スクワット', 'プランク'];
+
+  // タップ（押してすぐ離す）
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.getByTestId('routine-picked-name')).toHaveText(order);
+
+  // 長押しを待たずに振り抜く（＝シートをスクロールするつもりのフリック）
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y + 300, { steps: 8 });
+  await expect(row).not.toHaveAttribute('data-drag', 'lift');
+  await page.mouse.up();
+  await expect(page.getByTestId('routine-picked-name')).toHaveText(order);
+
+  // ★ **この座標が本当にハンドルの上だったことを確かめる。** これが無いと、掴めない
+  //   場所を押していただけでも上の 2 つが通ってしまう（＝長押しを外しても緑のまま）。
+  //   同じ (x, y) で待てば掴めることまで見て、初めて「待ったかどうかの差」になる
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await expect(row).toHaveAttribute('data-drag', 'lift');
+  await page.mouse.up();
+  await expect(page.getByTestId('routine-picked-name')).toHaveText(order);
+
+  // 保存しても並びは初回のまま
+  await page.getByTestId('routine-save').click();
+  await expect(page.getByTestId('routine-names')).toHaveText(order.join(', '));
+});
+
+test('★ 行が掴み口になっても ✕ は効き、✕ からはドラッグが始まらない', async ({ page }) => {
+  // ★ ✕ は掴み口（.rtn-grab）の**外**に置いてある。中に入れると「外すつもりの
+  //   タップでドラッグが始まる」を stop_propagation で消して回ることになる
+  await createRoutine(page, '3 種目', ['ベンチプレス', 'スクワット', 'プランク']);
+  await page.getByTestId('routine-open').click();
+
+  // ✕ を押しながら動かしても、掴めないし並びも変わらない
+  const remove = page.getByTestId('routine-remove').nth(1);
+  const box = await remove.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 200, { steps: 8 });
+  await expect(page.locator('[data-testid=routine-picked-row][data-drag="lift"]')).toHaveCount(0);
+  await page.mouse.up();
+  await expect(page.getByTestId('routine-picked-name')).toHaveText([
+    'ベンチプレス',
+    'スクワット',
+    'プランク',
+  ]);
+
+  // ★ そのうえで ✕ は普通に効く（押した行だけが外れ、番号は振り直される）
+  await page.getByTestId('routine-remove').nth(1).click();
+  await expect(page.getByTestId('routine-picked-name')).toHaveText(['ベンチプレス', 'プランク']);
+  await expect(page.getByTestId('routine-no')).toHaveText(['1', '2']);
+
+  // 外れた種目はピッカーで選択解除に戻っている（「選択中」が真実源）
+  await openAllPickGroups(page);
+  await expect(
+    page.getByTestId('routine-pick').filter({ hasText: exactText('スクワット') }),
+  ).not.toHaveClass(/added/);
+});
+
 test('ドラッグの代わりに Alt + ↑↓ でも並べ替えられる', async ({ page }) => {
-  // ★ 掴む場所（番号）は <button> にできないので、既にフォーカスできる行の ✕ に載せる。
+  // ★ 掴み口（行）は <button> にできないので、既にフォーカスできる行の ✕ に載せる。
   //   WCAG 2.1.1 の非ドラッグ経路であり、記録タブのカード / セット行と同じ作り
   await createRoutine(page, '胸と脚の日', ['ベンチプレス', 'スクワット']);
   await page.getByTestId('routine-open').click();

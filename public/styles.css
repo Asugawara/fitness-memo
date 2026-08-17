@@ -671,25 +671,26 @@ h3 {
 
 /* ── ドラッグで並び替える（adr/ux/drag-to-reorder-in-record-tab.md）───────────
    掴む場所はセット行の番号（.set-no）と種目カードの見出し行（.card-head）、それに
-   メニュー編集シートの「選択中」の番号（.rtn-no、
+   メニュー編集シートの「選択中」の行（.rtn-grab、
    adr/ux/routine-editor-drag-and-accordion.md）。どれも既にある要素で、新しいボタンは
    1 つも足していない。 */
 
 /* ★ この 4 つは**ハンドルにだけ**当てる。入力欄まで広げないこと。
    - touch-action: none … これが無いとドラッグの途中でブラウザがスクロールを始める。
      styles.css 冒頭の `button, input { touch-action: manipulation }` とは対象が違う
-     （こちらは <span> と <header>）ので競合しない。**代償として、この 3 か所からは
-     スクロールを始められなくなる**（.rtn-no はシートの中のスクロール、他はページ）。
-     全幅の .card-head を即時ドラッグ開始にしないのはそのためで、細い .set-no /
-     .rtn-no は縦フリックの起点になりにくいので待たせていない（views/drag.rs の
-     PRESS_DELAY_CARD）
+     （こちらは <span> と <header> と <div>）ので競合しない。**代償として、この 3 か所
+     からはスクロールを始められなくなる**（.rtn-grab はシートの中のスクロール、他は
+     ページ）。**帯が広い .card-head と .rtn-grab は長押しにする** — 即時開始だと
+     スクロールのつもりのフリックが画面を動かさないまま並びを変える。細い .set-no
+     （約 29px 幅）だけは縦フリックの起点になりにくいので待たせていない
+     （views/drag.rs の PRESS_DELAY_CARD）
    - -webkit-touch-callout: none … 無いと長押しで「コピー / 調べる」が出て
      pointercancel が飛び、掴んだ手が離れる
    - user-select … 掴んで動かすたびに種目名が選択されるのを止める。継承するので
-     .card-head 1 か所で <h3> と .group-name まで効く
+     .card-head / .rtn-grab 1 か所で中の <h3> や種目名まで効く
    - tap-highlight … 掴むたびに青い矩形が光るのを消す */
 .set-no,
-.rtn-no,
+.rtn-grab,
 .card-head {
   touch-action: none;
   -webkit-touch-callout: none;
@@ -702,13 +703,13 @@ h3 {
    これ以上の装飾は足さない（静止時のカードは今までと 1px も変わらない） */
 @media (hover: hover) {
   .set-no,
-  .rtn-no,
+  .rtn-grab,
   .card-head {
     cursor: grab;
   }
 
   .set-no:active,
-  .rtn-no:active,
+  .rtn-grab:active,
   .card-head:active {
     cursor: grabbing;
   }
@@ -740,8 +741,9 @@ h3 {
 }
 
 /* 掴んでいることを見せる。**指が止まっていても掴めたと分かる**必要があるので、
-   長押しで効き始める .card-head には必須（day.rs の PRESS_DELAY_CARD）。
-   影ではなく地色で作るのは、このファイルに box-shadow が 1 つも無いため */
+   長押しで効き始める .card-head と .rtn-grab には必須（views/drag.rs の
+   PRESS_DELAY_CARD）。影ではなく地色で作るのは、このファイルに box-shadow が
+   1 つも無いため */
 .card[data-drag="lift"] {
   border-color: var(--accent);
 }
@@ -750,6 +752,15 @@ h3 {
 .rtn-picked > li[data-drag="lift"] {
   background: var(--bg);
   border-radius: 8px;
+}
+
+/* ★ 「選択中」の行は静止時に枠を持たないので、地色だけでは .card と違って
+   「掴めた」が弱い（長押しを入れた以上、指が止まったまま読める必要がある）。
+   border ではなく outline なのは、静止時に無い枠を足すと 2px ぶん行が動くから。
+   offset を負にして枠の内側へ引き、角丸も上の 8px に揃える */
+.rtn-picked > li[data-drag="lift"] {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 /* ★ 動きを減らす設定では押しのけを瞬時にする。.sheet の 0.1s に揃えないのは、
@@ -1779,9 +1790,25 @@ h3 {
   gap: 8px;
 }
 
-/* 掴む場所。幅を固定して種目名の左端も揃える（揃っていないと並びを縦に追えない） */
+/* ★ **掴む場所は行のほぼ全部**（記録タブの .card-head と同じ考え方）。
+   番号だけ（16px）をハンドルにしていた頃は、カードのドラッグと操作感が揃わなかった。
+
+   ★ ✕ はこの中に**入れない**。兄弟に置くことで「外すつもりのタップでドラッグが
+     始まる」が構造的に起きなくなる（.card-head に削除ボタンが 1 つも無いのと同じ）。
+     行の高さ 44px は右の .icon-btn が決めているので、こちらにも同じ min-height を
+     置いて**✕ の無い行でも帯が痩せない**ようにする。 */
+.rtn-grab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  /* 名前が長いとき ✕ を押し出さない（.rtn-name の省略が効くようにする） */
+  min-width: 0;
+}
+
+/* 番号。幅を固定して種目名の左端を揃える（揃っていないと並びを縦に追えない） */
 .rtn-no {
-  position: relative;
   flex: none;
   min-width: 16px;
   text-align: right;
@@ -1790,19 +1817,12 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 
-/* ★ 16px は指で掴むには細い。**レイアウトを 1px も動かさずに**ヒット領域だけ広げる
-   （position: relative は flex アイテムの配置に影響しない）。.set-no::before と同じ作り。
-   左 -14px は .sheet-body の padding と同じで、シートの左端まで届く。右 -6px は
-   gap 8px の内側なので種目名に食い込まない。上下 -12px は行の高さ（✕ ボタンの 44px で
-   決まる）の内側に収まり、gap 2px を挟む隣の行のハンドルとは重ならない。 */
-.rtn-no::before {
-  content: "";
-  position: absolute;
-  inset: -12px -6px -12px -14px;
-}
-
 .rtn-name {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 部位ブロック。縦の余白はヘッダ（.grp-toggle の 52px）と各行（44px）が自前で持つ

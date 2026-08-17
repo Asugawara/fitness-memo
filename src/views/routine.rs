@@ -22,7 +22,8 @@ use crate::reorder;
 use crate::storage;
 
 use super::drag::{
-    self, Drag, Scroller, capture, holds, measure_slots, release, start_edge_scroll,
+    self, Drag, EDGE_SCROLLING, PRESS, PRESS_DELAY_CARD, PRESS_SLOP_PX, Press, Scroller, capture,
+    end_press, holds, measure_slots, release, start_edge_scroll,
 };
 use super::icon::{self, icon};
 use super::{Sheet, kb_blur, kb_focus, use_dates, use_db, use_kb};
@@ -202,12 +203,20 @@ pub fn RoutineEditor(
     let invalid: RwSignal<Option<&'static str>> = RwSignal::new(None);
     let confirming = RwSignal::new(false);
     // 「選択中」のドラッグ。全行が押しのけ量を読むのでここが持つ。
-    //
-    // ★ タブ切替やシートを閉じたときの後始末を `on_cleanup` に書かないのは、
-    //   ここに長押しのタイマーが無いから（ハンドルが細いので待たせていない）。
-    //   端の自動スクロールのループは `drag` が畳まれた次のフレームに自分で止まり、
-    //   `EDGE_SCROLLING` もそこで下りる（`views::drag::edge_scroll_tick`）。
+    // 長押し待ちは所有者を持たない `PRESS`（`views::drag`）に置く。
     let picked_drag: RwSignal<Option<Drag>> = RwSignal::new(None);
+
+    // ★ このコンポーネントは**シートを閉じた瞬間に破棄される**（呼び出し側の signal が
+    //   `None` になると `Sheet` の中の `.map(..)` ごと消える）。掴む途中で閉じると、
+    //   生き残った長押しタイマーが破棄済みの `picked_drag` を触って panic する
+    //   （wasm では unreachable ＝ アプリが死ぬ）。記録タブの `DayEditor` がタブ切替に
+    //   対して同じことをしているのと同型で、畳んでから消える。
+    //   `EDGE_SCROLLING` を下ろし忘れると再入防止のフラグが立ちっぱなしになり、
+    //   開き直しても自動スクロールが二度と動かない
+    on_cleanup(|| {
+        end_press();
+        EDGE_SCROLLING.set(false);
+    });
     // シートの中だけで開いている部位。
     //
     // ★ **`OpenGroupCtx` を使わない。** あれはアプリ全体で 1 本の signal なので、
@@ -346,29 +355,33 @@ pub fn RoutineEditor(
                                         picked_drag
                                             .with(|d| d.as_ref().map_or(i, |d| d.seen_at(i))) + 1
                                     };
-                                    let grab = move |ev: PointerEvent| {
-                                        if picked_drag.with_untracked(Option::is_some)
-                                            || !capture(&ev)
-                                        {
-                                            return;
-                                        }
-                                        // ★ id の並びと `from` は同じ 1 回の読み出しから
-                                        //   作る。別々に読むと、その間に選択が動いたとき
-                                        //   添字がずれる
-                                        let (ids, here) = picked
-                                            .with_untracked(|p| {
+                                    // 長押しが満了したら、**そのときの指の位置**を基準に
+                                    // 掴む。押した瞬間の位置を基準にすると、待っている
+                                    // 間の 0〜10px ぶん掴んだ瞬間に行が跳ねる。測るのも
+                                    // ここ（押した瞬間ではない）
+                                    let arm = move || {
+                                        let Some(p) = PRESS.get() else { return };
+                                        // ★ `try_` で読む。長押しの途中でシートを閉じると
+                                        //   このコンポーネントごと破棄され、タイマーだけが
+                                        //   生き残る。`on_cleanup` で止めてはいるが、既に
+                                        //   キューへ入った 1 発は止められない
+                                        let Some((ids, here)) = picked
+                                            .try_with_untracked(|p| {
                                                 (
                                                     p.iter()
                                                         .map(|e| picked_dom_id(*e))
                                                         .collect::<Vec<_>>(),
                                                     p.iter().position(|x| *x == ex),
                                                 )
-                                            });
+                                            })
+                                        else {
+                                            return;
+                                        };
                                         // ★ ここが記録タブと違う唯一の場所。この並びは
                                         //   `.sheet-body`（`overflow-y: auto`）の中にある
                                         //   ので、`window` のスクロール量を足しても
                                         //   1px も動かない
-                                        let scroller = Scroller::of(&ev);
+                                        let scroller = Scroller::of_id(&picked_dom_id(ex));
                                         let (Some(from), Some(slots)) = (
                                             here,
                                             measure_slots(&ids, &scroller),
@@ -377,32 +390,80 @@ pub fn RoutineEditor(
                                             // ずれた並びがそれらしく動く。掴まないほうがまし
                                             return;
                                         };
-                                        picked_drag
-                                            .set(
+                                        if picked_drag
+                                            .try_set(
                                                 Some(
                                                     Drag::start(
-                                                        ev.pointer_id(),
+                                                        p.pointer_id,
                                                         from,
-                                                        f64::from(ev.client_y()),
+                                                        p.last_y,
                                                         slots,
                                                         scroller,
                                                     ),
                                                 ),
-                                            );
-                                        start_edge_scroll(picked_drag);
+                                            )
+                                            .is_none()
+                                        {
+                                            start_edge_scroll(picked_drag);
+                                        }
                                     };
-                                    let track = move |ev: PointerEvent| {
-                                        if !holds(picked_drag, &ev) {
+                                    let grab = move |ev: PointerEvent| {
+                                        if picked_drag.with_untracked(Option::is_some)
+                                            || !capture(&ev)
+                                        {
                                             return;
                                         }
-                                        picked_drag
-                                            .update(|d| {
-                                                if let Some(d) = d {
-                                                    d.advance(f64::from(ev.client_y()));
-                                                }
-                                            });
+                                        // ★ **前の待ちが残っていても弾かずに畳んで立て直す。**
+                                        //   `capture` が非 primary と左ボタン以外を落として
+                                        //   いるので、ここまで来たのは必ず新しいジェスチャ。
+                                        //   「残っていたら何もしない」形にすると、`pointerup`
+                                        //   を 1 度でも取りこぼしたとき以後掴めなくなる
+                                        end_press();
+                                        // ★ capture は**待つ前に**取る。取らないと、待って
+                                        //   いる 250ms の間に指がハンドルの外へ出たとき
+                                        //   `pointermove` が届かず slop を判定できない
+                                        let y = f64::from(ev.client_y());
+                                        let timer = set_timeout_with_handle(
+                                                arm,
+                                                PRESS_DELAY_CARD,
+                                            )
+                                            .ok();
+                                        PRESS.set(
+                                            Some(Press {
+                                                pointer_id: ev.pointer_id(),
+                                                down_y: y,
+                                                last_y: y,
+                                                timer,
+                                            }),
+                                        );
+                                    };
+                                    let track = move |ev: PointerEvent| {
+                                        if holds(picked_drag, &ev) {
+                                            picked_drag
+                                                .update(|d| {
+                                                    if let Some(d) = d {
+                                                        d.advance(f64::from(ev.client_y()));
+                                                    }
+                                                });
+                                            return;
+                                        }
+                                        // まだ長押し待ち。動きすぎたらこのジェスチャは捨てる
+                                        let Some(mut p) = PRESS
+                                            .get()
+                                            .filter(|p| p.pointer_id == ev.pointer_id())
+                                        else {
+                                            return;
+                                        };
+                                        p.last_y = f64::from(ev.client_y());
+                                        if (p.last_y - p.down_y).abs() > PRESS_SLOP_PX
+                                            && let Some(timer) = p.timer.take()
+                                        {
+                                            timer.clear();
+                                        }
+                                        PRESS.set(Some(p));
                                     };
                                     let drop_picked = move |ev: PointerEvent| {
+                                        end_press();
                                         let Some(d) = picked_drag.get_untracked() else {
                                             return;
                                         };
@@ -411,6 +472,10 @@ pub fn RoutineEditor(
                                         }
                                         picked_drag.set(None);
                                         move_picked(d.from, d.to);
+                                    };
+                                    let cancel_picked = move |_: PointerEvent| {
+                                        end_press();
+                                        release(picked_drag);
                                     };
                                     // ドラッグの代わり。行の ✕ にフォーカスがあれば効く
                                     // （番号は `<button>` にできないので、既にフォーカス
@@ -439,27 +504,45 @@ pub fn RoutineEditor(
                                             }
                                             on:keydown=nudge
                                         >
-                                            // ★ 掴む場所は番号。新しい 44px のボタンを
-                                            //   足さないための選択で、「番号 ＝ 記録タブでの
-                                            //   並び順」なので意味も一致する。細いので
-                                            //   長押しは要らない（`.set-no` と同じ判断。
-                                            //   adr/ux/routine-editor-drag-and-accordion.md）
-                                            <span
-                                                class="rtn-no"
+                                            // ★ **掴む場所は行のほぼ全部**（記録タブの
+                                            //   `.card-head` と同じ考え方）。番号だけを
+                                            //   ハンドルにしていたが、16px の標的では
+                                            //   カードのドラッグと操作感が揃わない。
+                                            //   adr/ux/routine-editor-drag-and-accordion.md
+                                            //
+                                            // ★ **✕ をこの中に入れない。** 入れると
+                                            //   「外すつもりのタップでドラッグが始まる」を
+                                            //   `stop_propagation` で消して回ることになる。
+                                            //   兄弟にすれば `pointerdown` がそもそも
+                                            //   ここへ来ないので、構造で保証できる
+                                            //   （`.card-head` に削除ボタンが 1 つも
+                                            //   無いのと同じ形）。
+                                            //
+                                            // ★ `<button>` にはできない。中に 2 つの
+                                            //   `<span>` を並べるだけなら可能だが、行全体が
+                                            //   押せるコントロールに見えると「押すと何が
+                                            //   起きるのか」が嘘になる（起きるのは
+                                            //   長押しの並べ替えだけ）。キーボードからの
+                                            //   並び替えは `<li>` の `on:keydown` が受ける
+                                            <div
+                                                class="rtn-grab"
                                                 data-testid="routine-handle"
                                                 on:pointerdown=grab
                                                 on:pointermove=track
                                                 on:pointerup=drop_picked
-                                                on:pointercancel=move |_| release(picked_drag)
-                                                on:lostpointercapture=move |_| {
-                                                    release(picked_drag)
-                                                }
+                                                on:pointercancel=cancel_picked
+                                                on:lostpointercapture=cancel_picked
                                             >
-                                                {index}
-                                            </span>
-                                            <span class="rtn-name" data-testid="routine-picked-name">
-                                                {label}
-                                            </span>
+                                                <span class="rtn-no" data-testid="routine-no">
+                                                    {index}
+                                                </span>
+                                                <span
+                                                    class="rtn-name"
+                                                    data-testid="routine-picked-name"
+                                                >
+                                                    {label}
+                                                </span>
+                                            </div>
                                             // ★ ここは ✕ のまま。**trash にしない** —
                                             //   これは「このメニューから外す」で種目自体は
                                             //   1 つも消えないので、trash だと種目を削除した

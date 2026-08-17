@@ -123,7 +123,7 @@
      SOFTWARE.
      ──────────────────────────────────────────────────────────────────── -->
 
-<link rel="stylesheet" href="/fitness-memo/styles-8fad0df6299fe832.css" integrity="sha384-hj1jZK0v+vJX1sm0DRdsXYfcCaPhwYL/YkLUO9WU+CgNVXelnD8hjs2czcfLNVzM"/>
+<link rel="stylesheet" href="/fitness-memo/styles-252e3b74b6425e9a.css" integrity="sha384-a4KMrxpxlbid/99CH9x3xtZXwdtir0t+0aZ1jijPyOYjB23Iq+cXIRPV7P4IC/hH"/>
 
 
 <!-- og:image の実体。クローラ専用なので stamp-sw.sh が SW のシェルから除外している -->
@@ -131,8 +131,8 @@
 
 
 <script type="module">
-import init, * as bindings from '/fitness-memo/fitness-memo-236ecf7845fbeac.js';
-const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-236ecf7845fbeac_bg.wasm' });
+import init, * as bindings from '/fitness-memo/fitness-memo-3db49190bc780e12.js';
+const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-3db49190bc780e12_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -141,7 +141,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-<link rel="modulepreload" href="/fitness-memo/fitness-memo-236ecf7845fbeac.js" crossorigin="anonymous" integrity="sha384-ePPjQRkk5tWtwLD8/HO009r7oKrx8EEevPLAM/QeIKo/c8Z2Tgjxef+NFRbo9soo"><link rel="preload" href="/fitness-memo/fitness-memo-236ecf7845fbeac_bg.wasm" crossorigin="anonymous" integrity="sha384-yXojT4gjtUpfm22J9rqz7LG9She2rYMjWYMJRwMhPRy80uySnyvHp70Fz2CDl0FC" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/fitness-memo/fitness-memo-3db49190bc780e12.js" crossorigin="anonymous" integrity="sha384-8WZ6eXfi4i6/AFnhJrOxNRwwDJORzkydiAsBrk20uSYs/cmRaBpyiXBBtYoKg9t0"><link rel="preload" href="/fitness-memo/fitness-memo-3db49190bc780e12_bg.wasm" crossorigin="anonymous" integrity="sha384-uw4v0/x3OPuWZxKV+TOBaFogbtb0wNWULij7tSDK5xXQx5qtiSYPpSB6337XQPVn" as="fetch" type="application/wasm"></head>
 <body>
 <!-- CSR なので配信される HTML の body にはテキストが 1 文字も無い。Googlebot は JS を
      実行するので通常は問題にならないが、**JS を実行しないクローラ（LLM 系の多くを含む）
@@ -155,7 +155,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
   <h1>fitness-memo（筋トレメモ）</h1>
   <p>iPhone のホーム画面から起動して完全オフラインで動く、筋トレ記録の PWA です。「前回何をどれだけやったかを見て、同じかそれ以上をやる」というループだけを最短手数で回すことに絞っています。</p>
   <p>種目ごとに前回のセット数・回数・重量を表示し、その日のセットが空なら 1 タップでプリフィルできます。胸 / 背中 / 肩 / 腕 / 脚 / 体幹 の 6 部位 28 種目をプリセットとして持ち、部位も種目も追加・改名・削除ができます。推移グラフは ボリューム / セット数 / 回数 を切り替えられ、記録した体重を右軸の破線として常に重ねます。</p>
-  <p>アカウント登録もサーバ通信もありません。記録は端末の localStorage にのみ保存し、JSON で書き出し・読み込みできます。</p>
+  <p>アカウント登録もサーバ通信もありません。記録は端末の localStorage にのみ保存し、TSV で書き出し・読み込みできます（表計算アプリでそのまま開けます）。</p>
   <p>表示には JavaScript と WebAssembly が必要です。<a href="https://github.com/Asugawara/fitness-memo">GitHub のリポジトリ</a></p>
 </noscript>
 <script>

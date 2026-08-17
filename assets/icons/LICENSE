@@ -3,10 +3,17 @@
 stroke-linejoin) は剥がし、viewBox とパスの座標だけを残しています。線の色と太さは
 public/styles.css の `.icon > svg` が与えます (ADR-0041 / ADR-0050)。
 
-収録: chevron-left.svg / chevron-right.svg / pencil.svg / x.svg
+収録: chevron-left.svg / chevron-right.svg / download.svg / pencil.svg /
+      trash-2.svg / upload.svg / x.svg
 
-このうち chevron-left / chevron-right / x は Feather 由来なので MIT も併記します
-(pencil は lucide オリジナルで ISC のみ)。
+このうち chevron-left / chevron-right / download / trash-2 / upload / x は Feather
+由来なので MIT も併記します (pencil は lucide オリジナルで ISC のみ)。Feather 由来か
+どうかは上流の icons/<name>.json の contributors に colebemis (Feather の作者) が
+入っているかで判別できます。
+
+★ アイコンを足したらこのファイルと index.html の**両方**を直すこと
+  (adr/architecture/lucide-icons-as-included-svg.md)。index.html だけが配信物に載る
+  ので、片方だけでは ISC / MIT の表示義務を満たさない。
 
 --------------------------------------------------------------------------------
 
@@ -30,7 +37,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 The following Lucide icons are derived from the Feather project:
 
-chevron-left, chevron-right, x
+chevron-left, chevron-right, download, trash-2, upload, x
 
 The MIT License (MIT) (for the icons listed above)
 

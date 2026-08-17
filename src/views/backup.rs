@@ -1,20 +1,30 @@
-//! データの書き出し / 読み込みシート。
+//! エクスポート / インポートのシート。
 //!
 //! 設計上の要点:
 //!
-//! - **取り込みの確認は「現在」と「読込後」を両方数字で並べる。** 片方だけ出す UI では
-//!   「記録 0 日のファイルで全部消す」事故が止まらない。0 日が見えれば誰も押さない
-//! - **取り込みの直前に必ず自動退避する**（`storage::snapshot_current`）。実行するのは
-//!   定義上「データを失って動転している人」なので、戻せることが要る
+//! - **1 画面に「エクスポート」と「インポート」を並べる。** ペイン切替も折りたたみも置かない
+//!   （adr/ux/one-screen-export-import.md）。ここは年に数回しか通らない導線なので、
+//!   稀な失敗のために常設 UI を積むと、毎回の 1 タップを全員が払うことになる
+//! - **取り込みは「足すだけ」に固定**（adr/storage/import-is-merge-only.md）。
+//!   `core::merge_db` は種目も記録日もセットも減らさないので、「記録 0 日のファイルで
+//!   全部消す」が構造的に起きない。だからモードを選ばせる必要がなくなった
+//! - **確認画面の「取り込み後」は、マージ**済み**の結果**。取り込むファイル自身の要約を
+//!   出してはいけない — 足すだけになった今、それは「取り込み後の姿」ではない。
+//!   事故を止める唯一の道具が嘘をつくのが最悪なので、表示した数字と適用する `Db` は
+//!   同じ計算（`stage` で 1 回だけ走る `merge_db`）の産物にしてある
+//! - **取り込みの直前に必ず自動退避する**（`storage::snapshot_current`）。ただし退避に
+//!   失敗しても**止めない**。実行前に「もう一度押すと実行します」と出す形は、容量が
+//!   逼迫した端末で毎回 2 度押しを強いるだけで、結果は同じ。戻せないことは結果の文言で伝える
+//! - **`.pre-` 退避は保存形式（JSON）なので `core::migrate` で読む。** `parse_import` は
+//!   「外から来たファイル」用で、控えは外から来ていない。層を混ぜると、書き出し形式を
+//!   変えた瞬間に「元に戻す」が静かに壊れる
 //! - **iOS では `<a download>` を使わない。** `transfer::pick_route` が構造的に選ばない。
 //!   standalone で踏むと WebView が blob URL へ遷移し、戻る UI が無いのでアプリごと
 //!   固まる（`transfer.rs` のモジュールコメント参照）
-//! - **textarea は折りたたみの中**。UX が悪いので既定では見せないが、共有シートも
-//!   クリップボードも駄目だった端末に残る最後の逃げ道なので消さない
-//! - textarea の `font-size` は 16px 以上（`styles.css` の `input` 指定は textarea に
-//!   効かない）。16px 未満だと iOS がフォーカス時にページごとズームする
-//! - `autocorrect="off"` は leptos の view! が受け付けないので付けていない。iOS が
-//!   引用符を全角に変えることがあるが、`core::repair` が読み込み時に戻すので実害はない
+//! - **`<input type="file">` は視覚的に隠してボタンから開く**
+//!   （adr/ux/hidden-file-input-behind-a-button.md）。`display:none` にはしない。
+//!   `<Show>` の外に常時マウントするのは、中に置くと状態遷移のたびに `NodeRef` が
+//!   無効化されて `click()` が空振りするため
 
 use leptos::prelude::*;
 
@@ -22,28 +32,20 @@ use crate::core::{self, Conflict, DbSummary, MergeReport};
 use crate::model::Db;
 use crate::{storage, transfer};
 
-use super::{Sheet, kb_blur, kb_focus, use_db, use_kb};
+use super::icon::{self, icon};
+use super::{Sheet, use_db};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Pane {
-    Export,
-    Import,
-}
-
-/// 取り込み方。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    /// 丸ごと置き換える。移行（Safari → PWA）と復旧はこれ
-    Replace,
-    /// 足すだけ。既存は 1 つも書き換えない。2 台の統合はこれ
-    Merge,
-}
-
-/// 確認待ちの取り込み。
+/// 確認待ちの取り込み。**マージ済みの結果**を持つ。
 #[derive(Clone)]
 struct Pending {
-    db: Db,
-    summary: DbSummary,
+    /// 「取り込む」で `db` にそのまま入れる最終形
+    merged: Db,
+    /// `summarize(&merged)`。確認画面の「取り込み後」
+    after: DbSummary,
+    /// "7 日分 ・ 67 件の記録" のような名詞句。何も増えないなら `None`
+    added: Option<String>,
+    /// 判断が要った箇所（`conflict_text` 済み）
+    conflicts: Vec<String>,
 }
 
 fn summary_text(s: &DbSummary) -> String {
@@ -80,9 +82,11 @@ fn conflict_text(c: &Conflict) -> String {
     }
 }
 
-fn report_text(r: &MergeReport) -> String {
+/// 増えるものの名詞句。**語尾を付けない** — 確認では「を追加します」、実行後は
+/// 「を追加」と付け替えるので、ここで文にすると両方に使えない。
+fn added_text(r: &MergeReport) -> Option<String> {
     if r.is_noop() {
-        return "新しく取り込むものはありませんでした".to_string();
+        return None;
     }
     let mut parts = Vec::new();
     if r.sessions_added > 0 {
@@ -92,7 +96,7 @@ fn report_text(r: &MergeReport) -> String {
         parts.push(format!("{} 件の記録", r.logs_added));
     }
     // ★ メモだけが増えることがある（セットが同じでメモだけ違う日）。ここを出さないと
-    //   `is_noop` が偽なのに parts が空になり「 を追加しました」だけが出る
+    //   `is_noop` が偽なのに parts が空になり「 を追加します」だけが出る
     if r.notes_added > 0 {
         parts.push(format!("{} 件のメモ", r.notes_added));
     }
@@ -106,20 +110,27 @@ fn report_text(r: &MergeReport) -> String {
     if r.routines_added > 0 {
         parts.push(format!("{} 件のメニュー", r.routines_added));
     }
-    format!("{} を追加しました", parts.join(" ・ "))
+    Some(parts.join(" ・ "))
 }
 
-/// 退避キーの末尾 epoch を読める日時にする。
-fn backup_label(key: &str) -> String {
-    let kind = if key.contains(".newer-") {
-        "新しい版のデータ"
-    } else if key.contains(".pre-") {
-        "取り込み前の控え"
-    } else {
-        "読み込み失敗の退避"
-    };
-    let stamp = key
-        .rsplit('-')
+/// 確認画面の 1 行目。**「何も起きません」と言ってよい条件を 1 箇所に閉じる。**
+///
+/// ★ `MergeReport::is_noop` を単独で信じてはいけない。`Conflict::SetsDiverged` は
+/// 既存のログを丸ごと差し替える（`merge_db` の `*existing = ExerciseLog { .. }`）のに、
+/// カウンタがどれも増えないので `is_noop` は真になる。そのまま
+/// 「新しく取り込むものはありません」と出すと、**セットが入れ替わる取り込みを
+/// 「何も起きない」と言って実行させる**ことになる。確認画面が嘘をつくのが最悪。
+fn change_text(p: &Pending) -> String {
+    match (&p.added, p.conflicts.is_empty()) {
+        (Some(added), _) => format!("{added} を追加します"),
+        (None, false) => "入れ替わる記録があります".to_string(),
+        (None, true) => "新しく取り込むものはありません".to_string(),
+    }
+}
+
+/// 控えのキー末尾 epoch を読める日時にする。`.pre-` しか渡らない。
+fn snapshot_time(key: &str) -> String {
+    key.rsplit('-')
         .next()
         .and_then(|s| s.parse::<i64>().ok())
         .and_then(chrono::DateTime::from_timestamp_millis)
@@ -128,80 +139,83 @@ fn backup_label(key: &str) -> String {
                 .format("%Y-%m-%d %H:%M")
                 .to_string()
         })
-        .unwrap_or_else(|| "日時不明".to_string());
-    format!("{stamp} ・ {kind}")
+        .unwrap_or_else(|| "日時不明".to_string())
 }
 
 #[component]
 pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
     let db = use_db();
-    let kb = use_kb();
 
-    let pane = RwSignal::new(Pane::Export);
-    let pasted = RwSignal::new(String::new());
     let pending = RwSignal::new(None::<Pending>);
-    let mode = RwSignal::new(Mode::Replace);
     let note = RwSignal::new(None::<String>);
     // 取り込み直前の退避キー。「元に戻す」で使う
     let undo = RwSignal::new(None::<String>);
     // 「元に戻す」の確認待ち。巻き戻しは取り込みと同じくらい破壊的なので確認を挟む
     let confirm_undo = RwSignal::new(false);
-    // 控えが取れなかったときの「それでも実行する」確認待ち
-    let force = RwSignal::new(false);
-    let backups = RwSignal::new(Vec::<String>::new());
+    // 共有に失敗したときだけ出す救済ボタン。静止時の要素数はゼロ
+    let copy_rescue = RwSignal::new(false);
+    let file_ref: NodeRef<leptos::html::Input> = NodeRef::new();
 
-    let refresh_backups = move || backups.set(storage::backup_keys());
-
-    // 現在の DB の JSON。折りたたみの textarea と各経路が同じものを使う
-    let payload = Memo::new(move |_| db.with(core::export_json));
     let current = Memo::new(move |_| db.with(core::summarize));
 
     let close = move || {
         open.set(false);
         pending.set(None);
         note.set(None);
-        pasted.set(String::new());
+        copy_rescue.set(false);
         // ★ 「元に戻す」を持ち越さない。iOS の PWA は何日もレジュームされるので、
         //   残しておくと数日後に誤タップされ、その間の記録が消える
         undo.set(None);
         confirm_undo.set(false);
-        force.set(false);
     };
 
-    // ── 書き出し ──
+    // ── エクスポート ──
     let do_export = move |_| {
-        // ★ ここは同期。await を挟むと iOS の transient activation（5 秒）を失う
-        let json = payload.get_untracked();
-        let name = core::export_filename(chrono::Local::now().naive_local());
+        // ★ ここは同期。await を挟むと iOS の transient activation（5 秒）を失う。
+        //   `chrono::Local` を触るのはこの層の仕事で、`core::export_tsv` は
+        //   オフセットを引数で受けて実行環境非依存を保っている
+        let now = chrono::Local::now();
+        let tsv = db.with_untracked(|d| core::export_tsv(d, *now.offset()));
+        let name = core::export_filename(now.naive_local());
+        copy_rescue.set(false);
+        // ★ 「もう一度押すと実行します」の警告文をこの後 note が上書きするので、
+        //   武装も一緒に解く。文字が消えたのに 1 タップで発火する状態を残さない
+        confirm_undo.set(false);
         match transfer::pick_route() {
             transfer::Route::Share => {
-                transfer::share_file(&name, &json, move |outcome| {
+                transfer::share_file(&name, &tsv, core::TSV_MIME, move |outcome| {
                     match outcome {
-                    transfer::ShareOutcome::Shared => note.set(Some(
-                        "書き出しました。「ファイルに保存」→ iCloud Drive を選ぶと、機種を替えても残ります".into(),
-                    )),
-                    // ★ キャンセルを成功にしない。「保存した」と思わせるのが一番危ない
-                    transfer::ShareOutcome::Cancelled => {
-                        note.set(Some("保存を中止しました（データは変わっていません）".into()))
+                        transfer::ShareOutcome::Shared => note.set(Some(
+                            "エクスポートしました。「ファイルに保存」を選ぶと、機種を替えても残ります"
+                                .into(),
+                        )),
+                        // ★ キャンセルを成功にしない。「保存した」と思わせるのが一番危ない
+                        transfer::ShareOutcome::Cancelled => note.set(Some(
+                            "保存を中止しました（データは変わっていません）".into(),
+                        )),
+                        transfer::ShareOutcome::Failed => {
+                            // 失敗した人にだけ最後の逃げ道を出す
+                            copy_rescue.set(true);
+                            note.set(Some(
+                            "共有できませんでした。「文字でコピー」でメモや自分宛メールに貼り付けてください".into(),
+                        ));
+                        }
                     }
-                    transfer::ShareOutcome::Failed => note.set(Some(
-                        "共有できませんでした。下の「うまくいかないとき」からコピーしてください".into(),
-                    )),
-                }
                 });
             }
             transfer::Route::Download => {
-                transfer::download_file(&name, &json);
-                note.set(Some(format!("{name} を書き出しました")));
+                transfer::download_file(&name, &tsv, core::TSV_MIME);
+                note.set(Some(format!("{name} にエクスポートしました")));
             }
             transfer::Route::Clipboard => {
                 // ★ 成否を待ってから文言を決める。失敗を「コピーしました」と出すと、
                 //   書けたつもりで端末を初期化されかねない
-                transfer::copy_text(&json, move |ok| {
+                transfer::copy_text(&tsv, move |ok| {
                     note.set(Some(if ok {
                         "コピーしました。メモや自分宛メールに貼り付けて保存してください".into()
                     } else {
-                        "コピーできませんでした。下の「うまくいかないとき」のテキストを長押しして選択してください".to_string()
+                        "コピーできませんでした（この端末ではエクスポートする手段がありません）"
+                            .to_string()
                     }));
                 });
             }
@@ -209,28 +223,51 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
     };
 
     let do_copy = move |_| {
-        transfer::copy_text(&payload.get_untracked(), move |ok| {
+        confirm_undo.set(false);
+        let now = chrono::Local::now();
+        let tsv = db.with_untracked(|d| core::export_tsv(d, *now.offset()));
+        transfer::copy_text(&tsv, move |ok| {
             note.set(Some(if ok {
-                "コピーしました。うまくいかないときは下のテキストを長押しして選択してください"
-                    .into()
+                "コピーしました。メモや自分宛メールに貼り付けて保存してください".into()
             } else {
-                "コピーできませんでした。下のテキストを長押しして選択してください".to_string()
+                "コピーできませんでした（この端末ではエクスポートする手段がありません）".to_string()
             }));
         });
     };
 
-    // ── 読み込み ──
+    // ── インポート ──
+    let open_picker = move |_| {
+        // ★ クリックハンドラから同期的に。iOS はここでジェスチャの活性を見る
+        if let Some(input) = file_ref.get_untracked() {
+            input.click();
+        }
+    };
+
+    // 読み込んだ文字列 → マージ結果を確認画面に載せる
     let stage = move |raw: String| {
-        let parsed = storage::with_ids(|ids| core::parse_import(&raw, ids));
+        let parsed =
+            db.with_untracked(|mine| storage::with_ids(|ids| core::parse_import(&raw, ids, mine)));
         match parsed {
-            Ok(next) => {
-                let summary = core::summarize(&next);
-                pending.set(Some(Pending { db: next, summary }));
+            Ok(incoming) => {
+                // ★ ここで一度だけマージし、その結果を確認画面と適用の**両方**に使う。
+                //   2 回計算すると、表示した数字と実際に入るものが食い違う経路ができる
+                let mut merged = db.get_untracked();
+                let report = core::merge_db(&mut merged, incoming);
+                let after = core::summarize(&merged);
+                pending.set(Some(Pending {
+                    merged,
+                    after,
+                    added: added_text(&report),
+                    conflicts: report.conflicts.iter().map(conflict_text).collect(),
+                }));
                 note.set(None);
+                copy_rescue.set(false);
+                confirm_undo.set(false);
             }
             Err(e) => {
                 pending.set(None);
                 note.set(Some(e.message()));
+                confirm_undo.set(false);
             }
         }
     };
@@ -250,60 +287,37 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
     };
 
     let apply = move |_| {
-        let Some(Pending { db: next, .. }) = pending.get_untracked() else {
+        let Some(p) = pending.get_untracked() else {
             return;
         };
-        // ★ 何よりも先に控えを取る
+        // ★ 何よりも先に控えを取る。取れなくても**止めない** — 実行前に 2 度押しを
+        //   強いても結果は同じで、容量が逼迫した端末で毎回 2 タップ増えるだけ。
+        //   戻せないことは下の文言で伝える
         let snapshot = storage::snapshot_current();
-        // ★ 控えが取れないまま進めてはいけない（`storage::snapshot_current` の契約）。
-        //   容量が逼迫しているときに起きるが、そういう端末ほど失うものが大きい。
-        //   実行**後**に「戻せません」と言われても手遅れなので、先に止める
-        if snapshot.is_none() && !force.get_untracked() {
-            force.set(true);
-            note.set(Some(
-                "控えを保存できません（空き容量が足りない可能性があります）。このまま取り込むと元に戻せません。もう一度押すと実行します"
-                    .into(),
-            ));
-            return;
-        }
-        force.set(false);
-        let picked = mode.get_untracked();
 
-        let message = match picked {
-            Mode::Replace => {
-                db.set(next);
-                "取り込みました（置き換え）".to_string()
-            }
-            Mode::Merge => {
-                let mut report = MergeReport::default();
-                db.update(|cur| report = core::merge_db(cur, next));
-                let mut text = report_text(&report);
-                if !report.conflicts.is_empty() {
-                    text.push('\n');
-                    text.push_str(
-                        &report
-                            .conflicts
-                            .iter()
-                            .map(conflict_text)
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                    );
-                }
-                text
-            }
-        };
+        db.set(p.merged);
         db.with_untracked(storage::replace_now);
 
-        let message = match &snapshot {
-            Some(_) => message,
-            None => format!("{message}\n（控えを保存できなかったので、元に戻せません）"),
+        // ★ 確認画面と同じ規則で言う。片方だけ `is_noop` を信じると、確認では
+        //   「入れ替わる記録があります」と言ったのに結果は「増えたものはありません」
+        //   になって、どちらが本当か分からなくなる
+        let mut message = match (&p.added, p.conflicts.is_empty()) {
+            (Some(added), _) => format!("取り込みました（{added} を追加）"),
+            (None, false) => "取り込みました".to_string(),
+            (None, true) => "取り込みましたが、新しく増えたものはありませんでした".to_string(),
         };
+        if !p.conflicts.is_empty() {
+            message.push('\n');
+            message.push_str(&p.conflicts.join("\n"));
+        }
+        if snapshot.is_none() {
+            message.push_str("\n（控えを保存できなかったので、元に戻せません）");
+        }
+
         undo.set(snapshot);
         confirm_undo.set(false);
         pending.set(None);
-        pasted.set(String::new());
         note.set(Some(message));
-        refresh_backups();
     };
 
     let do_undo = move |_| {
@@ -316,7 +330,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
             confirm_undo.set(true);
             note.set(Some(format!(
                 "{} の状態に戻します。それ以降に付けた記録は消えます。もう一度押すと実行します",
-                backup_label(&key)
+                snapshot_time(&key)
             )));
             return;
         }
@@ -324,7 +338,9 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
             note.set(Some("控えを読み出せませんでした".into()));
             return;
         };
-        match storage::with_ids(|ids| core::parse_import(&raw, ids)) {
+        // ★ 控えは**保存形式**（JSON）なので `migrate` で読む。`parse_import` は
+        //   「外から来たファイル」用で、そちらに通すと書き出し形式を変えるたびに壊れる
+        match storage::with_ids(|ids| core::migrate(&raw, ids)) {
             Ok(prev) => {
                 // ★ 巻き戻す前の状態も退避する。これが無いと「戻す」で消えた分を
                 //   取り戻す手段が無くなる（復旧操作そのものが全損経路になる）
@@ -333,265 +349,155 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                 db.with_untracked(storage::replace_now);
                 undo.set(None);
                 confirm_undo.set(false);
+                // ★ 確認待ちを捨てる。`Pending::merged` は**巻き戻す前**の `db` から
+                //   作ったので、残したまま「取り込む」を押されると、今戻したものが
+                //   そのまま戻ってくる（巻き戻しが 1 タップで打ち消される）
+                pending.set(None);
                 note.set(Some(if saved {
-                    "元に戻しました（戻す前の状態も保管しています）".to_string()
+                    // 退避の一覧 UI は無いので「保管しています」とだけ言い、
+                    // 取り出せるかのように書かない（adr/ux/one-screen-export-import.md）
+                    "元に戻しました".to_string()
                 } else {
                     "元に戻しました（戻す前の状態は保管できませんでした）".to_string()
                 }));
-                refresh_backups();
             }
-            Err(e) => note.set(Some(e.message())),
+            Err(_) => note.set(Some("控えを読み出せませんでした".into())),
         }
     };
-
-    Effect::new(move |_| {
-        if open.get() {
-            refresh_backups();
-        }
-    });
 
     view! {
         <Sheet
             open=open
             on_close=Callback::new(move |_| close())
-            title="データの書き出し / 読み込み".to_string()
+            title="エクスポート / インポート".to_string()
             testid="backup-sheet"
             close_testid="backup-sheet-close"
         >
-                    <div class="opts">
-                        <button
-                            class:opt=true
-                            class:on=move || pane.get() == Pane::Export
-                            data-testid="backup-pane-export"
-                            on:click=move |_| pane.set(Pane::Export)
-                        >
-                            "書き出し"
-                        </button>
-                        <button
-                            class:opt=true
-                            class:on=move || pane.get() == Pane::Import
-                            data-testid="backup-pane-import"
-                            on:click=move |_| pane.set(Pane::Import)
-                        >
-                            "読み込み"
-                        </button>
-                    </div>
+            <Show when=move || note.get().is_some()>
+                <p class="settings-note backup-note" role="status" data-testid="backup-note">
+                    {move || note.get().unwrap_or_default()}
+                </p>
+            </Show>
 
-                    <Show when=move || note.get().is_some()>
-                        <p class="settings-note" role="status" data-testid="backup-note">
-                            {move || note.get().unwrap_or_default()}
-                        </p>
-                    </Show>
+            // ★ 通知の直下に置く。どのメッセージに紐づく操作なのかが読み取れる位置。
+            //   **確認待ちのときは出さない** — 1 画面 1 判断にするだけでなく、確認中に
+            //   巻き戻されると `Pending::merged`（巻き戻す前の `db` から作った）が
+            //   古くなり、「取り込む」で巻き戻しを打ち消してしまう
+            <Show when=move || undo.get().is_some() && pending.with(Option::is_none)>
+                <div class="sheet-actions">
+                    <button class="link-btn" data-testid="backup-undo" on:click=do_undo>
+                        "元に戻す"
+                    </button>
+                </div>
+            </Show>
 
-                    <Show when=move || pane.get() == Pane::Export>
+            <Show
+                when=move || pending.get().is_some()
+                fallback=move || {
+                    view! {
                         <p class="muted">{move || summary_text(&current.get())}</p>
                         <div class="sheet-actions">
-                            <button
-                                class="primary"
-                                data-testid="backup-export"
-                                on:click=do_export
-                            >
-                                "ファイルとして書き出す"
+                            // ★ アイコンは装飾（`icon()` が `aria-hidden` を付ける）。
+                            //   名前はボタンの文字が持つので、読み上げは「エクスポート」だけになる
+                            <button class="primary wide" data-testid="backup-export" on:click=do_export>
+                                {icon(icon::UPLOAD)}
+                                "エクスポート"
                             </button>
                         </div>
-                        <p class="muted">
-                            "メモ・自分宛メール・ファイルアプリ のどれかに保存してください。"
-                            "端末の中だけに置くと機種変更で消えます"
+                        // ★ 共有に失敗した人にだけ出す。静止時は 1 要素も増やさない
+                        <Show when=move || copy_rescue.get()>
+                            <div class="sheet-actions">
+                                <button class="secondary" data-testid="backup-copy" on:click=do_copy>
+                                    "文字でコピー"
+                                </button>
+                            </div>
+                        </Show>
+
+                        // ★ ボタンの下に説明文を置かない。「「ファイルに保存」を選ぶと〜」は
+                        //   共有が成功した**そのとき**の通知に出るし、「今ある記録は消えず〜」は
+                        //   取り込みを決める確認画面に出る。**必要な瞬間に出るものを、
+                        //   常時見える位置に前置きしても読まれずに嵩むだけ**
+                        <div class="backup-split">
+                            <div class="sheet-actions">
+                                <button
+                                    class="secondary wide"
+                                    data-testid="backup-import"
+                                    on:click=open_picker
+                                >
+                                    {icon(icon::DOWNLOAD)}
+                                    "インポート"
+                                </button>
+                            </div>
+                        </div>
+                    }
+                }
+            >
+                // ★ 現在と取り込み後を両方出す。何が増えるかを押す前に見せる。
+                //   読み出しは全て `with`（`get` は `Pending` ごと clone するので、
+                //   `merged: Db` が再描画のたびに丸ごと複製される）
+                <div class="warn-box" data-testid="backup-confirm">
+                    <p>
+                        <strong>"現在"</strong>
+                        " "
+                        {move || summary_text(&current.get())}
+                    </p>
+                    <p>
+                        <strong>"取り込み後"</strong>
+                        " "
+                        {move || {
+                            pending.with(|p| p.as_ref().map(|p| summary_text(&p.after)))
+                                .unwrap_or_default()
+                        }}
+                    </p>
+                    <p>
+                        {move || {
+                            pending
+                                .with(|p| p.as_ref().map(change_text))
+                                .unwrap_or_default()
+                        }}
+                    </p>
+                    // ★ 判断が要った箇所は**押す前**に出す。実行後にだけ見せていると、
+                    //   「取り込んだ側のセットを採りました」を読むのが手遅れになる
+                    <Show when=move || pending.with(|p| p.as_ref().is_some_and(|p| !p.conflicts.is_empty()))>
+                        <p class="backup-note">
+                            {move || {
+                                pending
+                                    .with(|p| p.as_ref().map(|p| p.conflicts.join("\n")))
+                                    .unwrap_or_default()
+                            }}
                         </p>
-                        <details>
-                            <summary>"うまくいかないとき"</summary>
-                            <div class="sheet-actions">
-                                // ★ クラスなしの <button> を作らない（adr/ux/declare-color-scheme-for-ua-widgets.md）。
-                                //   UA 既定の chrome に任せるとダークで文字が消え、
-                                //   タップ標的も 44px に届かない
-                                <button
-                                    class="secondary"
-                                    data-testid="backup-copy"
-                                    on:click=do_copy
-                                >
-                                    "コピー"
-                                </button>
-                            </div>
-                            <textarea
-                                class="json-box"
-                                readonly
-                                autocapitalize="off"
-                                spellcheck="false"
-                                data-testid="backup-json"
-                                prop:value=move || payload.get()
-                            ></textarea>
-                        </details>
                     </Show>
+                </div>
+                <p class="muted">"今ある記録は消えません。無い日と無い種目だけを足します"</p>
+                <div class="sheet-actions">
+                    <button class="primary wide" data-testid="backup-apply" on:click=apply>
+                        "取り込む"
+                    </button>
+                </div>
+                <div class="sheet-actions">
+                    <button
+                        class="link-btn"
+                        data-testid="backup-cancel"
+                        on:click=move |_| pending.set(None)
+                    >
+                        "やめる"
+                    </button>
+                </div>
+            </Show>
 
-                    <Show when=move || pane.get() == Pane::Import>
-                        <Show
-                            when=move || pending.get().is_some()
-                            fallback=move || {
-                                view! {
-                                    <p class="muted">
-                                        "書き出したファイルを選ぶか、下の欄に貼り付けてください"
-                                    </p>
-                                    // ★ accept は付けない（iOS の accept は壊れていて、
-                                    //   Files ピッカーで .json が灰色になることがある）
-                                    <input
-                                        type="file"
-                                        data-testid="backup-file"
-                                        on:change=on_file
-                                    />
-                                    <details>
-                                        <summary>"貼り付けで読み込む"</summary>
-                                        <textarea
-                                            class="json-box"
-                                            autocapitalize="off"
-                                                        spellcheck="false"
-                                            data-testid="backup-paste"
-                                            on:focusin=move |_| kb_focus(kb)
-                                            on:focusout=move |_| kb_blur(kb)
-                                            on:input=move |ev| pasted.set(event_target_value(&ev))
-                                            prop:value=move || pasted.get()
-                                        ></textarea>
-                                        <div class="sheet-actions">
-                                            <button
-                                                class="secondary"
-                                                data-testid="backup-paste-load"
-                                                on:click=move |_| stage(pasted.get_untracked())
-                                            >
-                                                "読み込む"
-                                            </button>
-                                        </div>
-                                    </details>
-                                }
-                            }
-                        >
-                            // ★ 現在と読込後を両方出す。片方だけでは事故が止まらない
-                            <div class="warn-box" data-testid="backup-confirm">
-                                <p>
-                                    <strong>"現在"</strong>
-                                    " "
-                                    {move || summary_text(&current.get())}
-                                </p>
-                                <p>
-                                    <strong>"読込後"</strong>
-                                    " "
-                                    {move || {
-                                        pending
-                                            .get()
-                                            .map(|p| summary_text(&p.summary))
-                                            .unwrap_or_default()
-                                    }}
-                                </p>
-                            </div>
-                            <div class="opts">
-                                <button
-                                    class:opt=true
-                                    class:on=move || mode.get() == Mode::Replace
-                                    data-testid="backup-mode-replace"
-                                    on:click=move |_| mode.set(Mode::Replace)
-                                >
-                                    "置き換える"
-                                </button>
-                                <button
-                                    class:opt=true
-                                    class:on=move || mode.get() == Mode::Merge
-                                    data-testid="backup-mode-merge"
-                                    on:click=move |_| mode.set(Mode::Merge)
-                                >
-                                    "足すだけ"
-                                </button>
-                            </div>
-                            <p class="muted">
-                                {move || match mode.get() {
-                                    Mode::Replace => "今の記録は控えを取ってから丸ごと入れ替えます",
-                                    Mode::Merge => "今の記録は 1 つも書き換えず、無い分だけ足します",
-                                }}
-                            </p>
-                            <div class="sheet-actions">
-                                <button
-                                    class="primary"
-                                    data-testid="backup-apply"
-                                    on:click=apply
-                                >
-                                    "取り込む"
-                                </button>
-                                <button
-                                    class="link-btn"
-                                    data-testid="backup-cancel"
-                                    on:click=move |_| pending.set(None)
-                                >
-                                    "やめる"
-                                </button>
-                            </div>
-                        </Show>
-
-                        <Show when=move || undo.get().is_some()>
-                            <div class="sheet-actions">
-                                <button
-                                    class="link-btn"
-                                    data-testid="backup-undo"
-                                    on:click=do_undo
-                                >
-                                    "元に戻す"
-                                </button>
-                            </div>
-                        </Show>
-                    </Show>
-
-                    // ── 退避データ ──
-                    // adr/storage/quarantine-on-parse-failure.md が「退避データを UI から読む手段がない」と自認していた穴。
-                    // ここが無いと、破損時に退避したデータは iPhone 単体では救出できない
-                    <Show when=move || !backups.get().is_empty()>
-                        <details data-testid="backup-quarantine">
-                            <summary>
-                                {move || format!("保管中のデータ（{} 件）", backups.get().len())}
-                            </summary>
-                            <ul class="backup-list">
-                                <For
-                                    each=move || backups.get()
-                                    key=|key| key.clone()
-                                    let:key
-                                >
-                                    {
-                                        let for_show = key.clone();
-                                        let for_remove = key.clone();
-                                        view! {
-                                            <li>
-                                                <span class="muted">{backup_label(&key)}</span>
-                                                <div class="sheet-actions">
-                                                    <button
-                                                        class="link-btn"
-                                                        data-testid="backup-restore"
-                                                        on:click=move |_| {
-                                                            match storage::read_backup(&for_show) {
-                                                                Some(raw) => {
-                                                                    pane.set(Pane::Import);
-                                                                    stage(raw);
-                                                                }
-                                                                None => {
-                                                                    note.set(Some("読み出せませんでした".into()))
-                                                                }
-                                                            }
-                                                        }
-                                                    >
-                                                        "中身を見る"
-                                                    </button>
-                                                    <button
-                                                        class="link-btn danger"
-                                                        data-testid="backup-delete"
-                                                        on:click=move |_| {
-                                                            storage::remove_key(&for_remove);
-                                                            refresh_backups();
-                                                        }
-                                                    >
-                                                        "削除"
-                                                    </button>
-                                                </div>
-                                            </li>
-                                        }
-                                    }
-                                </For>
-                            </ul>
-                        </details>
-                    </Show>
+            // ★ `<Show>` の**外**に常時マウントする。中に置くと状態遷移のたびに
+            //   NodeRef が無効化され、`open_picker` の `click()` が空振りする。
+            //   `accept` は付けない（iOS の accept は壊れていて、Files ピッカーで
+            //   目当てのファイルが灰色になる）
+            <input
+                type="file"
+                class="file-input"
+                tabindex="-1"
+                aria-hidden="true"
+                data-testid="backup-file"
+                node_ref=file_ref
+                on:change=on_file
+            />
         </Sheet>
     }
 }

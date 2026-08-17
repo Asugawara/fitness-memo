@@ -5,6 +5,17 @@
 - **カテゴリ**: storage
 - **関連**: [パース失敗時は上書きせず退避する](quarantine-on-parse-failure.md), [`visibilitychange` の hidden で debounce を flush する](flush-on-visibilitychange.md), [JSON エクスポート/インポートを v1 に入れない](defer-export-import.md), [同一オリジン内の多層バックアップを採用しない](no-same-origin-redundancy.md), [UI の状態を `Db` に入れず別キーに置く](ui-state-in-separate-key.md)
 
+> **追記（[書き出しを TSV にし、保存形式（JSON）と分ける](tsv-export-for-spreadsheets.md) 時点）**
+> - **「エクスポート形式 = 保存形式」を撤回した。** 保存は今も `fitness-memo/v3` の JSON
+>   だが、**端末の外に出すのは TSV** になった。理由は「JSON はどの表計算アプリでも開けず、
+>   Drive に置いた記録がアプリでしか読めない塊のまま眠る」こと
+> - **この ADR が挙げていた懸念（保存側の変更に追随し忘れて『書き出したファイルが
+>   読み戻せない』が静かに起きる）は正しい。** 埋め方は 3 つで、(1) TSV から落ちるものを
+>   「名前から作り直せるもの」だけに限る、(2) 往復と冪等を `cargo test` で固定して
+>   **静かには起きないようにする**、(3) JSON の取り込みを永久に残す
+> - **`.pre-` / `.bak-` / `.newer-` は保存形式のまま。** だから「元に戻す」は
+>   `core::parse_import` ではなく `core::migrate` で読む
+
 > **追記（[ID を 60 bit 乱数にし、プリセットには固定 ID を与える](../data-model/random-ids-for-safe-merge.md) / [同一オリジン内の多層バックアップを採用しない](no-same-origin-redundancy.md) 時点）**
 > - **`save()` の `QuotaExceededError` 握りつぶしを撤回した。** 「当たったときに気づけない」
 >   という本文の自認どおり、書けていないのにアプリが動き続けるのが最悪だったため。

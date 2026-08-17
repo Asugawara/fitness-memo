@@ -155,6 +155,15 @@ pub fn preset_group_id(name: &str) -> Option<GroupId> {
     PRESETS.iter().find(|p| p.name == name).map(|p| p.id)
 }
 
+/// 新しい部位に振る色の候補。**プリセット 6 部位の色そのもの。**
+///
+/// ★ `views/menu.rs` から移した。TSV の取り込みが作る新規部位にも同じ色を振るので、
+/// wasm32 専用のモジュールに置いておくと `core` から引けない。名前は「部位を作る」
+/// 全経路（画面 / 取り込み）で 1 本にしておく。
+pub const COLOR_CHOICES: [&str; 6] = [
+    "#e0524a", "#2f7fd1", "#e0912a", "#7a56c9", "#2fa06a", "#6b7280",
+];
+
 /// 初回起動 / 復元失敗時に渡す、プリセット入りの `Db`。
 pub fn seeded_db() -> Db {
     let mut db = Db::default();

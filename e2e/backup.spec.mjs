@@ -1,13 +1,19 @@
-// データの書き出し / 読み込み。
+// エクスポート / インポート。
 //
 // ★ ここで検証できるのは「文字列の中身」と「UI の分岐」だけ。
 //   Playwright の WebKit は download / share / clipboard のどれもジェスチャ要件を
 //   再現せず、実機なら失敗する経路でも素通りさせる（`navigator.storage.persist` は
 //   逆に常に false を返す）。**このファイルが緑でも iOS で動く保証はない。**
-//   共有シートが実際に「ファイルに保存」を出すかは実機でしか確認できない。
+//   共有シートが実際に `.tsv` へ「ファイルに保存」を出すか、隠した <input type=file> を
+//   click() したとき standalone PWA でピッカーが開いて復帰後も状態が生きているかは、
+//   実機でしか確認できない。
+//
+// ★ TSV の中身そのもの（列の並び・往復・冪等・入力の癖）は `cargo test` の
+//   `core::tests::export_tsv_*` / `tsv_import_*` が持つ。ここは配線だけを見る。
 import { expect, test } from '@playwright/test';
 
 const KEY = 'fitness-memo/v3';
+const TSV_MIME = 'text/tab-separated-values';
 
 /** 設定タブを開いてバックアップシートを出す。 */
 async function openSheet(page) {
@@ -20,87 +26,175 @@ async function openSheet(page) {
   await expect(page.getByTestId('backup-sheet')).toBeVisible();
 }
 
-/** 貼り付け欄と「うまくいかないとき」は折りたたみの中にある。 */
-async function expandDetails(page) {
-  await page.evaluate(() => {
-    document
-      .querySelectorAll('[data-testid="backup-sheet"] details')
-      .forEach((d) => (d.open = true));
+/**
+ * 共有シートを差し替えて、渡された `ShareData` を `window.__shared` に控える。
+ *
+ * ★ UA も iPhone にする。`transfer::pick_route` は iOS のときだけ Share を選ぶので、
+ *   ここを偽らないと chromium では Download 経路に落ちる。
+ */
+async function stubShare(page) {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15',
+      configurable: true,
+    });
+    Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true });
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: async (data) => {
+        const file = data.files?.[0];
+        window.__shared = {
+          keys: Object.keys(data),
+          name: file?.name,
+          type: file?.type,
+          text: file ? await file.text() : null,
+        };
+      },
+    });
   });
 }
 
-/** 貼り付けて確認画面まで進める。 */
-async function paste(page, text) {
-  await expandDetails(page);
-  await page.getByTestId('backup-paste').fill(text);
-  await page.getByTestId('backup-paste-load').click();
+/**
+ * 隠した input にファイルを流し込む。★ setInputFiles は attached しか要求しない。
+ *
+ * ★ 事前に「インポート」ボタンを押してはいけない。あれは `input.click()` で**ネイティブの
+ *   ファイルピッカーを開く**ので、直後の setInputFiles と競合して WebKit で不定期に落ちる。
+ *   ボタンが押せること自体は別のテストが見ている。
+ */
+async function importFile(page, text, name = 'fitness-memo-20260801-1200.tsv') {
+  await page.getByTestId('backup-file').setInputFiles({
+    name,
+    mimeType: TSV_MIME,
+    buffer: Buffer.from(text, 'utf-8'),
+  });
 }
 
-test('書き出した JSON はそのまま読み戻せる形で出ている', async ({ page }) => {
+/**
+ * ★ 高さは**丸めて**見る。`boundingBox()` が返すのは CSS の指定値ではなく
+ *   **描画された箱**で、devicePixelRatio が整数でない端末（Pixel 7 は 2.625）では
+ *   デバイスピクセルへのスナップで端数が出る。実際に Pixel 7 で
+ *   `43.99993896484375`（44 に 0.00006px 足りない）を踏んでリリースが止まった。
+ *   守りたいのは「44px のタップ標的があること」で、1/16000 px の欠けではない。
+ *   丸めれば端末の DPR に依らず、**本当に小さくなった退行だけ**が落ちる。
+ */
+async function tapTargetHeight(locator) {
+  await expect(locator).toBeVisible();
+  const box = await locator.boundingBox();
+  expect(box, 'ボタンが描画されていない').not.toBeNull();
+  return Math.round(box.height);
+}
+
+/** 1 日分の記録が入った TSV。取り込むと必ず「増える」側になる。 */
+const ONE_DAY_TSV =
+  '日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\n' +
+  '2026-08-01\t胸\tベンチプレス\t1\t60\t10\t70.5\t\t\t調子よい\t\n' +
+  '2026-08-01\t胸\tベンチプレス\t2\t60\t8\t\t\t\t\t\n';
+
+// ── 書き出し ────────────────────────────────────────────────────────────────
+
+// ★ iOS の主経路の**形**を見る唯一のテスト。files 以外を混ぜると
+//   UIActivityViewController から「ファイルに保存」が消える
+//   （adr/storage/share-sheet-over-download.md）。
+test('書き出しは共有シートに files だけを .tsv で渡す', async ({ page }) => {
+  await stubShare(page);
   await openSheet(page);
 
-  const raw = await page.getByTestId('backup-json').inputValue();
-  const parsed = JSON.parse(raw);
+  await page.getByTestId('backup-export').click();
+  await expect(page.getByTestId('backup-note')).toContainText('エクスポートしました');
 
-  expect(parsed.schema).toBe(3);
-  expect(parsed.groups.map((g) => g.name)).toEqual(['胸', '背中', '肩', '腕', '脚', '体幹']);
-  expect(parsed.exercises).toHaveLength(28);
-  // ID は 12 文字の文字列。数値だと JSON.parse/stringify の往復で 2^53 超えが
-  // 丸められ、参照が静かに壊れる
-  for (const ex of parsed.exercises) {
-    expect(typeof ex.id).toBe('string');
-    expect(ex.id).toHaveLength(12);
-  }
-  // localStorage の中身と一致している（保存形式 = 書き出し形式）
+  await page.waitForFunction(() => !!window.__shared);
+  const shared = await page.evaluate(() => window.__shared);
+  expect(shared.keys, 'files 以外が混ざると「ファイルに保存」が消える').toEqual(['files']);
+  expect(shared.name).toMatch(/^fitness-memo-\d{8}-\d{4}\.tsv$/);
+  expect(shared.type).toBe(TSV_MIME);
+  // 見出しは外部仕様（cargo test がバイト一致で固定しているのと同じ並び）
+  expect(shared.text.split('\n')[0]).toBe(
+    '日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー',
+  );
+  // 保存形式は JSON のまま（書き出し形式とは別。adr/storage/tsv-export-for-spreadsheets.md）
   const stored = await page.evaluate((k) => localStorage.getItem(k), KEY);
-  expect(JSON.parse(stored)).toEqual(parsed);
+  expect(JSON.parse(stored).schema).toBe(3);
 });
 
-test('置き換えは前後の件数を見せ、控えを取ってから実行し、元に戻せる', async ({ page }) => {
+test('ダウンロード経路は 1 タップで .tsv を落とす', async ({ page, browserName }) => {
+  // ★ chromium 限定。WebKit の Playwright は download のジェスチャ要件を再現しない
+  test.skip(browserName !== 'chromium', 'download の検証は chromium だけ');
   await openSheet(page);
 
-  // 現在の DB に 1 日分の記録を足したものを取り込ませる
-  const incoming = await page.evaluate(() => {
-    const base = JSON.parse(document.querySelector('[data-testid="backup-json"]').value);
-    const bench = base.exercises.find((e) => e.name === 'ベンチプレス').id;
-    base.sessions['2026-08-01'] = {
-      logs: [
-        {
-          exercise_id: bench,
-          sets: [
-            { weight: 60, reps: 10 },
-            { weight: 60, reps: 8 },
-          ],
-          at: null,
-        },
-      ],
-      body_weight: 70.5,
-      note: '調子よい',
-    };
-    return JSON.stringify(base);
-  });
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('backup-export').click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^fitness-memo-\d{8}-\d{4}\.tsv$/);
+});
 
-  await page.getByTestId('backup-pane-import').click();
-  await paste(page, incoming);
+test('書き出した TSV はそのまま読み戻せる', async ({ page }) => {
+  await stubShare(page);
+  await openSheet(page);
 
-  // ★ 現在と読込後を両方出す。片方だけでは「0 日のファイルで全消し」が止まらない
-  const confirm = page.getByTestId('backup-confirm');
-  await expect(confirm).toContainText('記録 0 日');
-  await expect(confirm).toContainText('記録 1 日');
-
+  // 1 日分入れてからエクスポートする
+  await importFile(page, ONE_DAY_TSV);
   await page.getByTestId('backup-apply').click();
   await expect(page.getByTestId('backup-note')).toContainText('取り込みました');
 
-  // 実行前の控えが残っている
+  await page.getByTestId('backup-export').click();
+  // ★ share() は Promise。控えが積まれるまで待たないと undefined を掴む
+  await page.waitForFunction(() => !!window.__shared);
+  const tsv = await page.evaluate(() => window.__shared.text);
+
+  // 日付をずらして読み戻すと、その分だけ増える
+  await importFile(page, tsv.replaceAll('2026-08-01', '2026-09-01'));
+  await expect(page.getByTestId('backup-confirm')).toContainText('1 日分');
+  await page.getByTestId('backup-apply').click();
+
+  const saved = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
+  expect(Object.keys(saved.sessions)).toEqual(
+    expect.arrayContaining(['2026-08-01', '2026-09-01']),
+  );
+});
+
+// ── 取り込み ────────────────────────────────────────────────────────────────
+
+// ★ 「現在」と「取り込み後」を両方出す。取り込み後は**マージ済みの結果**で、
+//   取り込むファイル自身の要約ではない（足すだけなので、それは嘘になる）。
+test('取り込みは現在と取り込み後を並べ、今の記録を減らさない', async ({ page }) => {
+  await openSheet(page);
+  await importFile(page, ONE_DAY_TSV);
+
+  const confirm = page.getByTestId('backup-confirm');
+  await expect(confirm).toContainText('記録 0 日');
+  await expect(confirm).toContainText('記録 1 日');
+  await expect(confirm).toContainText('を追加します');
+
+  // 記録 0 日のファイルでも「現在」が減らない = 全消しが構造的に起きない
+  await page.getByTestId('backup-apply').click();
+  await importFile(page, '日付\t部位\t種目\tセット\t重量kg\t回数\n\t胸\t自作マシン\t\t\t\n');
+  await expect(confirm).toContainText('記録 1 日');
+  await expect(confirm).not.toContainText('記録 0 日');
+});
+
+test('取り込みは控えを取ってから実行する', async ({ page }) => {
+  await openSheet(page);
+  await importFile(page, ONE_DAY_TSV);
+  await page.getByTestId('backup-apply').click();
+  await expect(page.getByTestId('backup-note')).toContainText('取り込みました');
+
   const preKeys = await page.evaluate(() =>
     Object.keys(localStorage).filter((k) => k.includes('.pre-')),
   );
   expect(preKeys).toHaveLength(1);
   const saved = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
   expect(Object.keys(saved.sessions)).toContain('2026-08-01');
+});
 
-  // ★ 「元に戻す」は取り込みと同じだけ破壊的（戻す先より後の記録が消える）ので
-  //   確認を挟む。1 回目は実行せず、何に戻るかを出すだけ
+// ★ 「元に戻す」は取り込みと同じだけ破壊的（戻す先より後の記録が消える）ので確認を挟む。
+//   1 回目は実行せず、何に戻るかを出すだけ。
+test('「元に戻す」は 2 回押さないと実行されず、戻す前も保管する', async ({ page }) => {
+  await openSheet(page);
+  await importFile(page, ONE_DAY_TSV);
+  await page.getByTestId('backup-apply').click();
+  await expect(page.getByTestId('backup-undo')).toBeVisible();
+
   await page.getByTestId('backup-undo').click();
   await expect(page.getByTestId('backup-note')).toContainText('もう一度押すと実行します');
   const notYet = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
@@ -118,87 +212,124 @@ test('置き換えは前後の件数を見せ、控えを取ってから実行�
   expect(preKeysAfterUndo.length, '戻す前の状態が保管されていない').toBeGreaterThan(1);
 });
 
+// ★ 確認待ちの間は「元に戻す」を出さない。出したまま巻き戻されると
+//   Pending.merged（巻き戻す**前**の db から作った）が古くなり、「取り込む」を
+//   1 タップした瞬間に巻き戻しが打ち消される。
+test('確認画面が出ている間は「元に戻す」を出さない', async ({ page }) => {
+  await openSheet(page);
+  await importFile(page, ONE_DAY_TSV);
+  await page.getByTestId('backup-apply').click();
+  await expect(page.getByTestId('backup-undo')).toBeVisible();
+
+  await importFile(page, ONE_DAY_TSV.replaceAll('2026-08-01', '2026-09-01'));
+  await expect(page.getByTestId('backup-confirm')).toBeVisible();
+  await expect(page.getByTestId('backup-undo'), '確認中に巻き戻せてしまう').toHaveCount(0);
+
+  // やめれば戻ってくる
+  await page.getByTestId('backup-cancel').click();
+  await expect(page.getByTestId('backup-undo')).toBeVisible();
+});
+
+// ★ 1 回目のタップで武装した確認が、別の操作で警告文だけ消えて残らない。
+//   文字が画面に無いのに次の 1 タップで巻き戻るのが最悪の形。
+test('「元に戻す」の確認は別の操作をすると解ける', async ({ page }) => {
+  await stubShare(page);
+  await openSheet(page);
+  await importFile(page, ONE_DAY_TSV);
+  await page.getByTestId('backup-apply').click();
+
+  await page.getByTestId('backup-undo').click();
+  await expect(page.getByTestId('backup-note')).toContainText('もう一度押すと実行します');
+
+  // 書き出しを挟むと警告文が消える。武装も一緒に解けていること
+  await page.getByTestId('backup-export').click();
+  await expect(page.getByTestId('backup-note')).toContainText('エクスポートしました');
+
+  await page.getByTestId('backup-undo').click();
+  await expect(
+    page.getByTestId('backup-note'),
+    '警告なしで巻き戻しが実行された',
+  ).toContainText('もう一度押すと実行します');
+  const saved = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
+  expect(Object.keys(saved.sessions)).toContain('2026-08-01');
+});
+
 // ★ シートを閉じたら「元に戻す」を持ち越さない。iOS の PWA は何日もレジュームされる
 //   ので、残しておくと数日後に誤タップされ、その間の記録が消える。
 test('シートを閉じると「元に戻す」は消える', async ({ page }) => {
   await openSheet(page);
-  const incoming = await page.evaluate(() => {
-    const base = JSON.parse(document.querySelector('[data-testid="backup-json"]').value);
-    base.sessions['2026-08-01'] = {
-      logs: [],
-      body_weight: 70,
-      note: 'あとで消す',
-    };
-    return JSON.stringify(base);
-  });
-
-  await page.getByTestId('backup-pane-import').click();
-  await paste(page, incoming);
+  await importFile(page, ONE_DAY_TSV);
   await page.getByTestId('backup-apply').click();
   await expect(page.getByTestId('backup-undo')).toBeVisible();
 
   await page.getByTestId('backup-sheet-close').click();
   await page.getByTestId('open-backup').click();
-  await page.getByTestId('backup-pane-import').click();
   await expect(page.getByTestId('backup-undo')).toHaveCount(0);
 });
 
-// adr/storage/quarantine-on-parse-failure.md が「退避データを UI から読む手段がない ... iPhone 単体では実質的に
-// 救出不可能」と自認していた穴。ここが塞がっていることを見る。
-test('保管中のデータは一覧に出て、中身を見て取り込み直せる', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem(
-      'fitness-memo/v3.bak-1700000000000',
-      JSON.stringify({
-        schema: 3,
-        groups: [{ id: '00000000000g', name: '胸', color: '#e0524a', order: 0 }],
-        exercises: [{ id: '00000000000h', name: '救出テスト', group_id: '00000000000g', order: 0 }],
-        sessions: {
-          '2024-03-03': {
-            logs: [{ exercise_id: '00000000000h', sets: [{ weight: 50, reps: 5 }], at: null }],
-            body_weight: null,
-            note: '',
-          },
-        },
-      }),
-    );
-  });
-  await openSheet(page);
-
-  const quarantine = page.getByTestId('backup-quarantine');
-  await expect(quarantine).toContainText('保管中のデータ');
-  await page.evaluate(() => {
-    document.querySelector('[data-testid="backup-quarantine"]').open = true;
-  });
-  await expect(quarantine).toContainText('読み込み失敗の退避');
-
-  await page.getByTestId('backup-restore').first().click();
-  // 読み込みペインへ移り、確認画面に退避データの中身が出る
-  await expect(page.getByTestId('backup-confirm')).toContainText('記録 1 日');
-
-  await page.getByTestId('backup-apply').click();
-  const saved = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
-  expect(saved.exercises.map((e) => e.name)).toContain('救出テスト');
-});
-
-test('壊れた JSON は取り込まれず、今のデータが 1 バイトも変わらない', async ({ page }) => {
+test('壊れたファイルは取り込まれず、今のデータが 1 バイトも変わらない', async ({ page }) => {
   await openSheet(page);
   const before = await page.evaluate((k) => localStorage.getItem(k), KEY);
 
-  await page.getByTestId('backup-pane-import').click();
-
   for (const [bad, expected] of [
+    ['あ\tい\nう\tえ\n', 'このアプリの記録ではない'],
+    ['日付\t部位\t重量kg\n', '見出しが読めません'],
+    ['日付\t部位\t種目\tセット\t重量kg\t回数\n', '取り込める記録が入っていません'],
+    // ★ ロケール書き戻しで日付が全滅したファイル。黙って 0 件成功にしない
+    [
+      '日付\t部位\t種目\tセット\t重量kg\t回数\n8/1/26\t胸\tベンチプレス\t1\t60\t10\n',
+      '日付や回数の書き方が変わっていて読めませんでした',
+    ],
     ['{"schema":3,"groups":', 'データが途中で切れている'],
-    ['[1,2,3]', 'このアプリの記録ではない'],
-    ['{"schema":99,"groups":[],"exercises":[],"sessions":{}}', '新しい版'],
   ]) {
-    await paste(page, bad);
+    await importFile(page, bad);
     await expect(page.getByTestId('backup-note')).toContainText(expected);
     // 確認画面まで進んでいない = 取り込みボタンが無い
     await expect(page.getByTestId('backup-confirm')).toHaveCount(0);
   }
 
   expect(await page.evaluate((k) => localStorage.getItem(k), KEY)).toBe(before);
+});
+
+// ★ input.value を戻さないと 2 回目の change が飛ばない。貼り付けという逃げ道が
+//   無くなったので、「やめる → もう一度同じファイル」で詰む。
+test('同じファイルを続けて 2 回選んでも確認画面が出る', async ({ page }) => {
+  await openSheet(page);
+
+  await importFile(page, ONE_DAY_TSV);
+  await expect(page.getByTestId('backup-confirm')).toBeVisible();
+  await page.getByTestId('backup-cancel').click();
+  await expect(page.getByTestId('backup-confirm')).toHaveCount(0);
+
+  await importFile(page, ONE_DAY_TSV);
+  await expect(page.getByTestId('backup-confirm'), '2 回目の change が飛んでいない').toBeVisible();
+});
+
+// ★ `toBeHidden()` では見ない。opacity:0 の 1px 要素は Playwright の定義では
+//   「visible」で、それは**意図どおり**（display:none にすると iOS で click() が
+//   無視されうるので避けている。adr/ux/hidden-file-input-behind-a-button.md）。
+//   見たいのは「利用者の目にもタップにも触れないこと」なので、実測で確かめる。
+test('「インポート」は押せるボタンで、input は目に触れない', async ({ page }) => {
+  await openSheet(page);
+
+  const input = page.getByTestId('backup-file');
+  expect(await input.count(), 'input が DOM に無いと setInputFiles が使えない').toBe(1);
+  const style = await input.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { opacity: s.opacity, pointerEvents: s.pointerEvents, display: s.display };
+  });
+  expect(style.opacity).toBe('0');
+  expect(style.pointerEvents).toBe('none');
+  expect(style.display, 'display:none にすると iOS で click() が無視されうる').not.toBe('none');
+  const inputBox = await input.boundingBox();
+  expect(inputBox.height, 'input が場所を取っている').toBeLessThanOrEqual(1);
+  // シート内の file input は 1 つだけ（隠したものと出したものが二重にならない）
+  expect(await page.locator('[data-testid=backup-sheet] input[type=file]').count()).toBe(1);
+
+  expect(
+    await tapTargetHeight(page.getByTestId('backup-import')),
+    'タップ標的が 44px 未満',
+  ).toBeGreaterThanOrEqual(44);
 });
 
 test('保存できなくなったら黙って動き続けず警告を出す', async ({ page }) => {
@@ -213,14 +344,8 @@ test('保存できなくなったら黙って動き続けず警告を出す', as
     };
   });
   await page.goto('./');
-
-  // 何か入力して保存を走らせる（debounce 400ms + flush）
   await page.getByTestId('tab-settings').click();
-  await page.getByTestId('open-backup').click();
-  await page.getByTestId('backup-sheet-close').click();
-  await page.evaluate(() => {
-    document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
-  });
+
   // hidden → visible の順で発火させ、visible 側で警告を拾わせる
   await page.evaluate(() => {
     Object.defineProperty(document, 'hidden', { value: true, configurable: true });
@@ -283,20 +408,13 @@ for (const scheme of ['dark', 'light']) {
   test(`${scheme} でシート内のボタンの文字が背景から読める`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: scheme });
     await openSheet(page);
-    await expandDetails(page);
 
-    // 書き出しの救済経路。ここが読めないと、いちばん困っているときに押せない
-    expect(
-      await contrastRatio(page.getByTestId('backup-copy')),
-      `${scheme} で「コピー」が背景に埋もれている`,
-    ).toBeGreaterThanOrEqual(4.5);
-
-    await page.getByTestId('backup-pane-import').click();
-    await expandDetails(page);
-    expect(
-      await contrastRatio(page.getByTestId('backup-paste-load')),
-      `${scheme} で「読み込む」が背景に埋もれている`,
-    ).toBeGreaterThanOrEqual(4.5);
+    for (const id of ['backup-export', 'backup-import']) {
+      expect(
+        await contrastRatio(page.getByTestId(id)),
+        `${scheme} で「${id}」が背景に埋もれている`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
   });
 }
 
@@ -304,18 +422,19 @@ test('シートの中にクラスなしの button を作らない', async ({ pag
   // ★ 退行の固定。UA 既定の chrome に任せた瞬間にダークで消え、44px も割る。
   //   色ではなく構造で見るので、どのテーマで回しても落ちる
   await openSheet(page);
-  await expandDetails(page);
-  await expect(page.locator('[data-testid=backup-sheet] button:not([class])')).toHaveCount(0);
+  const bare = page.locator('[data-testid=backup-sheet] button:not([class])');
+  await expect(bare).toHaveCount(0);
 
-  await page.getByTestId('backup-pane-import').click();
-  await expandDetails(page);
-  await expect(page.locator('[data-testid=backup-sheet] button:not([class])')).toHaveCount(0);
+  // 確認状態でも見る（要素の入れ替わりが大きいので、待機状態だけでは足りない）
+  await importFile(page, ONE_DAY_TSV);
+  await expect(page.getByTestId('backup-confirm')).toBeVisible();
+  await expect(bare).toHaveCount(0);
 });
 
 // ★ 上の 2 本は .secondary が自前で背景を持つので、`color-scheme` を消しても通る。
-//   宣言が守っているのは**自前で色を持てないもの** — input[type=file] の
-//   「ファイルを選択」と select のネイティブピッカー。そこは getComputedStyle で
-//   覗けないので、宣言そのものと、素の <button> を代理にした効果を別々に見る。
+//   宣言が守っているのは**自前で色を持てないもの** — select のネイティブピッカーと
+//   スクロールバー。そこは getComputedStyle で覗けないので、宣言そのものと、
+//   素の <button> を代理にした効果を別々に見る。
 test('color-scheme を宣言している', async ({ page }) => {
   await page.goto('./');
   const declared = await page.evaluate(
@@ -350,11 +469,17 @@ test('UA が描くコントロールがテーマに追従する', async ({ page,
 
 test('シート内のボタンは 44px のタップ標的を持つ', async ({ page }) => {
   await openSheet(page);
-  await expandDetails(page);
 
-  for (const id of ['backup-export', 'backup-copy']) {
-    const box = await page.getByTestId(id).boundingBox();
-    expect(box, `${id} が描画されていない`).not.toBeNull();
-    expect(box.height, `${id} のタップ標的が 44px 未満`).toBeGreaterThanOrEqual(44);
+  for (const id of ['backup-export', 'backup-import']) {
+    expect(
+      await tapTargetHeight(page.getByTestId(id)),
+      `${id} のタップ標的が 44px 未満`,
+    ).toBeGreaterThanOrEqual(44);
   }
+
+  await importFile(page, ONE_DAY_TSV);
+  expect(
+    await tapTargetHeight(page.getByTestId('backup-apply')),
+    '「取り込む」のタップ標的が 44px 未満',
+  ).toBeGreaterThanOrEqual(44);
 });

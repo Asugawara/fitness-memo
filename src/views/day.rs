@@ -8,24 +8,23 @@
 //! 追加したら畳む排他表示にしていたが、上にカレンダーが載って画面が縦に伸びた今は
 //! 大きいヒーローを置く余地が無く、出し分ける意味も無くなった。
 
-use std::cell::Cell;
-use std::time::Duration;
-
 use chrono::NaiveDate;
 use leptos::prelude::*;
-// pointerdown の target を Element に落として setPointerCapture するのに使う
-use wasm_bindgen::JsCast;
 use web_sys::PointerEvent;
 
 use crate::core;
 use crate::core::Metric;
 use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, RoutineId, SetEntry};
-use crate::reorder::{self, Slots};
+use crate::reorder;
 
+use super::drag::{
+    self, Drag, EDGE_SCROLLING, PRESS, PRESS_DELAY_CARD, PRESS_SLOP_PX, Press, Scroller, capture,
+    end_press, holds, measure_slots, release, start_edge_scroll,
+};
 use super::icon::{self, icon};
 use super::{
-    Sheet, fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, measure_slots, now_ms,
-    parse_reps, parse_weight, scroll_to_id, scroll_y, use_dates, use_db, use_kb,
+    Sheet, fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms, parse_reps,
+    parse_weight, scroll_to_id, use_dates, use_db, use_kb,
 };
 
 /// 選択日に並べているカード 1 枚。
@@ -77,185 +76,10 @@ fn set_dom_id(ex: ExerciseId, key: u32) -> String {
 }
 
 // ── ドラッグで並び替える（adr/ux/drag-to-reorder-in-record-tab.md）────────────
-
-/// 長押し待ちの間に指がこれ以上動いたら、そのジェスチャは捨てる。
-const PRESS_SLOP_PX: f64 = 10.0;
-
-/// 画面端に指があるときのスクロール速度（px/frame）。60fps で約 840px/s。
-///
-/// **カードにもセット行にも要る。**
-/// - カードは 5〜8 枚 × 150〜400px で、可視域（約 660px）に収まらない
-/// - セット行は閉じていれば 8 行 × 約 50px で収まるが、**メモ欄を開くと 1 行 96px**
-///   になり、8 行で 768px（実測）。1 本目を 8 本目まで運ぶ指が画面の外に出る
-///
-/// 無いと「動かす → 指を離す → スクロール」を数回繰り返すことになる。
-const EDGE_STEP_PX: f64 = 14.0;
-
-thread_local! {
-    /// 端の自動スクロールのループが走っているか。**再入防止。**
-    /// 同時に掴めるハンドルは 1 つなので 1 本で足りる（`views::mod` の `KB_TIMER` と同じ形）。
-    static EDGE_SCROLLING: Cell<bool> = const { Cell::new(false) };
-    /// 長押し待ち。**画面には何も出ないので signal ではない。**
-    ///
-    /// ★ `DayEditor` の中（`StoredValue`）に置かない。記録タブは `mod.rs` の
-    ///   `match tab.get()` の枝なので、**タブを切り替えた瞬間に所有者ごと破棄される**。
-    ///   長押しの途中で切り替えると、生き残ったタイマーが破棄済みの値を触って panic する
-    ///   （wasm では unreachable に落ちてアプリが死ぬ）。ここなら所有者を持たない。
-    static PRESS: Cell<Option<Press>> = const { Cell::new(None) };
-}
-
-/// 長押し待ちを畳む。タイマーが生きていれば止める。**冪等。**
-fn end_press() {
-    if let Some(p) = PRESS.take()
-        && let Some(timer) = p.timer
-    {
-        timer.clear();
-    }
-}
-
-/// `.card-head` を押してからカードのドラッグが効き始めるまで。
-///
-/// ★ セット行（`.set-no`）は 0 で、カードだけ待つ。同じにしないのは幅が違うから。
-/// `touch-action: none` を当てた要素からはページをスクロールできないので、**全幅の
-/// `.card-head` を即時開始にすると縦フリック 1 回で種目の順が変わる**（閾値は隣の
-/// カードの半分 ≈ 87px、フリックは 100〜300px 動く）。しかも画面が動かないので
-/// 「スクロールが効かなかった」と「並びが変わった」が同時に起きる。250ms 待てば
-/// フリックは**何も起きない**で終わる。`.set-no` は約 29px 幅なので、そこを起点に
-/// 縦フリックが始まる確率が低く、待たせるほうが損になる。
-const PRESS_DELAY_CARD: Duration = Duration::from_millis(250);
-
-/// 長押し待ち。**まだ何も動かさない**ので signal ではなく `StoredValue` に置く。
-#[derive(Clone, Copy, Debug)]
-struct Press {
-    pointer_id: i32,
-    down_y: f64,
-    last_y: f64,
-    /// `None` は「slop を超えたので死んだ」。`pointerup` まで生き返らせない
-    /// （じわじわ動かして後から armed になるのを防ぐ）
-    timer: Option<TimeoutHandle>,
-}
-
-/// ドラッグ中の状態。**掴んだ瞬間のスナップショット**で、指を離すまで測り直さない。
-///
-/// ★ ドラッグ中に `rows` / `cards` の `Vec` を入れ替えない。`translateY(dy)` の基準は
-/// 「掴んだ瞬間のレイアウト位置」なので、`<For>` が DOM を move した瞬間に基準が
-/// 1 スロット飛び、高さがバラバラだと進み幅と戻り幅が一致せず振動が収束しない。
-/// 加えて tachys の keyed diff は `insertBefore` で入れ直すので pointer capture を
-/// 落としうるうえ、入れ替えの 2 つのうちどちらが move されるかは指定できない。
-#[derive(Clone, Debug, PartialEq)]
-struct Drag {
-    /// 掴んだポインタ。2 本目の指の `pointermove` を弾く
-    pointer_id: i32,
-    /// 掴んだ要素の、掴んだ時点での位置
-    from: usize,
-    /// 今指を離したら入る位置。`from` と同じなら何も確定しない
-    to: usize,
-    /// ドラッグが効き始めた瞬間の指の位置（document 座標）
-    start_y: f64,
-    /// 直近の指の位置（**viewport 座標**）。画面端の自動スクロールが読む
-    client_y: f64,
-    /// 掴んだ要素に当てる `translateY`
-    lift: f64,
-    slots: Slots,
-}
-
-impl Drag {
-    fn start(pointer_id: i32, from: usize, client_y: f64, slots: Slots) -> Self {
-        Self {
-            pointer_id,
-            from,
-            to: from,
-            start_y: client_y + scroll_y(),
-            client_y,
-            lift: 0.0,
-            slots,
-        }
-    }
-
-    /// 指が動いたぶんを反映する。**レイアウトを読まない**（掴んだときの箱だけで決まる）。
-    ///
-    /// ページがスクロールしただけでも呼ぶ（`client_y` は据え置きで `scroll_y()` が動く）。
-    fn advance(&mut self, client_y: f64) {
-        self.client_y = client_y;
-        let dy = client_y + scroll_y() - self.start_y;
-        self.to = self.slots.drop_index(self.from, dy);
-        self.lift = self.slots.lift(self.from, dy);
-    }
-
-    /// 模型上 `i` 番目の要素が、いま画面で何番目に見えているか。
-    fn seen_at(&self, i: usize) -> usize {
-        reorder::visual_index(self.from, self.to, i)
-    }
-
-    /// 並びの `i` 番目に当てる `transform`。動かないときは `None`。
-    ///
-    /// `None` を返すとインラインスタイルごと消えるので、静止時の DOM に 1 文字も残らない。
-    fn transform(&self, i: usize) -> Option<String> {
-        let px = if i == self.from {
-            self.lift
-        } else {
-            self.slots.offset(self.from, self.to, i)?
-        };
-        Some(format!("translateY({px}px)"))
-    }
-}
-
-/// 掴む資格を確かめ、ポインタを捕まえる。
-///
-/// ★ **`prevent_default()` を呼ぶ。** これはスクロール対策ではない（それは
-/// `touch-action: none` の仕事で、`pointerdown` の preventDefault では iOS の
-/// スクロールは止まらない）。止めたいのは **WebKit の選択ドラッグ**で、これを許すと
-/// 指が通り過ぎた入力欄に**フォーカスが移ってしまう**。実測（iPhone 15 Pro / WebKit）:
-///
-/// | 段階 | `.app` | `activeElement` |
-/// |---|---|---|
-/// | ドラッグ前 | `app` | BODY |
-/// | `pointerdown` 後 | `app` | BODY |
-/// | **指を動かした後** | **`app kb-open`** | **`set-reps`** |
-/// | 指を離した後 | `app kb-open` | BODY |
-///
-/// 最後の行が致命的で、`<For>` が DOM を move した拍子にフォーカスが**`focusout` を
-/// 出さずに**消えるため `kb_blur` が走らず、`.kb-open` が立ちっぱなしになる
-/// （＝ `styles.css` の `.kb-open .bottom-tabs { display: none }` でタブバーが消えたまま
-/// 戻らない）。Chromium では再現しない。
-///
-/// 互換 `mousedown` が止まるとフォーカスが外れなくなるので、[`blur_active`] で自分で外す。
-///
-/// ★ `current_target()` ではなく `target()` を使う。leptos の `delegation` feature は
-/// 今 OFF（`csr` に含まれない）なのでハンドラは要素へ直付けされるが、ON になると
-/// `current_target` は黙って壊れる。capture 先が子要素（`.card-head` の中の `<h3>`）に
-/// なっても、`pointermove` はハンドラのある親まで bubble するので実害が無い。
-///
-/// ★ capture できなければ掴まない。capture 無しで始めると、指がハンドルの外へ出た
-/// 瞬間に `pointermove` も `pointerup` も届かなくなり、**持ち上がったまま固まる**。
-fn capture(ev: &PointerEvent) -> bool {
-    if !ev.is_primary() || ev.button() != 0 {
-        return false;
-    }
-    let ok = ev
-        .target()
-        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-        .is_some_and(|el| el.set_pointer_capture(ev.pointer_id()).is_ok());
-    if ok {
-        ev.prevent_default();
-        blur_active();
-    }
-    ok
-}
-
-/// 今フォーカスがある要素を外す。
-///
-/// 掴んだらキーボードは引っ込むべきで、[`capture`] の `prevent_default()` が互換
-/// `mousedown` ごと止めてしまうぶんを自分で埋める。`focusout` が出るので
-/// `views::mod` の `kb_blur` が普通に走る。
-fn blur_active() {
-    if let Some(el) = document()
-        .active_element()
-        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
-    {
-        let _ = el.blur();
-    }
-}
+//
+// 掴む / 測る / 端でスクロールする / 畳む は `views::drag` に出してある
+// （メニュー編集シートの「選択中」が 3 つ目のハンドルになった時点で共有した）。
+// ここに残すのは記録タブ固有のもの — DOM id の作り方と、カードの並びの読み出し。
 
 /// 画面に並んでいるカードの順（その日のぶんだけ）。`core::reorder_logs` に渡す。
 ///
@@ -266,89 +90,6 @@ fn blur_active() {
 fn card_order(cards: RwSignal<Vec<CardRef>>, date: NaiveDate) -> Vec<ExerciseId> {
     let key = core::date_key(date);
     cards.with_untracked(|cs| cs.iter().filter(|c| c.date == key).map(|c| c.ex).collect())
-}
-
-/// このポインタが掴んでいる最中か。
-fn holds(drag: RwSignal<Option<Drag>>, ev: &PointerEvent) -> bool {
-    drag.with_untracked(|d| d.as_ref().is_some_and(|d| d.pointer_id == ev.pointer_id()))
-}
-
-/// ドラッグを畳む。既に畳んでいれば何もしない（`lostpointercapture` は
-/// 通常の `pointerup` の後にも飛ぶので、冪等でないと余計な再描画が走る）。
-fn release(drag: RwSignal<Option<Drag>>) {
-    if drag.with_untracked(Option::is_some) {
-        drag.set(None);
-    }
-}
-
-/// `Alt` + ↑↓ を「1 つ上へ / 1 つ下へ」に読む。
-///
-/// ★ ドラッグの代わりの経路。掴む場所（`.set-no` / `.card-head`）を `<button>` に
-/// できないので（`<header>` は `<h3>` を含む・行番号はコントロールではない）、既に
-/// フォーカスできる要素にこれを足す。WCAG 2.5.7 が求める非ドラッグ経路であると同時に、
-/// E2E で「並び替えが `Db` に落ちること」を座標に依存せず書ける経路でもある。
-///
-/// ★ `Alt` 付きにするのは、素の ↑↓ が入力欄のカーソル操作と衝突するから。
-fn alt_arrow(ev: &web_sys::KeyboardEvent) -> Option<bool> {
-    if !ev.alt_key() {
-        return None;
-    }
-    match ev.key().as_str() {
-        "ArrowUp" => Some(true),
-        "ArrowDown" => Some(false),
-        _ => None,
-    }
-}
-
-/// 端の自動スクロールの 1 フレーム。`drag` が畳まれたら自分で止まる。
-///
-/// ★ `pointermove` では成立しない。**指が止まっていてもスクロールし続ける**必要がある
-/// （画面外のカードまで運ぶのが目的なので、指は端に置いたまま待つのが普通の使い方）。
-///
-/// ★ 下端の帯は `innerHeight - EDGE_BAND`。`--tabbar` を読まないのは、タブバー
-/// （56px）の上端でちょうど最大速度になる位置に帯が来るため。指がタブバーの上まで
-/// 行っても pointer capture が効いているので、そこは「最大速度の続き」で正しい。
-fn edge_scroll_tick(drag: RwSignal<Option<Drag>>) {
-    // ★ `try_` で読む。記録タブはタブ切替で破棄されるので、ドラッグ中に切り替えると
-    //   この signal はもう無い。`get_untracked` だと panic して wasm ごと落ちる。
-    //   **フラグを下ろすのは早期 return の全経路で**。1 つでも漏らすと再入防止の
-    //   フラグが立ちっぱなしになり、以後この機能が二度と動かない
-    let Some(Some(client_y)) = drag.try_with_untracked(|d| d.as_ref().map(|d| d.client_y)) else {
-        EDGE_SCROLLING.set(false);
-        return;
-    };
-    let height = window()
-        .inner_height()
-        .ok()
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    let step = reorder::edge_scroll_step(
-        client_y,
-        reorder::EDGE_BAND,
-        height - reorder::EDGE_BAND,
-        EDGE_STEP_PX,
-    );
-    if step != 0.0 {
-        window().scroll_by_with_x_and_y(0.0, step);
-        // スクロールしたぶん dy が変わる。指が 1px も動いていなくても追随させる
-        drag.update(|d| {
-            if let Some(d) = d {
-                d.advance(d.client_y);
-            }
-        });
-    }
-    // ★ 端に居ないフレームでも回し続ける（指が後から端へ入ってくる）。読むのは
-    //   `client_y` の 1 つだけなので、止める価値のあるコストは乗っていない
-    request_animation_frame(move || edge_scroll_tick(drag));
-}
-
-/// 端の自動スクロールを回し始める。**既に回っていれば何もしない。**
-///
-/// 再入すると 2 本のループが同じ `scroll_by` を呼んで倍の速さで流れる。
-fn start_edge_scroll(drag: RwSignal<Option<Drag>>) {
-    if !EDGE_SCROLLING.replace(true) {
-        edge_scroll_tick(drag);
-    }
 }
 
 /// 候補リストに並べる上限。
@@ -1344,11 +1085,19 @@ fn ExerciseCard(
         }) else {
             return;
         };
-        let (Some(from), Some(slots)) = (here, measure_slots(&ids)) else {
+        // ★ 記録タブはページ全体がスクロール容器。シートの中で掴む
+        //   `views::routine` だけが `Scroller::of` で `.sheet-body` を引く
+        let (Some(from), Some(slots)) = (here, measure_slots(&ids, &Scroller::Window)) else {
             return;
         };
         if card_drag
-            .try_set(Some(Drag::start(p.pointer_id, from, p.last_y, slots)))
+            .try_set(Some(Drag::start(
+                p.pointer_id,
+                from,
+                p.last_y,
+                slots,
+                Scroller::Window,
+            )))
             .is_none()
         {
             start_edge_scroll(card_drag);
@@ -1418,7 +1167,9 @@ fn ExerciseCard(
     // ドラッグの代わり。カードの中のどこにフォーカスがあっても効く（行の入力欄は
     // 自分で `stop_propagation` するので、ここへは届かない）
     let nudge_card = move |ev: web_sys::KeyboardEvent| {
-        let Some(up) = alt_arrow(&ev) else { return };
+        let Some(up) = drag::alt_arrow(&ev) else {
+            return;
+        };
         ev.prevent_default();
         let Some(from) = card_slot() else { return };
         let len = cards.with_untracked(Vec::len);
@@ -1582,7 +1333,10 @@ fn ExerciseCard(
                                         rs.iter().position(|r| r.key == key),
                                     )
                                 });
-                            let (Some(from), Some(slots)) = (here, measure_slots(&ids)) else {
+                            let (Some(from), Some(slots)) = (
+                                here,
+                                measure_slots(&ids, &Scroller::Window),
+                            ) else {
                                 // 測れないまま始めると、押しのけ量が 1 つずれた並びが
                                 // それらしく動いてしまう。掴まないほうがまし
                                 return;
@@ -1595,6 +1349,7 @@ fn ExerciseCard(
                                             from,
                                             f64::from(ev.client_y()),
                                             slots,
+                                            Scroller::Window,
                                         ),
                                     ),
                                 );
@@ -1613,7 +1368,7 @@ fn ExerciseCard(
                         };
                         // ドラッグの代わり。入力欄にフォーカスがあるまま行を動かせる
                         let nudge_row = move |ev: web_sys::KeyboardEvent| {
-                            let Some(up) = alt_arrow(&ev) else { return };
+                            let Some(up) = drag::alt_arrow(&ev) else { return };
                             ev.prevent_default();
                             // ★ カード側の同じハンドラに届かせない。届くと 1 打鍵で
                             //   行とカードが同時に動く

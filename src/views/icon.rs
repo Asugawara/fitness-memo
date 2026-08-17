@@ -35,6 +35,10 @@ pub const X: &str = include_str!("../../assets/icons/x.svg");
 pub const UPLOAD: &str = include_str!("../../assets/icons/upload.svg");
 /// インポート（アプリの中へ取り込む）。
 pub const DOWNLOAD: &str = include_str!("../../assets/icons/download.svg");
+/// ★ **削除にだけ使う。** 「選択中」の ✕（[`X`]）と取り違えないこと — あちらは
+/// 「このメニューから外す」で種目そのものは 1 つも消えないので、trash にすると
+/// 押した人には**種目を消した**ように読める。
+pub const TRASH_2: &str = include_str!("../../assets/icons/trash-2.svg");
 
 /// アイコン 1 個。
 ///

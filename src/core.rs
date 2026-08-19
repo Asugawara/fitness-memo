@@ -410,29 +410,40 @@ pub fn recent_menus(db: &Db, before: NaiveDate, limit: usize) -> Vec<MenuCandida
 /// `at` は呼び出し側が渡す（core は時計を持たない）。当日なら `Some(now)`、
 /// 過去日バックフィルなら `None`。
 ///
-/// 体重と体調メモは複製しない。どちらもその日の観測値であってメニュー構成ではない。
-/// **種目メモとセットメモも同じ理由で複製しない**（adr/data-model/notes-on-logs-and-sets.md）。
+/// 体重と体調メモは複製しない。どちらも**その日**の観測値であってメニュー構成ではない。
+/// **種目メモとセットメモは運ぶ** — あちらは種目に閉じたセッティング（「セーフティ 2 穴目」
+/// 「グリップ広め」）が実質の中身で、毎回消えるほうが実害が大きい
+/// （adr/ux/copy-carries-the-notes.md）。この非対称は意図。
 pub fn copy_day(db: &mut Db, from: NaiveDate, to: NaiveDate, at: Option<i64>) -> Vec<ExerciseId> {
     // `&db` と `&mut db` の借用を分けるため先に取り出しておく
-    let picked: Vec<(ExerciseId, Vec<SetEntry>)> = copyable(db, from)
-        .map(|l| (l.exercise_id, sets_without_notes(&l.sets)))
-        .collect();
+    let picked: Vec<Seed> = copyable(db, from).map(Seed::carry).collect();
     seed_day(db, to, picked, at)
 }
 
-/// セットの重量と回数だけを写す。**メモは持ち込まない。**
+/// コピーが**運ぶもの**だけを持つ。[`copy_day`] / [`apply_routine`] → [`seed_day`] の受け渡し。
 ///
-/// ★ `sets.clone()` は**メモまで運ぶ**。「3 セット目で肩に違和感」は前回の観測で、
-/// 今日の観測ではない。複製すると起きていない観測が翌日に生える
-/// （adr/data-model/notes-on-logs-and-sets.md）。この規則の実装はここ 1 箇所に畳む。
-fn sets_without_notes(src: &[SetEntry]) -> Vec<SetEntry> {
-    src.iter()
-        .map(|s| SetEntry {
-            weight: s.weight,
-            reps: s.reps,
-            note: String::new(),
-        })
-        .collect()
+/// ★ **`at` を持たない。これがこの型の存在理由。** [`ExerciseLog`] をそのまま渡すと元の日の
+/// `at` が付いてきて、`at = None` にしたい過去日バックフィルに古い epoch が入る
+/// （adr/data-model/at-optional-same-day-only.md）。「持ち込まない」を呼び出し側の
+/// 注意力ではなく**フィールドの不在**で守る。
+struct Seed {
+    exercise_id: ExerciseId,
+    sets: Vec<SetEntry>,
+    note: String,
+}
+
+impl Seed {
+    /// コピー元のログから**運んでよいものだけ**を取り出す。**コピーの規則はここ 1 箇所。**
+    ///
+    /// 運ぶのはセット（重量・回数・セットメモ）と種目メモ。`at` は運ばない（呼び出し側が
+    /// 渡す）。体重と体調メモは [`Session`] の側なのでそもそもここには届かない。
+    fn carry(src: &ExerciseLog) -> Self {
+        Self {
+            exercise_id: src.exercise_id,
+            sets: src.sets.clone(),
+            note: src.note.clone(),
+        }
+    }
 }
 
 /// 空の日に種目とセットを流し込む。**書いた種目 ID** を返す。
@@ -440,12 +451,7 @@ fn sets_without_notes(src: &[SetEntry]) -> Vec<SetEntry> {
 /// [`copy_day`]（1 日を丸ごと写す）と [`apply_routine`]（種目ごとに直近から引く）の
 /// 共通の書き込み口。**ガードを 2 箇所に書かない** — 片方だけ緩められると
 /// 「1 日 1 種目 1 ログ」（adr/data-model/one-log-per-exercise-per-day.md）が破れる。
-fn seed_day(
-    db: &mut Db,
-    to: NaiveDate,
-    picked: Vec<(ExerciseId, Vec<SetEntry>)>,
-    at: Option<i64>,
-) -> Vec<ExerciseId> {
+fn seed_day(db: &mut Db, to: NaiveDate, picked: Vec<Seed>, at: Option<i64>) -> Vec<ExerciseId> {
     // ★ 書くものが無いならセッションを作らない。作ると「何も記録していない日」が
     //   カレンダーとバックアップに残る
     if picked.is_empty() {
@@ -463,18 +469,26 @@ fn seed_day(
     //   体重・体調メモが消える（ConditionRow は 1 文字ごとに commit する）
     let session = db.sessions.entry(date_key(to)).or_default();
     let mut copied = Vec::with_capacity(picked.len());
-    for (exercise_id, sets) in picked {
+    for Seed {
+        exercise_id,
+        sets,
+        note,
+    } in picked
+    {
         copied.push(exercise_id);
         // ★ ExerciseLog を clone してはいけない。clone すると元の日の `at` を
         //   引き継ぎ、`at = None` にしたい過去日バックフィルに古い epoch が入る。
         //   日数表示は日付キーから出るので日付が嘘になることはもう無いが（adr/data-model/elapsed-in-local-calendar-days.md）、
         //   「その日に実施した時刻」として存在しない値が残り、同じ暦日にコピーしたときの
         //   時刻粒度が捏造される。記録の正直さは表示の都合とは別に守る（adr/data-model/at-optional-same-day-only.md）
+        //
+        //   ★ 引数が [`Seed`] なのはこのため。`at` を持たない型を通すことで、
+        //     「持ち込まない」を呼び出し側の注意力ではなく型で守っている
         session.logs.push(ExerciseLog {
             exercise_id,
             sets,
             at,
-            note: String::new(),
+            note,
         });
     }
     copied
@@ -583,7 +597,10 @@ pub fn usable_routines(db: &Db) -> Vec<RoutineCandidate> {
 /// ここだけ入れると「カードに『前回 730日前 60×10』と出ているのにメニューからは何も
 /// 入らない」という食い違いが生まれる。
 ///
-/// 体重・体調メモ・種目メモ・セットメモは複製しない（[`copy_day`] と同じ規則）。
+/// 体重と体調メモは複製しない。種目メモとセットメモは運ぶ（[`copy_day`] と同じ規則）。
+///
+/// ★ **メモも種目ごとに別々の日から来る。** セットの出所と必ず同じログなので、
+/// 「ベンチのセッティング」と「スクワットのセッティング」が混ざることはない。
 pub fn apply_routine(
     db: &mut Db,
     routine: RoutineId,
@@ -603,12 +620,14 @@ pub fn apply_routine(
     // ★ `last_log_before` が `&db` を借りるので、`&mut db` に入る前に集め切る
     //   （`copy_day` の `picked` と同じ形）
     let opened: Vec<ExerciseId> = expandable(db, r).collect();
-    let picked: Vec<(ExerciseId, Vec<SetEntry>)> = opened
+    // ★ 履歴が無い種目はここで落とす。メモだけを引く形にすると `picked` が非空になって
+    //   セッションが生まれ、`dedupe_logs` はメモのあるログを落とさないので**セット 0 本の
+    //   ログがゴーストとして永続**する。そうなると `has_logs_on` が true になり、その日は
+    //   候補リストから永久に外れる
+    let picked: Vec<Seed> = opened
         .iter()
-        .filter_map(|ex| {
-            let (_, log) = last_log_before(db, *ex, to)?;
-            Some((*ex, sets_without_notes(&log.sets)))
-        })
+        // `last_log_before` はその種目のログしか返さないので `log.exercise_id == *ex`
+        .filter_map(|ex| last_log_before(db, *ex, to).map(|(_, log)| Seed::carry(log)))
         .collect();
 
     // 履歴が 1 種目も無ければ `picked` は空。`seed_day` はセッションを作らずに返るので、
@@ -3511,39 +3530,42 @@ mod tests {
     }
 
     #[test]
-    fn copy_day_does_not_copy_the_exercise_note_or_the_set_notes() {
-        // 「肩に違和感」は前回の観測。複製すると起きていない観測が翌日に生える
-        // （adr/data-model/notes-on-logs-and-sets.md）
+    fn copy_day_copies_the_exercise_note_and_the_set_notes() {
+        // ★ **非対称そのものが決定**（adr/ux/copy-carries-the-notes.md）。種目メモと
+        //   セットメモは種目に閉じたセッティングなので運び、体重と体調メモは**その日**に
+        //   閉じた観測値なので運ばない。1 本のテストで両側を固定する
         let mut db = menu_db();
-        put(
-            &mut db,
-            d(2026, 8, 5),
-            vec![noted_log(
-                10,
-                "フォームが崩れた",
-                &[(60.0, 10, "軽い"), (60.0, 8, "肩に違和感")],
-                None,
-            )],
+        db.sessions.insert(
+            date_key(d(2026, 8, 5)),
+            Session {
+                logs: vec![noted_log(
+                    10,
+                    "セーフティ 2 穴目",
+                    &[(60.0, 10, "軽い"), (60.0, 8, "限界")],
+                    None,
+                )],
+                body_weight: Some(70.5),
+                note: "よく寝た".into(),
+            },
         );
 
         assert_eq!(
             copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None),
             vec![e(10)]
         );
-        let log = &db.sessions.get(&date_key(d(2026, 8, 8))).unwrap().logs[0];
-        assert_eq!(log.note, "", "種目メモは運ばない");
-        assert!(
-            log.sets.iter().all(|s| s.note.is_empty()),
-            "セットメモは運ばない: {:?}",
-            log.sets
-        );
-        // 重量・回数はメニュー構成なので運ぶ
+        let session = db.sessions.get(&date_key(d(2026, 8, 8))).unwrap();
+        assert_eq!(session.body_weight, None, "体重は運ばない");
+        assert_eq!(session.note, "", "体調メモは運ばない");
+
+        let log = &session.logs[0];
+        assert_eq!(log.note, "セーフティ 2 穴目", "種目メモは運ぶ");
         assert_eq!(
             log.sets
                 .iter()
-                .map(|s| (s.weight, s.reps))
+                .map(|s| (s.weight, s.reps, s.note.as_str()))
                 .collect::<Vec<_>>(),
-            vec![(60.0, 10), (60.0, 8)]
+            vec![(60.0, 10, "軽い"), (60.0, 8, "限界")],
+            "セットメモは重量・回数と同じ行に付いたまま運ぶ"
         );
     }
 
@@ -3758,19 +3780,59 @@ mod tests {
     }
 
     #[test]
-    fn apply_routine_does_not_copy_the_set_notes_or_the_exercise_note() {
-        // 「3 セット目で肩に違和感」は前回の観測。複製すると起きていない観測が生える
+    fn apply_routine_copies_the_set_notes_and_the_exercise_note() {
+        // メニュー展開も copy_day と同じ規則でメモを運ぶ（adr/ux/copy-carries-the-notes.md）
         let mut db = routine_db();
         put(
             &mut db,
             d(2026, 8, 5),
-            vec![noted_log(10, "調子が良い", &[(60.0, 10, "重い")], None)],
+            vec![noted_log(
+                10,
+                "セーフティ 2 穴目",
+                &[(60.0, 10, "重い")],
+                None,
+            )],
         );
 
         apply_routine(&mut db, r(1), d(2026, 8, 8), None);
         let log = &db.sessions[&date_key(d(2026, 8, 8))].logs[0];
-        assert_eq!(log.note, "");
-        assert_eq!(log.sets[0].note, "");
+        assert_eq!(log.note, "セーフティ 2 穴目");
+        assert_eq!(log.sets[0].note, "重い");
+    }
+
+    #[test]
+    fn apply_routine_takes_each_note_from_the_day_that_exercise_came_from() {
+        // ★ メニュー展開は種目ごとに**別々の日**から引く。メモも必ずセットと同じログから
+        //   来ること — ベンチのセッティングがスクワットのカードに出てはいけない
+        let mut db = routine_db();
+        put(
+            &mut db,
+            d(2026, 8, 1),
+            vec![noted_log(30, "ベルトあり", &[(80.0, 5, "深く")], None)],
+        );
+        put(
+            &mut db,
+            d(2026, 8, 5),
+            vec![noted_log(
+                10,
+                "セーフティ 2 穴目",
+                &[(60.0, 10, "軽い")],
+                None,
+            )],
+        );
+
+        apply_routine(&mut db, r(1), d(2026, 8, 8), None);
+        let logs = &db.sessions[&date_key(d(2026, 8, 8))].logs;
+        // routine(1) は [10, 20, 30]。20 は履歴が無いのでログにならない（空カードで出る）
+        assert_eq!(
+            logs.iter()
+                .map(|l| (l.exercise_id, l.note.as_str(), l.sets[0].note.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (e(10), "セーフティ 2 穴目", "軽い"),
+                (e(30), "ベルトあり", "深く"),
+            ]
+        );
     }
 
     #[test]

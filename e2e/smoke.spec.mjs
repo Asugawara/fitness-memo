@@ -121,6 +121,9 @@ async function flushToStorage(page) {
  * `atHour` / `atMinute` を渡すと「その日のその時刻に当日入力した」状態になる（`at` より
  * 優先）。★ 日付キーと同じ日の時刻でないと意味のないデータになるので、生の epoch を渡す
  * `at` ではなくこちらを使うこと。
+ *
+ * `exerciseNote` は種目メモ（`ExerciseLog.note`）。セットメモは `sets` の要素側の `note`
+ * なので、名前を分けて取り違えを防いでいる。省略するとキーごと書かない。
  */
 async function seedPastLogs(page, entries) {
   await flushToStorage(page);
@@ -148,14 +151,26 @@ async function seedPastLogs(page, entries) {
       return d.getTime();
     };
 
-    for (const { daysAgo, exerciseName, sets, at = null, atHour, atMinute = 0, bodyWeight } of entries) {
+    for (const {
+      daysAgo,
+      exerciseName,
+      sets,
+      exerciseNote,
+      at = null,
+      atHour,
+      atMinute = 0,
+      bodyWeight,
+    } of entries) {
       const key = dateKey(daysAgo);
       const stamp = atHour === undefined ? at : atOnDay(daysAgo, atHour, atMinute);
       const session = db.sessions[key] ?? { logs: [], body_weight: null, note: '' };
       if (exerciseName !== undefined) {
         const ex = db.exercises.find((e) => e.name === exerciseName);
         if (!ex) throw new Error(`preset exercise not found: ${exerciseName}`);
-        session.logs.push({ exercise_id: ex.id, sets, at: stamp });
+        const log = { exercise_id: ex.id, sets, at: stamp };
+        // 種目メモ。省略時はキーごと書かない（ExerciseLog.note は #[serde(default)]）
+        if (exerciseNote !== undefined) log.note = exerciseNote;
+        session.logs.push(log);
       }
       if (bodyWeight !== undefined) session.body_weight = bodyWeight;
       db.sessions[key] = session;
@@ -1320,39 +1335,94 @@ test('「+ セット」はメモをプリフィルしない（重量だけ引き
   await expect(rows.nth(1).getByTestId('set-note')).toHaveValue('');
 });
 
-test('「前回をコピー」は前回のメモを持ち込まない', async ({ page }) => {
+test('「前回をコピー」は前回のメモも持ち込む', async ({ page }) => {
   await seedPastLogs(page, [
     {
       daysAgo: 3,
       exerciseName: 'ベンチプレス',
-      sets: [{ weight: 60, reps: 10, note: '肩に違和感' }],
+      exerciseNote: 'セーフティ 2 穴目',
+      sets: [{ weight: 60, reps: 10, note: '軽い' }],
     },
   ]);
   const card = await addExercise(page, 'ベンチプレス');
   await card.getByTestId('copy-last').click();
 
-  // セットは複製されるがメモは来ない
   await expect(card.getByTestId('set-row')).toHaveCount(1);
   await expect(card.getByTestId('set-weight').first()).toHaveValue('60');
-  await expect(card.getByTestId('set-note-read')).toHaveCount(0);
+  // ★ メモ欄は自動で開かない（既定は常に閉。adr/ux/exercise-and-set-notes-behind-one-toggle.md
+  //   の決定 2）。閉じたまま薄字で読めること（決定 3）が「開く必要が無い」根拠そのもの
+  await expect(card.getByTestId('exercise-note')).toHaveCount(0);
+  await expect(card.getByTestId('exercise-note-read')).toHaveText('セーフティ 2 穴目');
+  await expect(card.getByTestId('set-note-read')).toHaveText('軽い');
+
+  // 開けば編集もできる
   await openNotes(page, card);
-  await expect(card.getByTestId('set-note').first()).toHaveValue('');
+  await expect(card.getByTestId('exercise-note')).toHaveValue('セーフティ 2 穴目');
+  await expect(card.getByTestId('set-note').first()).toHaveValue('軽い');
 });
 
-test('1 日分のメニューコピーもメモを持ち込まない', async ({ page }) => {
+test('1 日分のメニューコピーもメモを持ち込む', async ({ page }) => {
   await seedPastLogs(page, [
     {
       daysAgo: 3,
       exerciseName: 'ベンチプレス',
-      sets: [{ weight: 60, reps: 10, note: '肩に違和感' }],
+      exerciseNote: 'セーフティ 2 穴目',
+      sets: [{ weight: 60, reps: 10, note: '軽い' }],
     },
   ]);
   await page.getByTestId('menu-candidate').first().click();
 
   const card = page.getByTestId('exercise-card').first();
   await expect(card.getByTestId('set-weight').first()).toHaveValue('60');
-  await expect(card.getByTestId('set-note-read')).toHaveCount(0);
-  await expect(card.getByTestId('exercise-note-read')).toHaveCount(0);
+  await expect(card.getByTestId('exercise-note-read')).toHaveText('セーフティ 2 穴目');
+  await expect(card.getByTestId('set-note-read')).toHaveText('軽い');
+});
+
+test('「前回をコピー」は今日書いた種目メモを上書きしない', async ({ page }) => {
+  // ★ このボタンは「今日のセットが空か」だけで出る（show_copy）ので、**メモだけ書いた
+  //   カード**でも押せる。上書きすると undo の無い破壊が最頻の場所に生まれる
+  await seedPastLogs(page, [
+    {
+      daysAgo: 3,
+      exerciseName: 'ベンチプレス',
+      exerciseNote: 'セーフティ 2 穴目',
+      sets: [{ weight: 60, reps: 10, note: '軽い' }],
+    },
+  ]);
+  const card = await addExercise(page, 'ベンチプレス');
+  await openNotes(page, card);
+  await card.getByTestId('exercise-note').fill('今日は肩が痛い');
+  await blurActive(page);
+
+  await card.getByTestId('copy-last').click();
+
+  // 今日書いたものが勝つ。セットメモは今日が空なので入る
+  await expect(card.getByTestId('exercise-note')).toHaveValue('今日は肩が痛い');
+  await expect(card.getByTestId('set-note').first()).toHaveValue('軽い');
+});
+
+test('メモ欄を開いたままコピーしても種目メモが入力欄に入る', async ({ page }) => {
+  // ★ 開いている枝の `value=` は初期値を 1 度読むだけで signal を追跡しない。DOM を
+  //   直さないと「画面は空・Db にはメモ」になり、次の 1 打鍵で消える
+  await seedPastLogs(page, [
+    {
+      daysAgo: 3,
+      exerciseName: 'ベンチプレス',
+      exerciseNote: 'セーフティ 2 穴目',
+      sets: [{ weight: 60, reps: 10, note: '軽い' }],
+    },
+  ]);
+  const card = await addExercise(page, 'ベンチプレス');
+  await openNotes(page, card);
+  await blurActive(page);
+
+  await card.getByTestId('copy-last').click();
+  await expect(card.getByTestId('exercise-note')).toHaveValue('セーフティ 2 穴目');
+
+  // signal だけでなく Db にも入っていること
+  await flushToStorage(page);
+  await page.reload();
+  await expect(page.getByTestId('exercise-note-read')).toHaveText('セーフティ 2 穴目');
 });
 
 test('セットのメモは回数が無ければ保存されず、保存されない旨が行に出る', async ({ page }) => {
@@ -1954,6 +2024,37 @@ test('★ 保存したメニューは種目ごとに別々の日の「前回」�
   await flushToStorage(page);
   await page.reload();
   await expect(page.getByTestId('exercise-card')).toHaveCount(2);
+});
+
+test('保存したメニューの展開もメモを持ち込む（種目ごとに別の日から）', async ({ page }) => {
+  // ★ メモもセットと**同じログ**から来ること。ベンチのセッティングがスクワットの
+  //   カードに出てはいけない（adr/ux/copy-carries-the-notes.md）
+  await seedPastLogs(page, [
+    {
+      daysAgo: 3,
+      exerciseName: 'ベンチプレス',
+      exerciseNote: 'セーフティ 2 穴目',
+      sets: [{ weight: 60, reps: 10, note: '軽い' }],
+    },
+    {
+      daysAgo: 10,
+      exerciseName: 'スクワット',
+      exerciseNote: 'ベルトあり',
+      sets: [{ weight: 80, reps: 5 }],
+    },
+  ]);
+
+  await createRoutine(page, '胸と脚の日', ['ベンチプレス', 'スクワット']);
+  await page.getByTestId('tab-record').click();
+  await page.getByTestId('routine-candidate').first().click();
+
+  const cards = page.getByTestId('exercise-card');
+  await expect(cards).toHaveCount(2);
+  await expect(cards.nth(0).getByTestId('exercise-note-read')).toHaveText('セーフティ 2 穴目');
+  await expect(cards.nth(0).getByTestId('set-note-read')).toHaveText('軽い');
+  await expect(cards.nth(1).getByTestId('exercise-note-read')).toHaveText('ベルトあり');
+  // スクワットの行にはメモが無い（混ざっていない）
+  await expect(cards.nth(1).getByTestId('set-note-read')).toHaveCount(0);
 });
 
 test('★ 「選択中」をドラッグで並べ替えると、記録タブのカードの並びがそうなる', async ({ page }) => {

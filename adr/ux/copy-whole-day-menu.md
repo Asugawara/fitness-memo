@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-08
 - **カテゴリ**: ux
-- **関連**: [「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md) / [カレンダーの空日からも記録を追加できるようにする](calendar-add-from-empty-day.md) / [記録タブをカレンダー + 選択日エディタの単一画面にする](record-tab-calendar-with-day-editor.md) / [`at` を `Option<i64>` にし当日入力時のみ埋める](../data-model/at-optional-same-day-only.md) / [「1日1種目1ログ」を不変条件にする](../data-model/one-log-per-exercise-per-day.md)
+- **関連**: [「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md) / [カレンダーの空日からも記録を追加できるようにする](calendar-add-from-empty-day.md) / [記録タブをカレンダー + 選択日エディタの単一画面にする](record-tab-calendar-with-day-editor.md) / [`at` を `Option<i64>` にし当日入力時のみ埋める](../data-model/at-optional-same-day-only.md) / [「1日1種目1ログ」を不変条件にする](../data-model/one-log-per-exercise-per-day.md) / [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（メモも運ぶようになった）
 
 ## 背景
 

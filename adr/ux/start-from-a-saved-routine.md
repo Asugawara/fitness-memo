@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-15
 - **カテゴリ**: ux
-- **関連**: [トレーニングメニューを「名前 + 種目 ID の並び」だけのデータにする](../data-model/routines-as-named-exercise-lists.md) / [1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](copy-whole-day-menu.md) / [「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md) / [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](menu-groups-as-single-open-accordion.md) / [フォーカスリングを明示し、記録タブの見出しを 1 本の階層にする](focus-ring-and-heading-order.md)
+- **関連**: [トレーニングメニューを「名前 + 種目 ID の並び」だけのデータにする](../data-model/routines-as-named-exercise-lists.md) / [1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](copy-whole-day-menu.md) / [「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md) / [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](menu-groups-as-single-open-accordion.md) / [フォーカスリングを明示し、記録タブの見出しを 1 本の階層にする](focus-ring-and-heading-order.md) / [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（メモも運ぶようになった）
 
 ## 背景
 

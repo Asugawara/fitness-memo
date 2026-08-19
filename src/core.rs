@@ -438,10 +438,22 @@ impl Seed {
     /// 運ぶのはセット（重量・回数・セットメモ）と種目メモ。`at` は運ばない（呼び出し側が
     /// 渡す）。体重と体調メモは [`Session`] の側なのでそもそもここには届かない。
     fn carry(src: &ExerciseLog) -> Self {
+        // ★ **分解して受ける。** フィールドで読むと、`ExerciseLog` に足した新しい
+        //   フィールドがここを黙って素通りする — 「コピーが何を運ぶか」を決める場所が
+        //   まさにここなのに、決め直す機会が失われる。分解しておけば追加した瞬間に
+        //   この行がコンパイルエラーになり、運ぶ / 運ばないの判断を必ず通る
+        //   （`merge_db` の `..log` は構造体更新なので黙って運ぶ側に倒れる。
+        //   2 つの流儀が食い違ったまま出ていくのを止めるのはこのエラーだけ）
+        let ExerciseLog {
+            exercise_id,
+            sets,
+            at: _, // 運ばない。呼び出し側が渡す（この型に `at` が無いのがその保証）
+            note,
+        } = src;
         Self {
-            exercise_id: src.exercise_id,
-            sets: src.sets.clone(),
-            note: src.note.clone(),
+            exercise_id: *exercise_id,
+            sets: sets.clone(),
+            note: note.clone(),
         }
     }
 }
@@ -2249,10 +2261,15 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
     //   `unread > 0` を前置した別の枝にすれば、読めなかったセルが 1 つも無いファイルは
     //   1 本も触らない
     if unread > 0
-        && out
-            .sessions
-            .values()
-            .all(|s| s.logs.iter().all(|l| l.sets.is_empty()))
+        // ★ **ログが 1 本でも残っていること**が前提。ここを落とすと `all` が空集合に
+        //   対して真になり、**体重だけの日しか無い正当なファイル**（ログが 0 本）が
+        //   壊れた行 1 つで丸ごと拒否される。下の枝に任せるべき形をここで奪わない
+        && out.sessions.values().any(|s| !s.logs.is_empty())
+        // ★ `!is_trained()` は「そのセッションにセットが 1 本も無い」。**述語を手で
+        //   書き直さない** — カレンダーのドット・月フッタ・グラフが見ているものと
+        //   同じ関数を通すことで、「トレした」の定義が変わったときに取り込みの判定
+        //   だけが取り残されるのを防ぐ
+        && out.sessions.values().all(|s| !s.is_trained())
     {
         return Err(ImportError::Unreadable);
     }
@@ -5758,6 +5775,23 @@ mod tests {
             parse_import(tsv, &mut ids(), &mine),
             Err(ImportError::Unreadable),
             "セットが 1 本も読めていないなら、メモが残っていても失敗と言う"
+        );
+    }
+
+    /// ★ 上の枝が**空集合に対して真になっていない**ことの網。`all` だけで書くと
+    ///   ログが 0 本のファイル（体重だけの日）で真になり、壊れた行 1 つで**正当な
+    ///   記録ごと拒否される**。ここが落ちたら `any(|s| !s.logs.is_empty())` が消えている。
+    #[test]
+    fn tsv_import_keeps_a_body_weight_file_even_when_one_row_is_unreadable() {
+        let mine = crate::presets::seeded_db();
+        // 体重だけの日は正当。もう 1 行は日付がロケール書き戻しで壊れている
+        let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\n\
+                   2026-08-01\t\t\t\t\t\t70.5\n\
+                   August 2, 2026\t胸\tベンチプレス\t1\t60\t10\t\n";
+        let db = parse_import(tsv, &mut ids(), &mine).expect("体重の行は読めているので通す");
+        assert_eq!(
+            db.sessions.get("2026-08-01").expect("その日").body_weight,
+            Some(70.5)
         );
     }
 

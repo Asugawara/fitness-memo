@@ -33,8 +33,8 @@ use super::help::InstallHelpLink;
 use super::icon::{self, icon};
 use super::routine::{RoutineEditor, routine_exercise_names};
 use super::{
-    SettingsPage, Sheet, cur_lang, kb_blur, kb_focus, scroll_into_view_if_needed, t, use_db,
-    use_kb, use_lang, use_open_group, use_settings_page,
+    SettingsPage, Sheet, cur_lang, ex_name, grp_name, kb_blur, kb_focus,
+    scroll_into_view_if_needed, t, use_db, use_kb, use_lang, use_open_group, use_settings_page,
 };
 
 /// 部位を追加するときの既定色。プリセットの 6 色を順に回す。
@@ -651,7 +651,7 @@ fn GroupBlock(
     let db = use_db();
 
     let name = Memo::new(move |_| {
-        db.with(|d| d.group(group).map(|g| g.name.clone()))
+        db.with(|d| d.group(group).map(|g| grp_name(g).to_string()))
             .unwrap_or_default()
     });
     let color = Memo::new(move |_| {
@@ -735,7 +735,7 @@ fn ExerciseRow(ex: ExerciseId, editor: RwSignal<Option<Editor>>) -> impl IntoVie
     let db = use_db();
 
     let name = Memo::new(move |_| {
-        db.with(|d| d.exercise(ex).map(|e| e.name.clone()))
+        db.with(|d| d.exercise(ex).map(|e| ex_name(e).to_string()))
             .unwrap_or_default()
     });
 
@@ -774,9 +774,9 @@ fn ArchivedSection(ids: Vec<ExerciseId>, open_group: RwSignal<Option<GroupId>>) 
                                 .map(|e| {
                                     let group = d
                                         .group(e.group_id)
-                                        .map(|g| g.name.clone())
+                                        .map(grp_name).map(str::to_string)
                                         .unwrap_or_else(|| t().settings.no_group.to_string());
-                                    format!("{} · {}", e.name, group)
+                                    format!("{} · {}", ex_name(e), group)
                                 })
                         })
                         .unwrap_or_default();
@@ -828,7 +828,10 @@ fn GroupEditor(
     let kb = use_kb();
 
     let (name0, color0) = db
-        .with_untracked(|d| d.group(id).map(|g| (g.name.clone(), g.color.clone())))
+        .with_untracked(|d| {
+            d.group(id)
+                .map(|g| (grp_name(g).to_string(), g.color.clone()))
+        })
         .unwrap_or_default();
     let name = RwSignal::new(name0.clone());
     let confirming = RwSignal::new(false);
@@ -979,8 +982,11 @@ fn NewGroupEditor(
         if value.is_empty() {
             return;
         }
-        // 同名を許すとプリセット投入の同名スキップと噛み合わなくなる
-        if db.with_untracked(|d| d.groups.iter().any(|g| g.name == value)) {
+        // 同名を許すとプリセット投入の同名スキップと噛み合わなくなる。
+        // ★ **表示名で比べる。** 保存名で比べると、英語で使っている人が "Chest" と
+        //   打ったときに、保存名が「胸」のプリセットと衝突せず素通りしてしまい、
+        //   画面に "Chest" が 2 つ並ぶ
+        if db.with_untracked(|d| d.groups.iter().any(|g| grp_name(g) == value)) {
             duplicate.set(true);
             return;
         }
@@ -1049,13 +1055,13 @@ fn ExerciseEditor(
     let kb = use_kb();
 
     let name0 = db
-        .with_untracked(|d| d.exercise(id).map(|e| e.name.clone()))
+        .with_untracked(|d| d.exercise(id).map(|e| ex_name(e).to_string()))
         .unwrap_or_default();
     // 部位の選択肢は untracked で固定する（編集中に一覧が動いてボタンが作り直されるのを防ぐ）
     let groups: Vec<(GroupId, String)> = db.with_untracked(|d| {
         ordered_group_ids(d)
             .into_iter()
-            .filter_map(|g| d.group(g).map(|g| (g.id, g.name.clone())))
+            .filter_map(|g| d.group(g).map(|g| (g.id, grp_name(g).to_string())))
             .collect()
     });
     let name = RwSignal::new(name0.clone());
@@ -1145,7 +1151,7 @@ fn NewExerciseEditor(
     let kb = use_kb();
 
     let group_name = db
-        .with_untracked(|d| d.group(group).map(|g| g.name.clone()))
+        .with_untracked(|d| d.group(group).map(grp_name).map(str::to_string))
         .unwrap_or_default();
     let name = RwSignal::new(String::new());
     let duplicate = RwSignal::new(false);
@@ -1156,8 +1162,9 @@ fn NewExerciseEditor(
             return;
         }
         // アーカイブ済みも含めて全体で見る（同名があると移行時にプリセットの
-        // 固定 ID へ寄せられなくなる — core::pin_presets が「ちょうど 1 件」を要求する）
-        if db.with_untracked(|d| d.exercises.iter().any(|e| e.name == value)) {
+        // 固定 ID へ寄せられなくなる — core::pin_presets が「ちょうど 1 件」を要求する）。
+        // ★ 表示名で比べる理由は上の部位側と同じ
+        if db.with_untracked(|d| d.exercises.iter().any(|e| ex_name(e) == value)) {
             duplicate.set(true);
             return;
         }

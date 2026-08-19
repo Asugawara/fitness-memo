@@ -60,7 +60,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [取り込みは「足すだけ」に固定する](storage/import-is-merge-only.md) | 採用 |
 | [同一オリジン内の多層バックアップを採用しない](storage/no-same-origin-redundancy.md) | 採用 |
 | [UI の状態を `Db` に入れず別キーに置く](storage/ui-state-in-separate-key.md) | 採用 |
-| [プリセット名は初回投入の言語で固定し、ユーザーデータとして扱う](storage/preset-names-are-user-data-seeded-once.md) | 採用 |
+| [プリセット名は初回投入の言語で固定し、ユーザーデータとして扱う](storage/preset-names-are-user-data-seeded-once.md) | 置換済み → [プリセット名は表示時に言語へ追従させ、改名したものだけ据え置く](ux/preset-names-follow-the-ui-language.md) |
 | [TSV の見出しは UI 言語で書き、読み込みは日英どちらも受ける](storage/tsv-header-follows-the-ui-language.md) | 採用 |
 
 ### pwa — オフライン動作と iOS 実機
@@ -106,6 +106,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](ux/machine-pins-on-the-exercise.md) | 採用 |
 | [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](ux/copy-carries-the-notes.md) | 採用 |
 | [言語はブラウザに従い、選んだらそれを優先する](ux/language-follows-the-browser-then-the-setting.md) | 採用 |
+| [プリセット名は表示時に言語へ追従させ、改名したものだけ据え置く](ux/preset-names-follow-the-ui-language.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

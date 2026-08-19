@@ -20,7 +20,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::i18n::{self, Lang, S};
-use crate::model::{Db, GroupId, SetEntry};
+use crate::model::{Db, Exercise, Group, GroupId, SetEntry};
 use crate::storage;
 
 use calendar::Calendar;
@@ -196,6 +196,19 @@ thread_local! {
 ///   反映を起こすのは `App` の `lang.get()` 1 箇所だけにしてある。
 pub fn t() -> &'static S {
     cur_lang().strings()
+}
+
+/// 表示に使う種目名。**未改名のプリセットだけが言語に追従する。**
+///
+/// ★ `Exercise.name` を直接描かず必ずここを通す。素で描くと、日本語で初期化した端末を
+///   英語にしたときに種目名だけ日本語で残る（部位名も同じ理由で [`grp_name`] を通す）。
+pub fn ex_name(e: &Exercise) -> &str {
+    crate::presets::exercise_name(e.id, &e.name, cur_lang())
+}
+
+/// 表示に使う部位名。規則は [`ex_name`] と同じ。
+pub fn grp_name(g: &Group) -> &str {
+    crate::presets::group_name(g.id, &g.name, cur_lang())
 }
 
 /// 現在の言語。`fmt_date` のように `Lang` そのものを要求する関数へ渡すために引く。

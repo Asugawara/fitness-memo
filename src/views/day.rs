@@ -25,8 +25,8 @@ use super::drag::{
 };
 use super::icon::{self, icon};
 use super::{
-    Sheet, cur_lang, fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms,
-    parse_reps, parse_weight, scroll_to_id, t, use_dates, use_db, use_kb,
+    Sheet, cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, fmt_weight, grp_name, kb_blur,
+    kb_focus, now_ms, parse_reps, parse_weight, scroll_to_id, t, use_dates, use_db, use_kb,
 };
 
 /// 選択日に並べているカード 1 枚。
@@ -140,13 +140,13 @@ impl MenuRow {
         for id in exercises {
             // core 側で存在を確認済みだが、ここでも落とさず素通しできるようにしておく
             let Some(e) = db.exercise(*id) else { continue };
-            names.push(e.name.clone());
+            names.push(ex_name(e).to_string());
             if seen.contains(&e.group_id) {
                 continue;
             }
             seen.push(e.group_id);
             if let Some(g) = db.group(e.group_id) {
-                ordered.push((g.order, g.name.clone()));
+                ordered.push((g.order, grp_name(g).to_string()));
             }
         }
         // 部位は Group::order 順に直す。種目の入力順で並べると、同じ部位構成の日でも
@@ -353,7 +353,7 @@ pub fn DayEditor() -> impl IntoView {
                 .into_iter()
                 .map(|g| {
                     let e = by_group.get(&g.id).copied();
-                    (g.name, e) as Chip
+                    (grp_name(&g).to_string(), e) as Chip
                 })
                 .collect::<Vec<_>>()
         })
@@ -655,7 +655,7 @@ pub fn DayEditor() -> impl IntoView {
                                     exercises.sort_by_key(|e| e.order);
                                     view! {
                                         <section class="sheet-group">
-                                            <h3 style=format!("--dot:{}", g.color)>{g.name}</h3>
+                                            <h3 style=format!("--dot:{}", g.color)>{grp_name(&g).to_string()}</h3>
                                             <div class="pick-list">
                                                 {exercises
                                                     .into_iter()
@@ -673,7 +673,7 @@ pub fn DayEditor() -> impl IntoView {
                                                                 data-testid="pick-exercise"
                                                                 on:click=move |_| pick(id)
                                                             >
-                                                                {e.name}
+                                                                {ex_name(&e).to_string()}
                                                             </button>
                                                         }
                                                     })
@@ -805,14 +805,15 @@ fn ExerciseCard(
     // Memo にするのは「値が変わったときだけ」下流を再描画させるため。
     // 素の closure だと db が動くたびに構造ごと作り直され、入力中の文字列が消える
     let name = Memo::new(move |_| {
-        db.with(|d| d.exercise(ex).map(|e| e.name.clone()))
+        db.with(|d| d.exercise(ex).map(|e| ex_name(e).to_string()))
             .unwrap_or_else(|| t().day.deleted_exercise.to_string())
     });
     let group_name = Memo::new(move |_| {
         db.with(|d| {
             d.exercise(ex)
                 .and_then(|e| d.group(e.group_id))
-                .map(|g| g.name.clone())
+                .map(grp_name)
+                .map(str::to_string)
         })
         .unwrap_or_default()
     });

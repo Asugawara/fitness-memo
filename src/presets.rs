@@ -250,6 +250,39 @@ pub fn is_preset_exercise(id: ExerciseId) -> bool {
         .any(|(preset_id, _)| *preset_id == id)
 }
 
+/// 表示に使う種目名。**未改名のプリセットだけが言語に追従する。**
+///
+/// ★ 判定は「保存されている名前が、その固定 ID のプリセット名の**どちらかの言語の綴り**と
+/// 一致するか」。一致すれば未改名なので今の言語の綴りを返し、違えば利用者が付けた名前
+/// なのでそのまま返す（adr/ux/preset-names-follow-the-ui-language.md）。
+///
+/// ★ **両言語を見るのが要点。** 片方だけだと、日本語で初期化した端末で英語に切り替えて
+/// 戻したときに「一度英語で表示された = 改名された」と誤判定しうる。保存名は一切
+/// 書き換えないので、どちらの綴りで入っていても未改名と分かる。
+///
+/// ★ 自作の種目は固定 ID を持たないので、この関数は素通りして `stored` を返す。
+///
+/// ★ 利用者が偶然もう一方の言語のプリセット名そのものに改名した場合
+/// （「ベンチプレス」→「Bench Press」）は未改名と見なされ、日本語に戻すと
+/// 「ベンチプレス」に戻る。同じ種目を指す綴りなので害が無く、判定を単純に保つほうを採った。
+pub fn exercise_name(id: ExerciseId, stored: &str, lang: Lang) -> &str {
+    PRESETS
+        .iter()
+        .flat_map(|p| p.exercises)
+        .find(|(preset_id, _)| *preset_id == id)
+        .filter(|(_, names)| names.matches(stored))
+        .map_or(stored, |(_, names)| names.get(lang))
+}
+
+/// 表示に使う部位名。規則は [`exercise_name`] と同じ。
+pub fn group_name(id: GroupId, stored: &str, lang: Lang) -> &str {
+    PRESETS
+        .iter()
+        .find(|p| p.id == id)
+        .filter(|p| p.name.matches(stored))
+        .map_or(stored, |p| p.name.get(lang))
+}
+
 /// プリセット名 → 固定 ID。移行で「名前が一致する種目を固定 ID に寄せる」ときに引く。
 ///
 /// ★ **日英どちらの綴りでも引ける。** 英語で初期化した端末が書き出した TSV には
@@ -543,5 +576,94 @@ mod tests {
         assert_eq!(db.groups.len(), 6);
         // 名前は最初に入れた言語のまま
         assert_eq!(db.groups[0].name, "胸");
+    }
+
+    /// **未改名のプリセットは言語に追従する。** どちらの言語で初期化されていても、
+    /// 両方の綴りから今の言語の綴りへ引ける。
+    #[test]
+    fn an_untouched_preset_follows_the_ui_language() {
+        let bench = ExerciseId::from_bits(0x11);
+
+        // 日本語で初期化された端末
+        assert_eq!(
+            exercise_name(bench, "ベンチプレス", Lang::Ja),
+            "ベンチプレス"
+        );
+        assert_eq!(
+            exercise_name(bench, "ベンチプレス", Lang::En),
+            "Bench Press"
+        );
+        // 英語で初期化された端末
+        assert_eq!(
+            exercise_name(bench, "Bench Press", Lang::Ja),
+            "ベンチプレス"
+        );
+        assert_eq!(exercise_name(bench, "Bench Press", Lang::En), "Bench Press");
+
+        let chest = GroupId::from_bits(0x10);
+        assert_eq!(group_name(chest, "胸", Lang::En), "Chest");
+        assert_eq!(group_name(chest, "Chest", Lang::Ja), "胸");
+    }
+
+    /// ★ **改名したら二度と書き換えない。** 言語を切り替えても利用者が付けた名前が出る。
+    #[test]
+    fn a_renamed_preset_keeps_the_name_the_user_gave_it() {
+        let bench = ExerciseId::from_bits(0x11);
+
+        assert_eq!(exercise_name(bench, "マイベンチ", Lang::Ja), "マイベンチ");
+        assert_eq!(exercise_name(bench, "マイベンチ", Lang::En), "マイベンチ");
+        assert_eq!(exercise_name(bench, "My Bench", Lang::Ja), "My Bench");
+
+        let chest = GroupId::from_bits(0x10);
+        assert_eq!(group_name(chest, "胸の日", Lang::En), "胸の日");
+    }
+
+    /// 自作の種目・部位は固定 ID を持たないので素通りする。
+    #[test]
+    fn a_user_created_exercise_is_never_localized() {
+        // 予約領域の外＝自作
+        let mine = ExerciseId::from_bits(5000);
+        assert!(!mine.is_reserved());
+        assert_eq!(
+            exercise_name(mine, "アームカール改", Lang::En),
+            "アームカール改"
+        );
+        // **プリセットと同じ綴りでも、ID が違えば触らない**
+        assert_eq!(
+            exercise_name(mine, "ベンチプレス", Lang::En),
+            "ベンチプレス"
+        );
+
+        let mine_g = GroupId::from_bits(5001);
+        assert_eq!(group_name(mine_g, "胸", Lang::En), "胸");
+    }
+
+    /// ★ **別のプリセットの綴りに改名しても、その種目のものとしては扱わない。**
+    /// 「ダンベルプレス」を「ベンチプレス」に改名した DB で、英語にしたときに
+    /// 2 つとも "Bench Press" になってはいけない。
+    #[test]
+    fn renaming_one_preset_to_another_presets_name_does_not_localize_it() {
+        let dumbbell = ExerciseId::from_bits(0x12);
+        assert_eq!(
+            exercise_name(dumbbell, "ベンチプレス", Lang::En),
+            "ベンチプレス"
+        );
+        assert_eq!(
+            exercise_name(dumbbell, "ダンベルプレス", Lang::En),
+            "Dumbbell Press"
+        );
+    }
+
+    /// 全プリセットが、どちらの言語の綴りからでも往復できる。
+    #[test]
+    fn every_preset_round_trips_between_languages() {
+        for p in PRESETS {
+            assert_eq!(group_name(p.id, p.name.ja, Lang::En), p.name.en);
+            assert_eq!(group_name(p.id, p.name.en, Lang::Ja), p.name.ja);
+            for (id, n) in p.exercises {
+                assert_eq!(exercise_name(*id, n.ja, Lang::En), n.en);
+                assert_eq!(exercise_name(*id, n.en, Lang::Ja), n.ja);
+            }
+        }
     }
 }

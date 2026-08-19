@@ -8,7 +8,7 @@ use crate::core::Metric;
 use crate::model::{Db, ExerciseId, GroupId};
 
 use super::chart::Chart;
-use super::{cur_lang, fmt_date, fmt_metric, fmt_set, t, use_dates, use_db};
+use super::{cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, grp_name, t, use_dates, use_db};
 use crate::i18n::Lang;
 
 /// 記録テーブルの表示上限。超えた分は件数を明示して省く（黙って切らない）。
@@ -142,17 +142,17 @@ fn options(d: &Db) -> Options {
         groups: groups
             .iter()
             .filter(|g| sorted.iter().any(|e| e.group_id == g.id))
-            .map(|g| (g.id, g.name.clone()))
+            .map(|g| (g.id, grp_name(g).to_string()))
             .collect(),
         active: sorted
             .iter()
             .filter(|e| !e.archived)
-            .map(|e| (e.id, e.name.clone()))
+            .map(|e| (e.id, ex_name(e).to_string()))
             .collect(),
         archived: sorted
             .iter()
             .filter(|e| e.archived)
-            .map(|e| (e.id, e.name.clone()))
+            .map(|e| (e.id, ex_name(e).to_string()))
             .collect(),
     }
 }
@@ -318,7 +318,7 @@ pub fn Progress() -> impl IntoView {
                                 hit = true;
                                 total += core::log_value(m, log);
                                 if let Some(e) = d.exercise(log.exercise_id) {
-                                    names.push(e.name.clone());
+                                    names.push(ex_name(e).to_string());
                                 }
                             }
                         }

@@ -1695,8 +1695,13 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
             logged.insert(ex.id);
             let group = db
                 .group(ex.group_id)
-                .map(|g| g.name.as_str())
+                .map(|g| crate::presets::group_name(g.id, &g.name, lang))
                 .unwrap_or_default();
+            // ★ 書き出すのは**表示名**（未改名のプリセットは UI の言語に追従する）。
+            //   保存名をそのまま出すと、英語で使っている人のシートに日本語の種目名が
+            //   並ぶ。取り込み側は `preset_exercise_id` が日英どちらの綴りでも
+            //   固定 ID に寄せるので、往復は言語を跨いでも閉じる
+            let ex_name = crate::presets::exercise_name(ex.id, &ex.name, lang);
             let time = tsv_time(log.at, date, tz);
             let mut log_note = log.note.as_str();
             let ex_pins = if pins_written.insert(ex.id) {
@@ -1712,8 +1717,8 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                 push_row(
                     &mut out,
                     [
-                        key, group, &ex.name, "", "", "", day_weight, "", log_note, day_note,
-                        &time, "", pins_cell,
+                        key, group, ex_name, "", "", "", day_weight, "", log_note, day_note, &time,
+                        "", pins_cell,
                     ],
                 );
                 day_weight = "";
@@ -1733,7 +1738,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                 push_row(
                     &mut out,
                     [
-                        key, group, &ex.name, &no, &w, &reps, day_weight, &set.note, log_note,
+                        key, group, ex_name, &no, &w, &reps, day_weight, &set.note, log_note,
                         day_note, &time, "", pins_cell,
                     ],
                 );
@@ -1771,12 +1776,24 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
         let pins = ex.pins.join(" ");
         let group = db
             .group(ex.group_id)
-            .map(|g| g.name.as_str())
+            .map(|g| crate::presets::group_name(g.id, &g.name, lang))
             .unwrap_or_default();
         push_row(
             &mut out,
             [
-                "", group, &ex.name, "", "", "", "", "", "", "", "", "", &pins,
+                "",
+                group,
+                crate::presets::exercise_name(ex.id, &ex.name, lang),
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                &pins,
             ],
         );
     }
@@ -1790,7 +1807,21 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
         }
         push_row(
             &mut out,
-            ["", &g.name, "", "", "", "", "", "", "", "", "", "", ""],
+            [
+                "",
+                crate::presets::group_name(g.id, &g.name, lang),
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ],
         );
     }
 
@@ -1829,12 +1860,24 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
             };
             let group = db
                 .group(ex.group_id)
-                .map(|g| g.name.as_str())
+                .map(|g| crate::presets::group_name(g.id, &g.name, lang))
                 .unwrap_or_default();
             push_row(
                 &mut out,
                 [
-                    "", group, &ex.name, &pos, "", "", "", "", "", "", "", &r.name, &pins,
+                    "",
+                    group,
+                    crate::presets::exercise_name(ex.id, &ex.name, lang),
+                    &pos,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    &r.name,
+                    &pins,
                 ],
             );
         }
@@ -5266,7 +5309,7 @@ mod tests {
         );
         assert_eq!(
             tsv.lines().next().expect("見出し行"),
-            "Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine"
+            "Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins"
         );
     }
 
@@ -5363,6 +5406,125 @@ mod tests {
             mine.exercises.len(),
             before,
             "往復で種目が増えている（固定 ID に寄っていない）"
+        );
+    }
+
+    /// ★ **日本語で初期化した端末が英語で書き出すと、種目名も英語で出る。**
+    /// 保存名は日本語のままなので、ここが表示名を通っていないと英語のシートに
+    /// 日本語の種目名が並ぶ。
+    #[test]
+    fn export_in_english_writes_english_names_for_untouched_presets() {
+        let ja = crate::i18n::Lang::Ja;
+        let en = crate::i18n::Lang::En;
+        let mut db = crate::presets::seeded_db(ja); // 保存名は日本語
+        db.sessions.insert(
+            "2026-08-01".to_string(),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: ExerciseId::from_bits(0x11),
+                    sets: vec![SetEntry {
+                        weight: 60.0,
+                        reps: 10,
+                        note: String::new(),
+                    }],
+                    at: None,
+                    note: String::new(),
+                }],
+                ..Default::default()
+            },
+        );
+
+        let tsv = export_tsv(&db, jst(), en);
+        assert!(
+            tsv.contains("Bench Press"),
+            "英語の種目名が出ていない:\n{tsv}"
+        );
+        assert!(
+            tsv.contains("\tChest\t"),
+            "英語の部位名が出ていない:\n{tsv}"
+        );
+        assert!(
+            !tsv.contains("ベンチプレス"),
+            "保存名がそのまま出ている:\n{tsv}"
+        );
+
+        // 日本語で書き出せば日本語のまま（保存名を書き換えていない証拠）
+        let tsv_ja = export_tsv(&db, jst(), ja);
+        assert!(tsv_ja.contains("ベンチプレス"));
+    }
+
+    /// 改名した種目は**どちらの言語で書き出しても利用者が付けた名前**。
+    #[test]
+    fn export_keeps_a_renamed_preset_as_the_user_named_it() {
+        let en = crate::i18n::Lang::En;
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        db.exercises
+            .iter_mut()
+            .find(|e| e.id == ExerciseId::from_bits(0x11))
+            .expect("ベンチプレス")
+            .name = "マイベンチ".to_string();
+        db.sessions.insert(
+            "2026-08-01".to_string(),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: ExerciseId::from_bits(0x11),
+                    sets: vec![SetEntry {
+                        weight: 60.0,
+                        reps: 10,
+                        note: String::new(),
+                    }],
+                    at: None,
+                    note: String::new(),
+                }],
+                ..Default::default()
+            },
+        );
+
+        let tsv = export_tsv(&db, jst(), en);
+        assert!(tsv.contains("マイベンチ"));
+        assert!(!tsv.contains("Bench Press"));
+    }
+
+    /// ★ **表示名で書き出しても往復が閉じる。** 日本語の端末が英語で書き出した
+    /// ファイルを自分で取り込み直しても、種目が 2 本に割れない。
+    #[test]
+    fn an_english_export_reimports_into_the_japanese_device_it_came_from() {
+        let en = crate::i18n::Lang::En;
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        mine.sessions.insert(
+            "2026-08-01".to_string(),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: ExerciseId::from_bits(0x11),
+                    sets: vec![SetEntry {
+                        weight: 60.0,
+                        reps: 10,
+                        note: String::new(),
+                    }],
+                    at: None,
+                    note: String::new(),
+                }],
+                ..Default::default()
+            },
+        );
+        let before = mine.exercises.len();
+
+        let tsv = export_tsv(&mine, jst(), en);
+        let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
+        merge_db(&mut mine, incoming);
+
+        assert_eq!(
+            mine.exercises.len(),
+            before,
+            "英語で書き出したファイルを戻すと種目が増える"
+        );
+        // 保存名は日本語のまま（取り込みが名前を書き換えていない）
+        assert_eq!(
+            mine.exercises
+                .iter()
+                .find(|e| e.id == ExerciseId::from_bits(0x11))
+                .map(|e| e.name.as_str()),
+            Some("ベンチプレス")
         );
     }
 
@@ -5995,7 +6157,7 @@ mod tests {
     ///   ので、これが例外ではなく既定の形になる。
     #[test]
     fn tsv_import_says_so_when_every_count_failed_even_with_a_note() {
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         // 回数が「10回」で全滅。種目メモだけは読める
         let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\tセットメモ\t種目メモ\n                   2026-08-01\t胸\tベンチプレス\t1\t60\t10回\t軽い\tセーフティ 2 穴目\n";
         assert_eq!(
@@ -6010,7 +6172,7 @@ mod tests {
     ///   記録ごと拒否される**。ここが落ちたら `any(|s| !s.logs.is_empty())` が消えている。
     #[test]
     fn tsv_import_keeps_a_body_weight_file_even_when_one_row_is_unreadable() {
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         // 体重だけの日は正当。もう 1 行は日付がロケール書き戻しで壊れている
         let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\n\
                    2026-08-01\t\t\t\t\t\t70.5\n\
@@ -6027,7 +6189,7 @@ mod tests {
     ///   読めなかったセルは 1 つも無い。ここが落ちるなら枝の条件が広すぎる。
     #[test]
     fn tsv_import_keeps_a_file_that_only_holds_notes_and_reads_every_cell() {
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\tセットメモ\t種目メモ\n                   2026-08-01\t胸\tベンチプレス\t\t\t\t\t肩が痛いのでやめた\n";
         let db = parse_import(tsv, &mut ids(), &mine).expect("読める");
         let log = &db.sessions.get("2026-08-01").expect("その日").logs[0];
@@ -7438,10 +7600,10 @@ mod tests {
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         let raw: Vec<String> = vec!["  3 5 ".into(), "".into(), "あいうえおかきく".into()];
 
-        let mut through_ui = crate::presets::seeded_db();
+        let mut through_ui = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         set_pins(&mut through_ui, bench, raw.clone());
 
-        let mut through_import = crate::presets::seeded_db();
+        let mut through_import = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         if let Some(e) = through_import.exercises.iter_mut().find(|e| e.id == bench) {
             e.pins = raw;
         }
@@ -7486,8 +7648,8 @@ mod tests {
     #[test]
     fn merge_fills_empty_pins_from_the_incoming_db() {
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
-        let mut mine = crate::presets::seeded_db();
-        let mut theirs = crate::presets::seeded_db();
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         set_pins(&mut theirs, bench, vec!["3".into(), "5".into()]);
 
         merge_db(&mut mine, theirs);
@@ -7503,7 +7665,7 @@ mod tests {
     #[test]
     fn merge_fills_empty_pins_when_the_exercise_matched_by_name() {
         let chest = crate::presets::preset_group_id("胸").expect("プリセット");
-        let mut mine = crate::presets::seeded_db();
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         mine.exercises.push(Exercise {
             id: ExerciseId::from_bits(0xB001),
             name: "ペックフライ".into(),
@@ -7512,7 +7674,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
         });
-        let mut theirs = crate::presets::seeded_db();
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         theirs.exercises.push(Exercise {
             id: ExerciseId::from_bits(0xC001),
             name: "ペックフライ".into(),
@@ -7539,9 +7701,9 @@ mod tests {
     #[test]
     fn merge_never_overwrites_pins_that_are_already_set() {
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
-        let mut mine = crate::presets::seeded_db();
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         set_pins(&mut mine, bench, vec!["1".into()]);
-        let mut theirs = crate::presets::seeded_db();
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         set_pins(&mut theirs, bench, vec!["9".into()]);
 
         merge_db(&mut mine, theirs);
@@ -7565,7 +7727,7 @@ mod tests {
     #[test]
     fn export_tsv_writes_the_pins_only_on_the_first_row_of_an_exercise() {
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         set_pins(&mut db, bench, vec!["3".into(), "5".into()]);
         db.sessions.insert(
             date_key(d(2026, 8, 1)),
@@ -7591,7 +7753,7 @@ mod tests {
             },
         );
 
-        let tsv = export_tsv(&db, jst());
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
         let col = pin_col(&r);
         let cells: Vec<&str> = r[1..]
@@ -7613,10 +7775,10 @@ mod tests {
     #[test]
     fn export_tsv_keeps_a_preset_that_only_has_pins() {
         let squat = crate::presets::preset_exercise_id("スクワット").expect("プリセット");
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         set_pins(&mut db, squat, vec!["7".into()]);
 
-        let tsv = export_tsv(&db, jst());
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
         let col = pin_col(&r);
         let row = r[1..]
@@ -7636,11 +7798,11 @@ mod tests {
     #[test]
     fn tsv_round_trips_pins() {
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         set_pins(&mut db, bench, vec!["3".into(), "5".into(), "2".into()]);
-        let tsv = export_tsv(&db, jst());
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 
-        let mut fresh = crate::presets::seeded_db();
+        let mut fresh = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let incoming = parse_import(&tsv, &mut ids(), &fresh).expect("読み戻せる");
         merge_db(&mut fresh, incoming);
 
@@ -7656,7 +7818,7 @@ mod tests {
     #[test]
     fn tsv_round_trips_pins_for_a_custom_exercise() {
         let chest = crate::presets::preset_group_id("胸").expect("プリセット");
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         db.exercises.push(Exercise {
             id: ExerciseId::from_bits(0xD001),
             name: "ペックフライ".into(),
@@ -7665,9 +7827,9 @@ mod tests {
             archived: false,
             pins: vec!["4".into(), "12".into()],
         });
-        let tsv = export_tsv(&db, jst());
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 
-        let mut fresh = crate::presets::seeded_db();
+        let mut fresh = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let incoming = parse_import(&tsv, &mut ids(), &fresh).expect("読み戻せる");
         merge_db(&mut fresh, incoming);
 
@@ -7684,11 +7846,11 @@ mod tests {
     #[test]
     fn tsv_import_does_not_overwrite_local_pins() {
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
-        let mut theirs = crate::presets::seeded_db();
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         set_pins(&mut theirs, bench, vec!["9".into()]);
-        let tsv = export_tsv(&theirs, jst());
+        let tsv = export_tsv(&theirs, jst(), crate::i18n::Lang::Ja);
 
-        let mut mine = crate::presets::seeded_db();
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         set_pins(&mut mine, bench, vec!["1".into()]);
         let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
         merge_db(&mut mine, incoming);
@@ -7703,11 +7865,11 @@ mod tests {
     #[test]
     fn importing_the_same_tsv_twice_keeps_the_pins_unchanged() {
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         set_pins(&mut db, bench, vec!["3".into(), "5".into()]);
-        let tsv = export_tsv(&db, jst());
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 
-        let mut mine = crate::presets::seeded_db();
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         for _ in 0..2 {
             let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
             merge_db(&mut mine, incoming);

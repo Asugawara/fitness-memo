@@ -3,13 +3,15 @@
 - **状態**: 採用
 - **日付**: 2026-08-19
 - **カテゴリ**: ux
-- **関連**: [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（入口を共有する相手）, [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md)（スコープの対比）, [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [数値入力に `type="number"` を使わない](text-input-not-number.md), [表計算で開ける TSV で書き出す](../storage/tsv-export-for-spreadsheets.md), [取り込みは「足すだけ」に固定する](../storage/import-is-merge-only.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md)
+- **関連**: [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（入口を共有する相手）, [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md)（スコープの対比）, [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [数値入力に `type="number"` を使わない](text-input-not-number.md), [表計算で開ける TSV で書き出す](../storage/tsv-export-for-spreadsheets.md), [取り込みは「足すだけ」に固定する](../storage/import-is-merge-only.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（住み分けの相手）
 
 ## 背景
 
 ジムのマシンはシート高・バー位置・背もたれ角度をピンで固定する。**毎回同じ穴に合わせたい**のに、このアプリにはその番号を置く場所が無かった。1 台のマシンで複数のピンを合わせるので、1 種目に複数持てる必要がある。
 
 既にメモは 2 つある（[種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md)）が、**どちらもその日のもの**で日をまたいで残らない。3 つ目を同じ語・同じ場所に足すと、「どのスコープの話か」の読み分けが崩れる。
+
+> **補足（同日に採った [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md) との関係）**: あちらでコピー操作が種目メモを運ぶようになったので、「日をまたいで残らない」は厳密には「**コピーしたときだけ運ばれる**」になった。ただし運ばれた先は**その日のログに属する独立した文字列**で、貼り付いてはいない（直しても過去に遡らない）。ピンは 1 か所直せば全日に効く。**この ADR の決定は 1 つも変わっていない** — スコープの読み分けが要る、という背景がむしろ強まっている。数値で表せる設定はピン、自由記述はメモ。
 
 制約は [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md) が測ったものがそのまま効く。**カード内に 44px のタップ標的を新設できる場所が無い**（どこに作っても 44px × カード枚数だけ縦に純増し、5 種目で 220px）。さらにヘッダは `e2e/smoke.spec.mjs` が `.card-head button` を 0 件で固定していて、置いた瞬間に落ちる。
 

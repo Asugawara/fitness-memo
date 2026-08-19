@@ -241,7 +241,17 @@ fn write_log(
                 //     ないので、メモだけのログに時刻が入ると「その日に実施した」証拠を
                 //     持ってしまう（adr/data-model/at-optional-same-day-only.md）。
                 //     旧実装はセットが空なら削除枝に入っていたのでこの判定が要らなかった
-                if is_today && !log.sets.is_empty() {
+                //
+                //   ★ **セットが無くなったら時刻を落とす。** 押すだけでは足りない。
+                //     セットを打った（`at` が入った）あとに行を全部消すとメモだけのログが
+                //     残るので、**書いた時点の時刻が「実施した証拠」として居座る**。
+                //     `export_tsv` はセット無しのログにも「時刻」列を書くので、
+                //     やっていないトレーニングの実施時刻が書き出しに出る。
+                //     コピーがメモを運ぶようになって初めて届く経路になった
+                //     （adr/ux/copy-carries-the-notes.md）
+                if log.sets.is_empty() {
+                    log.at = None;
+                } else if is_today {
                     log.at = Some(now_ms());
                 }
             }
@@ -849,6 +859,14 @@ fn ExerciseCard(
     });
     // その日のその種目のメモ。
     let ex_note = RwSignal::new(note0);
+    // ★ 種目メモの入力欄。**開いているときの `value=` は初期値を 1 度読むだけ**で、
+    //   あの閉包が追跡するのは `note_open` だけ（開いている枝は `get_untracked`）。
+    //   つまり `copy_last` が signal を書いても**開いている入力欄は古いまま残り**、
+    //   次の 1 打鍵の `on:input` が DOM 側の古い値で上書きしてコピーしたメモを消す。
+    //   セット行は `copy_last` が新しいキーを振るので `<For>` が DOM ごと作り直し、
+    //   同じ問題が起きない — 種目メモだけがキーを持たないので取り残される。
+    //   閉じているあいだは薄字側が `ex_note.get()` を追跡しているので自動で追いつく
+    let ex_note_ref = NodeRef::<leptos::html::Input>::new();
 
     // 「+ セット」で足した行。この行の回数欄へフォーカスを移したら None に戻す。
     let focus_key: RwSignal<Option<u32>> = RwSignal::new(None);
@@ -993,9 +1011,9 @@ fn ExerciseCard(
                 key,
                 weight,
                 reps: String::new(),
-                // ★ メモはプリフィルしない。重量を引き継ぐのはそれが**次のセットの計画値**
-                //   だからで、メモは**そのセットで起きたことの観測値**。コピーすると
-                //   起きていない観測を捏造する（copy_day が `at` を持ち込まないのと同型）
+                // ★ メモはプリフィルしない。ここが作るのは**まだ起きていない次のセット**で、
+                //   重量はその計画値だが、書くべき観測はまだ存在しない。過去のログを再現する
+                //   「前回をコピー」とは操作が違う（adr/ux/copy-carries-the-notes.md の決定 2）
                 note: String::new(),
             })
         });
@@ -1039,6 +1057,16 @@ fn ExerciseCard(
         // ★ 新しいキーを振る。既存キーを再利用すると <For> が DOM を作り直さないため
         //   入力欄の value が古いまま残る
         let base = next_key.get_untracked();
+        // ★ 今日その行に打ってあるメモ。**位置で拾って残す。**
+        //   このボタンは「保存済みのセットが空か」で出るので、**回数の無い行に書いた
+        //   メモは保存されておらず、画面にだけある**（`commit` の `parse_reps` で落ちる）。
+        //   しかもその行には `note_orphan` が「回数を入れると保存されます」と出ていて、
+        //   打った文字が生きていることを約束している。数値は「前回どおりに流し込む」が
+        //   このボタンの目的そのものなので置き換えるが、メモは打ち直しの手が重く、
+        //   約束もしているので上書きしない（種目メモと同じ「既に書いてある場所には
+        //   書かない」を行単位に降ろしたもの。adr/ux/copy-carries-the-notes.md 決定 4）
+        let typed: Vec<String> =
+            rows.with_untracked(|rs| rs.iter().map(|r| r.note.clone()).collect());
         let filled: Vec<Row> = log
             .sets
             .iter()
@@ -1047,13 +1075,34 @@ fn ExerciseCard(
                 key: base + i as u32,
                 weight: fmt_weight(s.weight),
                 reps: s.reps.to_string(),
-                // ★ 前回のメモは持ち込まない。「肩に違和感」は前回の観測で今日の観測では
-                //   ない。core::copy_day（メニューの丸ごとコピー）と同じ規則
-                note: String::new(),
+                // ★ セットメモも運ぶ。core::copy_day / apply_routine と同じ規則
+                //   （adr/ux/copy-carries-the-notes.md）
+                note: match typed.get(i) {
+                    Some(mine) if !mine.trim().is_empty() => mine.clone(),
+                    _ => s.note.clone(),
+                },
             })
             .collect();
         next_key.set(base + filled.len() as u32 + 1);
         rows.set(filled);
+
+        // ★ 種目メモは**今日が空のときだけ**入れる。このボタンはセットが空なら出るので
+        //   「メモだけ書いたカード」でも押せる（show_copy はセットしか見ない）。上書きすると
+        //   今日書いたものが undo 無しで消え、adr/ux/copy-button-only-when-empty.md が
+        //   消したはずの「誤タップで入力済みを失う」が別の入口から戻る。
+        //   3 経路に共通の規則: **コピーは、既に何か書いてある場所には書かない**
+        //   （copy_day / apply_routine は seed_day の has_logs_on ガードで日ごと、
+        //   こちらはフィールド単位で同じことを言っている）
+        if !log.note.trim().is_empty() && ex_note.with_untracked(|n| n.trim().is_empty()) {
+            ex_note.set(log.note.clone());
+            // ★ メモ欄が開いていると `value=` は初期値のままなので DOM も直す。
+            //   ここを抜くと「画面は空・Db にはメモ」になり、次の 1 打鍵で消える
+            if let Some(el) = ex_note_ref.get_untracked() {
+                el.set_value(&log.note);
+            }
+        }
+
+        // ★ `ex_note.set` の**後**に呼ぶ。commit は `ex_note.get_untracked()` を読む
         commit();
     };
 
@@ -1744,6 +1793,7 @@ fn ExerciseCard(
                             <input
                                 type="text"
                                 value=ex_note.get_untracked()
+                                node_ref=ex_note_ref
                                 aria-label="この種目のメモ"
                                 data-testid="exercise-note"
                                 on:focusin=move |_| kb_focus(kb)

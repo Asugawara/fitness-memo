@@ -7,87 +7,192 @@
 //! 割り当ては部位ごとに 16 個ずつのブロック: 部位 N が `0xN0`、その種目が `0xN1..`。
 //! 上限は `0x64` なので予約領域（1024）に余裕で収まる。
 
+use crate::i18n::Lang;
 use crate::model::{Db, Exercise, ExerciseId, Group, GroupId};
+
+/// 部位名 / 種目名の日英。**初回投入でどちらか一方だけが `Db` に入る。**
+///
+/// ★ これは文言ではなく**データ**なので `i18n.rs` ではなくここに置く。投入されたら
+///   ユーザーが自由に改名できるただの名前になり、言語を切り替えても書き換わらない
+///   （adr/storage/preset-names-are-user-data-seeded-once.md）。
+#[derive(Clone, Copy)]
+pub struct Names {
+    pub ja: &'static str,
+    pub en: &'static str,
+}
+
+impl Names {
+    pub const fn get(self, lang: Lang) -> &'static str {
+        match lang {
+            Lang::Ja => self.ja,
+            Lang::En => self.en,
+        }
+    }
+
+    /// どちらかの言語の綴りと一致するか。**両方見るのが要点** — 片方しか見ないと、
+    /// 英語で初期化した端末が書き出した TSV を日本語の端末で取り込んだときに
+    /// 固定 ID へ寄らず、同じ種目が 2 本に割れる。
+    pub fn matches(self, name: &str) -> bool {
+        self.ja == name || self.en == name
+    }
+}
+
+const fn names(ja: &'static str, en: &'static str) -> Names {
+    Names { ja, en }
+}
 
 pub struct PresetGroup {
     pub id: GroupId,
-    pub name: &'static str,
+    pub name: Names,
     pub color: &'static str,
     /// `(固定 ID, 名前)`。ID は**二度と変えてはいけない** — 変えると既存の
     /// ユーザーの端末で同じ種目が 2 つになる。
-    pub exercises: &'static [(ExerciseId, &'static str)],
+    ///
+    /// ★ **名前は言語で変わるが ID は変わらない。** だから日本語で初期化した端末と
+    ///   英語で初期化した端末のデータを混ぜても「ベンチプレス」と "Bench Press" は
+    ///   1 本にまとまる（adr/data-model/random-ids-for-safe-merge.md の狙いそのもの）。
+    pub exercises: &'static [(ExerciseId, Names)],
 }
 
 /// 部位 6 種。`order` は宣言順。
 pub const PRESETS: &[PresetGroup] = &[
     PresetGroup {
         id: GroupId::from_bits(0x10),
-        name: "胸",
+        name: names("胸", "Chest"),
         color: "#e0524a",
         exercises: &[
-            (ExerciseId::from_bits(0x11), "ベンチプレス"),
-            (ExerciseId::from_bits(0x12), "ダンベルプレス"),
-            (ExerciseId::from_bits(0x13), "インクラインベンチプレス"),
-            (ExerciseId::from_bits(0x14), "チェストフライ"),
-            (ExerciseId::from_bits(0x15), "プッシュアップ"),
+            (
+                ExerciseId::from_bits(0x11),
+                names("ベンチプレス", "Bench Press"),
+            ),
+            (
+                ExerciseId::from_bits(0x12),
+                names("ダンベルプレス", "Dumbbell Press"),
+            ),
+            (
+                ExerciseId::from_bits(0x13),
+                names("インクラインベンチプレス", "Incline Bench Press"),
+            ),
+            (
+                ExerciseId::from_bits(0x14),
+                names("チェストフライ", "Chest Fly"),
+            ),
+            (
+                ExerciseId::from_bits(0x15),
+                names("プッシュアップ", "Push-Up"),
+            ),
         ],
     },
     PresetGroup {
         id: GroupId::from_bits(0x20),
-        name: "背中",
+        name: names("背中", "Back"),
         color: "#2f7fd1",
         exercises: &[
-            (ExerciseId::from_bits(0x21), "懸垂"),
-            (ExerciseId::from_bits(0x22), "ラットプルダウン"),
-            (ExerciseId::from_bits(0x23), "ベントオーバーロウ"),
-            (ExerciseId::from_bits(0x24), "シーテッドロウ"),
-            (ExerciseId::from_bits(0x25), "デッドリフト"),
+            (ExerciseId::from_bits(0x21), names("懸垂", "Pull-Up")),
+            (
+                ExerciseId::from_bits(0x22),
+                names("ラットプルダウン", "Lat Pulldown"),
+            ),
+            (
+                ExerciseId::from_bits(0x23),
+                names("ベントオーバーロウ", "Bent-Over Row"),
+            ),
+            (
+                ExerciseId::from_bits(0x24),
+                names("シーテッドロウ", "Seated Row"),
+            ),
+            (
+                ExerciseId::from_bits(0x25),
+                names("デッドリフト", "Deadlift"),
+            ),
         ],
     },
     PresetGroup {
         id: GroupId::from_bits(0x30),
-        name: "肩",
+        name: names("肩", "Shoulders"),
         color: "#e0912a",
         exercises: &[
-            (ExerciseId::from_bits(0x31), "ショルダープレス"),
-            (ExerciseId::from_bits(0x32), "サイドレイズ"),
-            (ExerciseId::from_bits(0x33), "フロントレイズ"),
-            (ExerciseId::from_bits(0x34), "リアレイズ"),
+            (
+                ExerciseId::from_bits(0x31),
+                names("ショルダープレス", "Shoulder Press"),
+            ),
+            (
+                ExerciseId::from_bits(0x32),
+                names("サイドレイズ", "Lateral Raise"),
+            ),
+            (
+                ExerciseId::from_bits(0x33),
+                names("フロントレイズ", "Front Raise"),
+            ),
+            (
+                ExerciseId::from_bits(0x34),
+                names("リアレイズ", "Rear Delt Raise"),
+            ),
         ],
     },
     PresetGroup {
         id: GroupId::from_bits(0x40),
-        name: "腕",
+        name: names("腕", "Arms"),
         color: "#7a56c9",
         exercises: &[
-            (ExerciseId::from_bits(0x41), "バーベルカール"),
-            (ExerciseId::from_bits(0x42), "ダンベルカール"),
-            (ExerciseId::from_bits(0x43), "トライセプスエクステンション"),
-            (ExerciseId::from_bits(0x44), "ケーブルプレスダウン"),
-            (ExerciseId::from_bits(0x45), "ディップス"),
+            (
+                ExerciseId::from_bits(0x41),
+                names("バーベルカール", "Barbell Curl"),
+            ),
+            (
+                ExerciseId::from_bits(0x42),
+                names("ダンベルカール", "Dumbbell Curl"),
+            ),
+            (
+                ExerciseId::from_bits(0x43),
+                names("トライセプスエクステンション", "Triceps Extension"),
+            ),
+            (
+                ExerciseId::from_bits(0x44),
+                names("ケーブルプレスダウン", "Cable Pushdown"),
+            ),
+            (ExerciseId::from_bits(0x45), names("ディップス", "Dips")),
         ],
     },
     PresetGroup {
         id: GroupId::from_bits(0x50),
-        name: "脚",
+        name: names("脚", "Legs"),
         color: "#2fa06a",
         exercises: &[
-            (ExerciseId::from_bits(0x51), "スクワット"),
-            (ExerciseId::from_bits(0x52), "レッグプレス"),
-            (ExerciseId::from_bits(0x53), "レッグエクステンション"),
-            (ExerciseId::from_bits(0x54), "レッグカール"),
-            (ExerciseId::from_bits(0x55), "カーフレイズ"),
+            (ExerciseId::from_bits(0x51), names("スクワット", "Squat")),
+            (
+                ExerciseId::from_bits(0x52),
+                names("レッグプレス", "Leg Press"),
+            ),
+            (
+                ExerciseId::from_bits(0x53),
+                names("レッグエクステンション", "Leg Extension"),
+            ),
+            (
+                ExerciseId::from_bits(0x54),
+                names("レッグカール", "Leg Curl"),
+            ),
+            (
+                ExerciseId::from_bits(0x55),
+                names("カーフレイズ", "Calf Raise"),
+            ),
         ],
     },
     PresetGroup {
         id: GroupId::from_bits(0x60),
-        name: "体幹",
+        name: names("体幹", "Core"),
         color: "#6b7280",
         exercises: &[
-            (ExerciseId::from_bits(0x61), "プランク"),
-            (ExerciseId::from_bits(0x62), "サイドプランク"),
-            (ExerciseId::from_bits(0x63), "クランチ"),
-            (ExerciseId::from_bits(0x64), "レッグレイズ"),
+            (ExerciseId::from_bits(0x61), names("プランク", "Plank")),
+            (
+                ExerciseId::from_bits(0x62),
+                names("サイドプランク", "Side Plank"),
+            ),
+            (ExerciseId::from_bits(0x63), names("クランチ", "Crunch")),
+            (
+                ExerciseId::from_bits(0x64),
+                names("レッグレイズ", "Leg Raise"),
+            ),
         ],
     },
 ];
@@ -100,14 +205,17 @@ pub const PRESETS: &[PresetGroup] = &[
 /// **同一 ID の種目が 2 つできて不変条件が壊れる**。改名は正当な操作なので、
 /// 名前が変わっていても ID が居れば触らない。
 ///
+/// ★ `lang` は**初回投入で使う綴りを選ぶだけ**。以後この関数が既存の名前を書き換える
+/// ことはない（判定が固定 ID なので、言語を変えて呼び直しても何も起きない）。
+///
 /// 採番は一切しない（プリセットの ID は定数）。
-pub fn seed(db: &mut Db) {
+pub fn seed(db: &mut Db, lang: Lang) {
     for preset in PRESETS {
         if db.group(preset.id).is_none() {
             let order = db.groups.len() as u32;
             db.groups.push(Group {
                 id: preset.id,
-                name: preset.name.to_string(),
+                name: preset.name.get(lang).to_string(),
                 color: preset.color.to_string(),
                 order,
             });
@@ -124,7 +232,7 @@ pub fn seed(db: &mut Db) {
                 .count() as u32;
             db.exercises.push(Exercise {
                 id: *id,
-                name: (*name).to_string(),
+                name: name.get(lang).to_string(),
                 group_id: preset.id,
                 order,
                 archived: false,
@@ -143,17 +251,21 @@ pub fn is_preset_exercise(id: ExerciseId) -> bool {
 }
 
 /// プリセット名 → 固定 ID。移行で「名前が一致する種目を固定 ID に寄せる」ときに引く。
+///
+/// ★ **日英どちらの綴りでも引ける。** 英語で初期化した端末が書き出した TSV には
+/// "Bench Press" が入る。片方しか見ないと、日本語の端末で取り込んだときに固定 ID へ
+/// 寄らず**同じ種目が 2 本に割れる**。
 pub fn preset_exercise_id(name: &str) -> Option<ExerciseId> {
     PRESETS
         .iter()
         .flat_map(|p| p.exercises)
-        .find(|(_, preset_name)| *preset_name == name)
+        .find(|(_, preset_name)| preset_name.matches(name))
         .map(|(id, _)| *id)
 }
 
-/// プリセット名 → 固定 ID（部位）。
+/// プリセット名 → 固定 ID（部位）。[`preset_exercise_id`] と同じく日英どちらでも引ける。
 pub fn preset_group_id(name: &str) -> Option<GroupId> {
-    PRESETS.iter().find(|p| p.name == name).map(|p| p.id)
+    PRESETS.iter().find(|p| p.name.matches(name)).map(|p| p.id)
 }
 
 /// 新しい部位に振る色の候補。**プリセット 6 部位の色そのもの。**
@@ -166,9 +278,9 @@ pub const COLOR_CHOICES: [&str; 6] = [
 ];
 
 /// 初回起動 / 復元失敗時に渡す、プリセット入りの `Db`。
-pub fn seeded_db() -> Db {
+pub fn seeded_db(lang: Lang) -> Db {
     let mut db = Db::default();
-    seed(&mut db);
+    seed(&mut db, lang);
     db
 }
 
@@ -178,7 +290,7 @@ mod tests {
 
     #[test]
     fn seeded_db_has_six_groups_and_all_ids_are_unique() {
-        let db = seeded_db();
+        let db = seeded_db(Lang::Ja);
 
         assert_eq!(db.groups.len(), 6);
         let names: Vec<&str> = db.groups.iter().map(|g| g.name.as_str()).collect();
@@ -225,7 +337,7 @@ mod tests {
     fn preset_names_are_unique_across_groups() {
         // seed の同名スキップは**部位をまたいで全体で**名前を見るので、
         // プリセット定義側に同名があると片方が投入されない
-        let db = seeded_db();
+        let db = seeded_db(Lang::Ja);
         let mut names: Vec<&str> = db.exercises.iter().map(|e| e.name.as_str()).collect();
         let total = names.len();
         names.sort_unstable();
@@ -235,10 +347,10 @@ mod tests {
 
     #[test]
     fn seed_is_idempotent() {
-        let mut db = seeded_db();
+        let mut db = seeded_db(Lang::Ja);
         let before = db.clone();
 
-        seed(&mut db);
+        seed(&mut db, Lang::Ja);
 
         assert_eq!(db, before, "2 回目の seed は何も変えない");
     }
@@ -247,7 +359,7 @@ mod tests {
     /// 改名済みプリセットに seed したとき**同じ ID の種目が 2 つできる**。
     #[test]
     fn seed_does_not_resurrect_a_renamed_preset() {
-        let mut db = seeded_db();
+        let mut db = seeded_db(Lang::Ja);
         let bench = db
             .exercises
             .iter_mut()
@@ -257,7 +369,7 @@ mod tests {
         bench.name = "ベンチプレス（スミス）".to_string();
         let total = db.exercises.len();
 
-        seed(&mut db);
+        seed(&mut db, Lang::Ja);
 
         assert_eq!(db.exercises.len(), total, "改名しても復活させない");
         assert_eq!(
@@ -276,8 +388,8 @@ mod tests {
     /// これが無いとマージが名前突合に落ちる（= 改名で履歴が 2 本に割れる）。
     #[test]
     fn independently_seeded_devices_agree_on_every_preset_id() {
-        let a = seeded_db();
-        let b = seeded_db();
+        let a = seeded_db(Lang::Ja);
+        let b = seeded_db(Lang::Ja);
 
         let ids = |db: &Db| -> Vec<u64> {
             let mut v: Vec<u64> = db
@@ -294,7 +406,7 @@ mod tests {
 
     #[test]
     fn seed_refills_only_the_missing_exercises() {
-        let mut db = seeded_db();
+        let mut db = seeded_db(Lang::Ja);
         let removed = db
             .exercises
             .iter()
@@ -303,7 +415,7 @@ mod tests {
         db.exercises.remove(removed);
         let total = db.exercises.len();
 
-        seed(&mut db);
+        seed(&mut db, Lang::Ja);
 
         assert_eq!(db.exercises.len(), total + 1);
         let refilled = db
@@ -321,7 +433,7 @@ mod tests {
 
     #[test]
     fn seed_does_not_duplicate_an_exercise_moved_to_another_group() {
-        let mut db = seeded_db();
+        let mut db = seeded_db(Lang::Ja);
         let shoulder = db
             .groups
             .iter()
@@ -336,12 +448,100 @@ mod tests {
         bench.group_id = shoulder;
         let total = db.exercises.len();
 
-        seed(&mut db);
+        seed(&mut db, Lang::Ja);
 
         assert_eq!(
             db.exercises.len(),
             total,
             "部位をまたいだ同名の複製が起きない"
         );
+    }
+
+    /// 34 個 × 2 言語 = 68 個の名前が全部一意。**`preset_*_id` が曖昧にならない保証。**
+    ///
+    /// ★ 片方の言語で衝突していなくても、日英を跨いで同じ綴りがあれば
+    /// `Names::matches` が 2 つのプリセットに当たる。両方まとめて見る必要がある。
+    #[test]
+    fn preset_names_are_unique_across_both_languages() {
+        let mut all: Vec<&str> = Vec::new();
+        for p in PRESETS {
+            all.push(p.name.ja);
+            all.push(p.name.en);
+            for (_, n) in p.exercises {
+                all.push(n.ja);
+                all.push(n.en);
+            }
+        }
+        assert_eq!(all.len(), (6 + 28) * 2);
+
+        let mut sorted = all.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            all.len(),
+            "プリセット名が日英を跨いで重複している"
+        );
+    }
+
+    /// 言語を変えても **ID 集合は完全に同じ**。ここが崩れると、日本語で初期化した端末と
+    /// 英語で初期化した端末のデータをマージしたときに種目が二重化する。
+    #[test]
+    fn preset_ids_are_identical_across_languages() {
+        let ja = seeded_db(Lang::Ja);
+        let en = seeded_db(Lang::En);
+
+        let ids = |db: &Db| {
+            let mut g: Vec<_> = db.groups.iter().map(|g| g.id).collect();
+            let mut e: Vec<_> = db.exercises.iter().map(|e| e.id).collect();
+            g.sort_unstable();
+            e.sort_unstable();
+            (g, e)
+        };
+        assert_eq!(ids(&ja), ids(&en));
+
+        // 名前のほうは全部違う（同じ表を 2 回投入しただけ、ではないことの確認）
+        let names = |db: &Db| db.groups.iter().map(|g| g.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&ja), ["胸", "背中", "肩", "腕", "脚", "体幹"]);
+        assert_eq!(
+            names(&en),
+            ["Chest", "Back", "Shoulders", "Arms", "Legs", "Core"]
+        );
+    }
+
+    /// 英語の綴りでも日本語の綴りでも**同じ固定 ID**に寄る。
+    #[test]
+    fn either_language_spelling_resolves_to_the_same_fixed_id() {
+        assert_eq!(
+            preset_exercise_id("Bench Press"),
+            preset_exercise_id("ベンチプレス")
+        );
+        assert_eq!(
+            preset_exercise_id("ベンチプレス"),
+            Some(ExerciseId::from_bits(0x11))
+        );
+        assert_eq!(preset_group_id("Chest"), preset_group_id("胸"));
+        assert_eq!(preset_group_id("胸"), Some(GroupId::from_bits(0x10)));
+
+        // 知らない名前はどちらの言語でも None
+        assert_eq!(preset_exercise_id("Bench press"), None); // 大小は厳密一致
+        assert_eq!(preset_exercise_id("マイ種目"), None);
+    }
+
+    /// 言語を変えて呼び直しても**何も起きない**（判定が固定 ID なので）。
+    ///
+    /// ★ ここが崩れると、言語を切り替えるたびに 28 種目が英語名で復活して
+    /// 一覧が倍になる。
+    #[test]
+    fn seeding_again_in_another_language_changes_nothing() {
+        let mut db = seeded_db(Lang::Ja);
+        let before = db.exercises.len();
+
+        seed(&mut db, Lang::En);
+
+        assert_eq!(db.exercises.len(), before);
+        assert_eq!(db.groups.len(), 6);
+        // 名前は最初に入れた言語のまま
+        assert_eq!(db.groups[0].name, "胸");
     }
 }

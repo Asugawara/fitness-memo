@@ -21,7 +21,7 @@ use leptos::prelude::*;
 
 use crate::chart_layout::{GRID_Y, X0, Y0, Y1, layout, n};
 
-use super::{fmt_date, fmt_metric, fmt_weight};
+use super::{cur_lang, fmt_date, fmt_metric, fmt_weight};
 
 /// "8/8"
 fn fmt_md(d: NaiveDate) -> String {
@@ -107,7 +107,7 @@ pub fn Chart(
                     .first()
                     .zip(l.x_labels.last())
                     .map(|((_, from, _), (_, to, _))| {
-                        format!("{} から {} まで", fmt_date(*from), fmt_date(*to))
+                        format!("{} から {} まで", fmt_date(*from, cur_lang()), fmt_date(*to, cur_lang()))
                     })
                     .unwrap_or_default();
                 let metric_part = l
@@ -371,7 +371,7 @@ pub fn Chart(
                             });
                         view! {
                             <p class="chart-readout" data-testid="chart-readout">
-                                <span class="muted">{fmt_date(b.date)}</span>
+                                <span class="muted">{fmt_date(b.date, cur_lang())}</span>
                                 <span class="rd-values">{metric} {weight}</span>
                             </p>
                         }

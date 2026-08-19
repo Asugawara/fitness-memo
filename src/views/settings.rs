@@ -25,6 +25,7 @@
 
 use leptos::prelude::*;
 
+use crate::i18n::Lang;
 use crate::model::{Db, Exercise, ExerciseId, Group, GroupId, RoutineId};
 use crate::storage;
 
@@ -32,8 +33,8 @@ use super::help::InstallHelpLink;
 use super::icon::{self, icon};
 use super::routine::{RoutineEditor, routine_exercise_names};
 use super::{
-    SettingsPage, Sheet, kb_blur, kb_focus, scroll_into_view_if_needed, use_db, use_kb,
-    use_open_group, use_settings_page,
+    SettingsPage, Sheet, kb_blur, kb_focus, scroll_into_view_if_needed, t, use_db, use_kb,
+    use_lang, use_open_group, use_settings_page,
 };
 
 /// 部位を追加するときの既定色。プリセットの 6 色を順に回す。
@@ -249,7 +250,7 @@ fn section_row(
 fn back_head(title: &'static str, back: impl Fn() + 'static) -> impl IntoView {
     view! {
         <header class="settings-head">
-            <button class="icon-btn" aria-label="設定へ戻る" data-testid="settings-back"
+            <button class="icon-btn" aria-label=t().settings.back data-testid="settings-back"
                 on:click=move |_| back()>
                 {icon(icon::CHEVRON_LEFT)}
             </button>
@@ -281,6 +282,10 @@ fn opt_button(
 
 #[component]
 pub fn Settings() -> impl IntoView {
+    // ★ 文言は本体の先頭で 1 回だけ引く（`views::t` の doc を参照）。
+    //   言語シグナルは購読しない — 切り替えの反映は `App` が画面ごと作り直して起こす
+    let t = t();
+    let lang = use_lang();
     let db = use_db();
     let editor: RwSignal<Option<Editor>> = RwSignal::new(None);
     let backup_open = RwSignal::new(false);
@@ -334,14 +339,14 @@ pub fn Settings() -> impl IntoView {
                 SettingsPage::Root => {
                     view! {
                         <header class="settings-head">
-                            <h1>"設定"</h1>
+                            <h1>{t.settings.title}</h1>
                         </header>
 
                         <div class="rows" data-testid="settings-rows">
                             // ★ 先頭に置く。データを失う前に見つけてもらう必要があるので、
                             //   ここだけは他の節より上（旧レイアウトの sticky と同じ意図）
                             {section_row(
-                                "エクスポート / インポート",
+                                t.settings.row_backup,
                                 None,
                                 "open-backup",
                                 move || {
@@ -350,13 +355,13 @@ pub fn Settings() -> impl IntoView {
                                 },
                             )}
                             {section_row(
-                                "トレーニングメニュー",
+                                t.settings.row_routines,
                                 Some(Signal::derive(move || routine_ids.get().len().to_string())),
                                 "settings-row-routines",
                                 move || go(SettingsPage::Routines),
                             )}
                             {section_row(
-                                "種目",
+                                t.settings.row_exercises,
                                 Some(
                                     Signal::derive(move || {
                                         db.with(|d| d.exercises.iter().filter(|e| !e.archived).count())
@@ -368,7 +373,66 @@ pub fn Settings() -> impl IntoView {
                             )}
                             // 手順シートを開くだけなので、節ではなく行として並べる
                             <InstallHelpLink />
+                            // ★ 末尾に置く。先頭はデータを失う前に見つけてもらう必要がある
+                            //   エクスポート / インポートで固定されているし、言語は
+                            //   一生に一度の操作なので探しに来る頻度が最も低い。
+                            //   ★ 右端は件数ではなく**現在値**（iOS の設定アプリと同じ形）。
+                            //     表記は必ず endonym — 「Japanese」と英語で書くと、
+                            //     英語を読めない人が自分の言語を選べない
+                            {section_row(
+                                t.settings.row_language,
+                                Some(Signal::derive(move || lang.get().endonym().to_string())),
+                                "settings-row-language",
+                                move || go(SettingsPage::Language),
+                            )}
                         </div>
+                    }
+                        .into_any()
+                }
+                SettingsPage::Language => {
+                    // ★ 同値ガード。`set` は同値でも購読者へ通知するので、素で書くと
+                    //   選択済みの言語を押すたびに画面が丸ごと作り直される
+                    //   （`DateCtx::open` / `TabCtx::switch` と同じ規則）
+                    let pick = move |l: Lang| {
+                        if lang.get_untracked() == l {
+                            return;
+                        }
+                        storage::save_lang(l);
+                        lang.set(l);
+                    };
+                    view! {
+                        {back_head(t.settings.row_language, move || go(SettingsPage::Root))}
+
+                        // ★ `.segmented` は推移タブの指標 / 期間と同じ既存部品。
+                        //   新しい CSS もアイコンも足さずに「2 択のうち今どちらか」が絵に出る
+                        <div
+                            class="segmented"
+                            role="group"
+                            aria-label=t.settings.row_language
+                            data-testid="lang-select"
+                        >
+                            {Lang::CHOICES
+                                .into_iter()
+                                .map(|(l, endonym)| {
+                                    view! {
+                                        <button
+                                            class="seg-btn"
+                                            class:active=move || lang.get() == l
+                                            aria-pressed=move || (lang.get() == l).to_string()
+                                            data-testid="lang-btn"
+                                            data-lang=l.tag()
+                                            on:click=move |_| pick(l)
+                                        >
+                                            {endonym}
+                                        </button>
+                                    }
+                                })
+                                .collect::<Vec<_>>()}
+                        </div>
+
+                        <p class="settings-note muted" data-testid="lang-note">
+                            {t.settings.language_note}
+                        </p>
                     }
                         .into_any()
                 }

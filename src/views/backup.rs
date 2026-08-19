@@ -33,7 +33,7 @@ use crate::model::Db;
 use crate::{storage, transfer};
 
 use super::icon::{self, icon};
-use super::{Sheet, use_db};
+use super::{Sheet, cur_lang, use_db};
 
 /// 確認待ちの取り込み。**マージ済みの結果**を持つ。
 #[derive(Clone)]
@@ -175,7 +175,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         //   `chrono::Local` を触るのはこの層の仕事で、`core::export_tsv` は
         //   オフセットを引数で受けて実行環境非依存を保っている
         let now = chrono::Local::now();
-        let tsv = db.with_untracked(|d| core::export_tsv(d, *now.offset()));
+        let tsv = db.with_untracked(|d| core::export_tsv(d, *now.offset(), cur_lang()));
         let name = core::export_filename(now.naive_local());
         copy_rescue.set(false);
         // ★ 「もう一度押すと実行します」の警告文をこの後 note が上書きするので、
@@ -225,7 +225,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
     let do_copy = move |_| {
         confirm_undo.set(false);
         let now = chrono::Local::now();
-        let tsv = db.with_untracked(|d| core::export_tsv(d, *now.offset()));
+        let tsv = db.with_untracked(|d| core::export_tsv(d, *now.offset(), cur_lang()));
         transfer::copy_text(&tsv, move |ok| {
             note.set(Some(if ok {
                 "コピーしました。メモや自分宛メールに貼り付けて保存してください".into()
@@ -266,7 +266,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
             }
             Err(e) => {
                 pending.set(None);
-                note.set(Some(e.message()));
+                note.set(Some(e.message(cur_lang())));
                 confirm_undo.set(false);
             }
         }

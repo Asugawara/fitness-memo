@@ -40,6 +40,13 @@ export default defineConfig({
   use: {
     baseURL: `http://localhost:${PORT}${BASE}`,
     timezoneId: TZ,
+    // ★ **ブラウザの言語を固定する。** Playwright の既定は en-US で、アプリは
+    //   navigator.language が ja 以外なら英語 UI + 英語プリセットで起動する
+    //   （adr/ux/language-follows-the-browser-then-the-setting.md）。固定しないと、
+    //   既存 spec の日本語の期待値と seedPastLogs の「'ベンチプレス' を名前で引く」が
+    //   一斉に落ちる。timezoneId と同じ「揃えないと意味が変わる」種類の設定。
+    //   英語 UI は e2e/i18n.spec.mjs が test.use で個別に切り替えて見る
+    locale: 'ja-JP',
   },
   // dist の内容は static-server.mjs がリクエストごとに読むので、古いビルドを掴んだまま
   // 使い回されないよう毎回起動する

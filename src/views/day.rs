@@ -25,8 +25,8 @@ use super::drag::{
 };
 use super::icon::{self, icon};
 use super::{
-    Sheet, fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms, parse_reps,
-    parse_weight, scroll_to_id, use_dates, use_db, use_kb,
+    Sheet, cur_lang, fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms,
+    parse_reps, parse_weight, scroll_to_id, use_dates, use_db, use_kb,
 };
 
 /// 選択日に並べているカード 1 枚。
@@ -403,7 +403,12 @@ pub fn DayEditor() -> impl IntoView {
                 .collect(),
             days: core::recent_menus(d, before, MENU_CANDIDATES)
                 .into_iter()
-                .map(|c| (c.date, MenuRow::build(d, fmt_date(c.date), &c.exercises)))
+                .map(|c| {
+                    (
+                        c.date,
+                        MenuRow::build(d, fmt_date(c.date, cur_lang()), &c.exercises),
+                    )
+                })
                 .collect(),
         })
     });
@@ -462,7 +467,7 @@ pub fn DayEditor() -> impl IntoView {
                         "最後から "
                         <b data-testid="elapsed">
                             {move || {
-                                elapsed.get().map_or_else(|| "—".to_string(), core::humanize)
+                                elapsed.get().map_or_else(|| "—".to_string(), |e| core::humanize(e, cur_lang()))
                             }}
                         </b>
                     </span>
@@ -473,7 +478,7 @@ pub fn DayEditor() -> impl IntoView {
                                 .into_iter()
                                 .map(|(name, e)| {
                                     let label = e
-                                        .map_or_else(|| "—".to_string(), core::short_elapsed);
+                                        .map_or_else(|| "—".to_string(), |e| core::short_elapsed(e, cur_lang()));
                                     view! {
                                         <span
                                             class="chip"
@@ -494,7 +499,7 @@ pub fn DayEditor() -> impl IntoView {
     // ★ h1 ではなく h2。記録タブは 1 画面にカレンダーと選択日の入力欄が縦に並ぶので
     // （adr/ux/record-tab-calendar-with-day-editor.md）、h1 は上のカレンダーの月見出しが持つ。両方を h1 にすると
     // 見出しの階層が 1 画面に 2 本立ち、支援技術のアウトラインで前後関係が読めなくなる
-    <h2 data-testid="today-date">{move || fmt_date(dates.selected.get())}</h2>
+    <h2 data-testid="today-date">{move || fmt_date(dates.selected.get(), cur_lang())}</h2>
                     {move || {
                         if dates.is_past_edit() {
                             view! {
@@ -519,7 +524,7 @@ pub fn DayEditor() -> impl IntoView {
                         .then(|| {
                             view! {
                                 <p class="past-banner" data-testid="past-banner">
-                                    {move || format!("{} を編集中", fmt_date(dates.selected.get()))}
+                                    {move || format!("{} を編集中", fmt_date(dates.selected.get(), cur_lang()))}
                                 </p>
                             }
                         })
@@ -1330,7 +1335,7 @@ fn ExerciseCard(
                     None => view! { <span class="muted" data-testid="last-log">"前回 —"</span> }.into_any(),
                     Some((date, log)) => {
                         let days = (dates.selected.get() - date).num_days();
-                        let when = core::humanize_days(days);
+                        let when = core::humanize_days(days, cur_lang());
                         let sets = log.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  ");
                         let metric = fmt_metric(core::log_value(Metric::Volume, &log));
                         view! {

@@ -8,7 +8,7 @@ use crate::core::Metric;
 use crate::model::{Db, ExerciseId, GroupId};
 
 use super::chart::Chart;
-use super::{fmt_date, fmt_metric, fmt_set, use_dates, use_db};
+use super::{cur_lang, fmt_date, fmt_metric, fmt_set, use_dates, use_db};
 
 /// 記録テーブルの表示上限。超えた分は件数を明示して省く（黙って切らない）。
 const MAX_ROWS: usize = 100;
@@ -204,7 +204,7 @@ pub fn Progress() -> impl IntoView {
 
     // ★ 単位は選んだ指標だけで決まる（対象種目では決まらない）。
     //   対象を切り替えても軸の意味が変わらないのが、旧 Kind 方式との違い
-    let unit = Memo::new(move |_| metric.get().unit().to_string());
+    let unit = Memo::new(move |_| metric.get().unit(cur_lang()).to_string());
 
     let series = Memo::new(move |_| {
         let Some(t) = target.get() else {
@@ -273,7 +273,7 @@ pub fn Progress() -> impl IntoView {
         let m = metric.get();
         db.with(|d| {
             let (from, to) = bounds(period, today, earliest_session(d));
-            let unit = m.unit();
+            let unit = m.unit(cur_lang());
             let show = |v: f64| {
                 let n = fmt_metric(v);
                 if unit.is_empty() {
@@ -429,7 +429,7 @@ pub fn Progress() -> impl IntoView {
                 // ★ 指標は種目の属性ではなく画面の表示設定なので、対象と並べてここに置く。
                 //   単位もこの選択だけで決まる（種目を切り替えても軸の意味が変わらない）
                 <div class="segmented" role="group" aria-label="指標" data-testid="metric-select">
-                    {Metric::CHOICES
+                    {Metric::choices(cur_lang())
                         .into_iter()
                         .map(|(m, label)| metric_button(m, label))
                         .collect::<Vec<_>>()}
@@ -537,7 +537,7 @@ pub fn Progress() -> impl IntoView {
                                 .map(|(date, detail, metric)| {
                                     view! {
                                         <tr data-testid="record-row">
-                                            <td class="rec-date">{fmt_date(date)}</td>
+                                            <td class="rec-date">{fmt_date(date, cur_lang())}</td>
                                             <td class="rec-detail">{detail}</td>
                                             <td class="rec-metric">{metric}</td>
                                         </tr>

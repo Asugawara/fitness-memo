@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{Datelike, NaiveDate, TimeDelta};
 
+use crate::i18n::Lang;
 use crate::model::{
     Db, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, MAX_PIN_LEN, MAX_PINS, Routine,
     RoutineId, SCHEMA, Session, SetEntry,
@@ -44,18 +45,26 @@ pub enum Metric {
 }
 
 impl Metric {
-    pub const CHOICES: [(Metric, &'static str); 3] = [
-        (Metric::Volume, "ボリューム"),
-        (Metric::Sets, "セット数"),
-        (Metric::Reps, "回数"),
-    ];
+    /// 推移タブの指標セレクタに出す 3 択。
+    ///
+    /// ★ かつて `const CHOICES` だった。文言が言語で変わるので関数にしてある
+    ///   （並びは不変 — 期間セレクタと同じく「軽い順」に並べる）。
+    pub fn choices(lang: Lang) -> [(Metric, &'static str); 3] {
+        let c = &lang.strings().core;
+        [
+            (Metric::Volume, c.metric_volume),
+            (Metric::Sets, c.metric_sets),
+            (Metric::Reps, c.metric_reps),
+        ]
+    }
 
     /// 表示に添える単位。ボリュームは重量と回数の合成量なので単位を持たない。
-    pub fn unit(self) -> &'static str {
+    pub fn unit(self, lang: Lang) -> &'static str {
+        let c = &lang.strings().core;
         match self {
             Metric::Volume => "",
-            Metric::Sets => "セット",
-            Metric::Reps => "回",
+            Metric::Sets => c.unit_sets,
+            Metric::Reps => c.unit_reps,
         }
     }
 }
@@ -958,11 +967,11 @@ pub fn elapsed_by_group(db: &Db, now_ms: i64, today: NaiveDate) -> HashMap<Group
 }
 
 /// 日粒度の文言。「今日 / 昨日 / N日前」。
-pub fn humanize_days(days: i64) -> String {
+pub fn humanize_days(days: i64, lang: Lang) -> String {
     match days.max(0) {
-        0 => "今日".to_string(),
-        1 => "昨日".to_string(),
-        n => format!("{n}日前"),
+        0 => lang.strings().core.today.to_string(),
+        1 => lang.strings().core.yesterday.to_string(),
+        n => lang.days_ago(n),
     }
 }
 
@@ -970,29 +979,29 @@ pub fn humanize_days(days: i64) -> String {
 ///
 /// ★ 「2日5時間」形式は廃止した。日数部分が経過ミリ秒 / 24h のローリング日数だったため、
 ///   チップ（日粒度）とヒーロー（時刻粒度）が違う日を指すことがあった（adr/data-model/elapsed-in-local-calendar-days.md）。
-pub fn humanize(e: Elapsed) -> String {
+pub fn humanize(e: Elapsed, lang: Lang) -> String {
     if e.days > 0 {
-        return humanize_days(e.days);
+        return humanize_days(e.days, lang);
     }
     // 同じ暦日。`at` があるときだけ時刻粒度まで出せる
     let Some(ms) = e.ms else {
-        return humanize_days(0);
+        return humanize_days(0, lang);
     };
     let minutes = ms / 60_000;
     if minutes < 1 {
-        return "たった今".to_string();
+        return lang.strings().core.just_now.to_string();
     }
     if minutes < 60 {
-        return format!("{minutes}分");
+        return lang.minutes_ago(minutes);
     }
     let hours = minutes / 60;
     // ★ 同じ暦日なのに 24 時間以上 = `at` と日付キーが矛盾している（壊れたバックアップの
     //   取り込み、タイムゾーン移動、copy_day の `at` 漏れの退行）。日付キーを勝たせる。
     //   ここが無いと「336時間」のような表示が出る
     if hours < 24 {
-        format!("{hours}時間")
+        lang.hours_ago(hours)
     } else {
-        humanize_days(0)
+        humanize_days(0, lang)
     }
 }
 
@@ -1001,9 +1010,11 @@ pub fn humanize(e: Elapsed) -> String {
 /// ★ `views` ではなくここに置く。元は `views/mod.rs` にあったが、そこは wasm32 の
 ///   cfg gate の内側で `cargo test` が一度も触れず、`ms / 86_400_000` というバグが
 ///   誰にも検出されないまま残っていた（adr/architecture/chart-layout-as-a-testable-module.md と同じ理由でロジックを core に置く）。
-pub fn short_elapsed(e: Elapsed) -> String {
+pub fn short_elapsed(e: Elapsed, lang: Lang) -> String {
     match e.days() {
-        0 => "今日".to_string(),
+        0 => lang.strings().core.today.to_string(),
+        // ★ "3d" は両言語で同じ。部位チップは幅が数十 px しかないので、
+        //   英語でも "3 days" には広げない
         d => format!("{d}d"),
     }
 }
@@ -1410,7 +1421,9 @@ fn pin_presets(
         let matched: Vec<u32> = old
             .groups
             .iter()
-            .filter(|g| g.name == preset.name)
+            // ★ 日英どちらの綴りでも寄せる。v1/v2 は日本語しか持たないが、規則を
+            //   1 本にしておく（`presets::Names::matches` の doc を参照）
+            .filter(|g| preset.name.matches(&g.name))
             .map(|g| g.id)
             .collect();
         if let [only] = matched[..] {
@@ -1421,7 +1434,7 @@ fn pin_presets(
             let matched: Vec<u32> = old
                 .exercises
                 .iter()
-                .filter(|e| e.name == *preset_name)
+                .filter(|e| preset_name.matches(&e.name))
                 .map(|e| e.id)
                 .collect();
             if let [only] = matched[..] {
@@ -1524,8 +1537,9 @@ pub fn export_filename(now: chrono::NaiveDateTime) -> String {
 /// 名前だけ、MIME だけを変えても意味が無い（adr/storage/share-sheet-over-download.md）。
 pub const TSV_MIME: &str = "text/tab-separated-values";
 
-/// 見出し行。**この並びが外部仕様**なので、テストがバイト一致で固定している。
-const TSV_HEADER: [&str; 13] = [
+/// 見出し行（日本語）。**この並びと綴りが外部仕様**なので、テストがバイト一致で
+/// 固定している。**1 文字も変えてはいけない** — 過去に書き出したファイルが読めなくなる。
+const TSV_HEADER_JA: [&str; 13] = [
     "日付",
     "部位",
     "種目",
@@ -1545,6 +1559,46 @@ const TSV_HEADER: [&str; 13] = [
     //   1 要素が空白を含まないことは `normalize_exercises` が保証する
     "ピン",
 ];
+
+/// 見出し行（英語）。位置と意味は [`TSV_HEADER_JA`] と 1:1。
+///
+/// ★ TSV は版番号を持てないので、**この綴りも足した時点で永久の外部仕様**になる
+/// （adr/storage/tsv-header-follows-the-ui-language.md）。日本語版と同じ強度で
+/// バイト一致テストが固定している。
+const TSV_HEADER_EN: [&str; 13] = [
+    "Date",
+    "Muscle group",
+    "Exercise",
+    "Set",
+    "Weight kg",
+    "Reps",
+    "Body weight kg",
+    "Set note",
+    "Exercise note",
+    "Day note",
+    "Time",
+    "Routine",
+    "Pins",
+];
+
+/// 書き出しに使う見出し。**UI の言語に従う。**
+///
+/// ★ 書き出しの存在意義は「スプレッドシートで開いて読めること」
+/// （adr/storage/tsv-export-for-spreadsheets.md）で、読めない言語の列名はその意義を
+/// 失わせる。取り込み側は [`is_known_header_cell`] のとおり日英どちらも受けるので、
+/// 言語を切り替えても過去のファイルは読める。
+pub fn tsv_header_row(lang: Lang) -> [&'static str; 13] {
+    match lang {
+        Lang::Ja => TSV_HEADER_JA,
+        Lang::En => TSV_HEADER_EN,
+    }
+}
+
+/// 知っている見出しセルか。`NotDb`（うちのファイルではない）と `NoHeader`
+/// （うちのファイルだが壊れている）の切り分けに使う。
+fn is_known_header_cell(cell: &str) -> bool {
+    TSV_HEADER_JA.contains(&cell) || TSV_HEADER_EN.contains(&cell)
+}
 
 /// 1 セルに落とす。**タブと改行を半角空白に潰す。**
 ///
@@ -1606,9 +1660,9 @@ fn tsv_time(at: Option<i64>, date: NaiveDate, tz: chrono::FixedOffset) -> String
 /// - **末尾に「種目マスタ行」**（日付が空の行）。一度も記録していない自作種目と、
 ///   種目を持たない部位を黙って失わないため。手つかずのプリセットは書かない
 ///   （新規インストールに必ず同じ固定 ID で居るので、書かなくても失われない）
-pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
+pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
     let mut out = String::new();
-    push_row(&mut out, TSV_HEADER);
+    push_row(&mut out, tsv_header_row(lang));
 
     // 記録とメニューに出てきた種目。末尾のマスタ行から除くのに使う
     // （どちらの行も部位と種目名を書くので、マスタ行を重ねる必要が無い）
@@ -1817,26 +1871,16 @@ pub enum ImportError {
 }
 
 impl ImportError {
-    pub fn message(&self) -> String {
+    pub fn message(&self, lang: Lang) -> String {
+        let c = &lang.strings().core;
         match self {
-            Self::Empty => "中身がありません".to_string(),
-            Self::NotJson => {
-                "データが途中で切れているようです（全文がコピーできているか確認してください）"
-                    .to_string()
-            }
-            Self::NotDb => "このアプリの記録ではないようです".to_string(),
-            Self::NoHeader => {
-                "1 行目の見出しが読めません（書き出したファイルをそのまま選んでください）"
-                    .to_string()
-            }
-            Self::NoRecords => "取り込める記録が入っていません".to_string(),
-            Self::Unreadable => {
-                "日付や回数の書き方が変わっていて読めませんでした（日付は 2026-08-01、回数は 10 の形で書いてください）"
-                    .to_string()
-            }
-            Self::Unsupported(v) => {
-                format!("新しい版（形式 {v}）で作られた記録です。アプリを更新してください")
-            }
+            Self::Empty => c.err_empty.to_string(),
+            Self::NotJson => c.err_not_json.to_string(),
+            Self::NotDb => c.err_not_db.to_string(),
+            Self::NoHeader => c.err_no_header.to_string(),
+            Self::NoRecords => c.err_no_records.to_string(),
+            Self::Unreadable => c.err_unreadable.to_string(),
+            Self::Unsupported(v) => lang.err_unsupported(*v),
         }
     }
 }
@@ -1935,20 +1979,25 @@ struct TsvCols {
 fn tsv_header(line: &str) -> Option<TsvCols> {
     let mut cols = TsvCols::default();
     for (i, cell) in line.split('\t').enumerate() {
+        // ★ **日英どちらの見出しも受ける**（adr/storage/tsv-header-follows-the-ui-language.md）。
+        //   英語で初期化した端末が書き出したファイルを日本語の端末で取り込む経路が
+        //   あるので、片方だけでは往復が閉じない。
+        // ★ 大文字小文字は現行どおり厳密一致。既存の別名（「重量」「体重」）を手で
+        //   列挙している方針をそのまま踏襲する
         let slot = match cell.trim() {
-            "日付" => &mut cols.date,
-            "部位" => &mut cols.group,
-            "種目" => &mut cols.exercise,
-            "セット" | "セット番号" => &mut cols.set_no,
-            "重量kg" | "重量" => &mut cols.weight,
-            "回数" => &mut cols.reps,
-            "体重kg" | "体重" => &mut cols.body_weight,
-            "セットメモ" => &mut cols.set_note,
-            "種目メモ" => &mut cols.log_note,
-            "体調メモ" => &mut cols.day_note,
-            "メニュー" => &mut cols.routine,
-            "ピン" => &mut cols.pins,
-            // 「時刻」は書き出し専用（[`export_tsv`] の doc 参照）。読まない
+            "日付" | "Date" => &mut cols.date,
+            "部位" | "Muscle group" | "Group" => &mut cols.group,
+            "種目" | "Exercise" => &mut cols.exercise,
+            "セット" | "セット番号" | "Set" | "Set no" => &mut cols.set_no,
+            "重量kg" | "重量" | "Weight kg" | "Weight" => &mut cols.weight,
+            "回数" | "Reps" => &mut cols.reps,
+            "体重kg" | "体重" | "Body weight kg" | "Body weight" => &mut cols.body_weight,
+            "セットメモ" | "Set note" => &mut cols.set_note,
+            "種目メモ" | "Exercise note" => &mut cols.log_note,
+            "体調メモ" | "Day note" => &mut cols.day_note,
+            "メニュー" | "Routine" => &mut cols.routine,
+            "ピン" | "Pins" => &mut cols.pins,
+            // 「時刻」/ "Time" は書き出し専用（[`export_tsv`] の doc 参照）。読まない
             _ => continue,
         };
         // 同名が複数あれば最初を採る
@@ -2041,7 +2090,7 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
         None => {
             // 見出しに知っている列名が 1 つも無ければ「うちのファイルではない」
             return Err(
-                if header.split('\t').any(|c| TSV_HEADER.contains(&c.trim())) {
+                if header.split('\t').any(|c| is_known_header_cell(c.trim())) {
                     ImportError::NoHeader
                 } else {
                     ImportError::NotDb
@@ -3012,11 +3061,11 @@ mod tests {
     #[test]
     fn metric_units_come_from_the_metric_not_the_exercise() {
         // ボリュームは重量と回数の合成量なので単位を持たない
-        assert_eq!(Metric::Volume.unit(), "");
-        assert_eq!(Metric::Sets.unit(), "セット");
-        assert_eq!(Metric::Reps.unit(), "回");
+        assert_eq!(Metric::Volume.unit(crate::i18n::Lang::Ja), "");
+        assert_eq!(Metric::Sets.unit(crate::i18n::Lang::Ja), "セット");
+        assert_eq!(Metric::Reps.unit(crate::i18n::Lang::Ja), "回");
         assert_eq!(Metric::default(), Metric::Volume);
-        assert_eq!(Metric::CHOICES.len(), 3);
+        assert_eq!(Metric::choices(crate::i18n::Lang::Ja).len(), 3);
     }
 
     // ── last_log_before ─────────────────────────────────────────────────────
@@ -3501,7 +3550,7 @@ mod tests {
 
         let elapsed = elapsed_since_last(&db, now, d(2026, 8, 8)).expect("記録がある");
         assert_eq!(elapsed, Elapsed::days_only(2), "日付キーだけで測る");
-        assert_eq!(humanize(elapsed), "2日前");
+        assert_eq!(humanize(elapsed, crate::i18n::Lang::Ja), "2日前");
     }
 
     #[test]
@@ -4345,7 +4394,7 @@ mod tests {
         let e = elapsed_since_last(&db, now, d(2026, 8, 8)).expect("記録がある");
         assert_eq!(e, Elapsed::with_ms(2, 2 * DAY_MS + 5 * HOUR_MS));
         assert_eq!(e.days(), 2, "日数は日付キーから出す");
-        assert_eq!(humanize(e), "2日前");
+        assert_eq!(humanize(e, crate::i18n::Lang::Ja), "2日前");
     }
 
     #[test]
@@ -4356,7 +4405,7 @@ mod tests {
 
         let e = elapsed_since_last(&db, 1_800_000_000_000, d(2026, 8, 8)).expect("記録がある");
         assert_eq!(e, Elapsed::days_only(1));
-        assert_eq!(humanize(e), "昨日");
+        assert_eq!(humanize(e, crate::i18n::Lang::Ja), "昨日");
     }
 
     #[test]
@@ -4375,7 +4424,7 @@ mod tests {
         let e = elapsed_since_last(&db, at + 3 * HOUR_MS, d(2026, 8, 8)).expect("記録がある");
         assert_eq!(e, Elapsed::with_ms(0, 3 * HOUR_MS));
         // 同じ暦日なので時刻粒度まで出る
-        assert_eq!(humanize(e), "3時間");
+        assert_eq!(humanize(e, crate::i18n::Lang::Ja), "3時間");
     }
 
     #[test]
@@ -4394,7 +4443,7 @@ mod tests {
 
         let e = elapsed_since_last(&db, last + 30 * 60_000, d(2026, 8, 8)).expect("記録がある");
         assert_eq!(e, Elapsed::with_ms(0, 30 * 60_000));
-        assert_eq!(humanize(e), "30分");
+        assert_eq!(humanize(e, crate::i18n::Lang::Ja), "30分");
     }
 
     #[test]
@@ -4466,8 +4515,8 @@ mod tests {
         // 翌朝に見る。経過は 12 時間だが暦では 1 日
         let e = elapsed_since_last(&db, at + 12 * HOUR_MS, d(2026, 8, 9)).expect("記録がある");
         assert_eq!(e.days(), 1, "24 時間で割ったローリング日数にしない");
-        assert_eq!(humanize(e), "昨日");
-        assert_eq!(short_elapsed(e), "1d");
+        assert_eq!(humanize(e, crate::i18n::Lang::Ja), "昨日");
+        assert_eq!(short_elapsed(e, crate::i18n::Lang::Ja), "1d");
         assert_eq!(recency_class(Some(e)), "fresh");
     }
 
@@ -4483,7 +4532,7 @@ mod tests {
 
         // 経過 30 分でも日を跨いでいれば「昨日」。暦日セマンティクスの対称コスト
         let e = elapsed_since_last(&db, at + 30 * 60_000, d(2026, 8, 9)).expect("記録がある");
-        assert_eq!(humanize(e), "昨日");
+        assert_eq!(humanize(e, crate::i18n::Lang::Ja), "昨日");
     }
 
     #[test]
@@ -4500,7 +4549,7 @@ mod tests {
         let by_group = elapsed_by_group(&db, at + 12 * HOUR_MS, d(2026, 8, 9));
         assert_eq!(by_group.get(&g(1)).map(|e| e.days()), Some(1));
         assert_eq!(by_group.get(&g(2)).map(|e| e.days()), Some(3));
-        assert_eq!(short_elapsed(by_group[&g(1)]), "1d");
+        assert_eq!(short_elapsed(by_group[&g(1)], crate::i18n::Lang::Ja), "1d");
     }
 
     #[test]
@@ -4512,8 +4561,11 @@ mod tests {
             Elapsed::days_only(3),
         ] {
             let days = e.days();
-            assert_eq!(humanize(e), humanize_days(days));
-            assert_eq!(short_elapsed(e), format!("{days}d"));
+            assert_eq!(
+                humanize(e, crate::i18n::Lang::Ja),
+                humanize_days(days, crate::i18n::Lang::Ja)
+            );
+            assert_eq!(short_elapsed(e, crate::i18n::Lang::Ja), format!("{days}d"));
         }
     }
 
@@ -4522,48 +4574,108 @@ mod tests {
     #[test]
     fn humanize_covers_every_granularity() {
         // 同じ暦日 = 時刻粒度
-        assert_eq!(humanize(Elapsed::with_ms(0, 45 * 60_000)), "45分");
-        assert_eq!(humanize(Elapsed::with_ms(0, 59 * 60_000 + 59_999)), "59分");
-        assert_eq!(humanize(Elapsed::with_ms(0, HOUR_MS)), "1時間");
         assert_eq!(
-            humanize(Elapsed::with_ms(0, 23 * HOUR_MS + 59 * 60_000)),
+            humanize(Elapsed::with_ms(0, 45 * 60_000), crate::i18n::Lang::Ja),
+            "45分"
+        );
+        assert_eq!(
+            humanize(
+                Elapsed::with_ms(0, 59 * 60_000 + 59_999),
+                crate::i18n::Lang::Ja
+            ),
+            "59分"
+        );
+        assert_eq!(
+            humanize(Elapsed::with_ms(0, HOUR_MS), crate::i18n::Lang::Ja),
+            "1時間"
+        );
+        assert_eq!(
+            humanize(
+                Elapsed::with_ms(0, 23 * HOUR_MS + 59 * 60_000),
+                crate::i18n::Lang::Ja
+            ),
             "23時間"
         );
         // at を持たない当日の記録（取り込んだデータ）は日粒度に落ちる
-        assert_eq!(humanize(Elapsed::days_only(0)), "今日");
+        assert_eq!(
+            humanize(Elapsed::days_only(0), crate::i18n::Lang::Ja),
+            "今日"
+        );
 
         // ★ 日を跨いだら必ず日粒度。「2日5時間」形式は廃止した
-        assert_eq!(humanize(Elapsed::with_ms(1, 12 * HOUR_MS)), "昨日");
         assert_eq!(
-            humanize(Elapsed::with_ms(2, 2 * DAY_MS + 5 * HOUR_MS)),
+            humanize(Elapsed::with_ms(1, 12 * HOUR_MS), crate::i18n::Lang::Ja),
+            "昨日"
+        );
+        assert_eq!(
+            humanize(
+                Elapsed::with_ms(2, 2 * DAY_MS + 5 * HOUR_MS),
+                crate::i18n::Lang::Ja
+            ),
             "2日前"
         );
-        assert_eq!(humanize(Elapsed::with_ms(2, 2 * DAY_MS)), "2日前");
-        assert_eq!(humanize(Elapsed::days_only(1)), "昨日");
-        assert_eq!(humanize(Elapsed::days_only(5)), "5日前");
+        assert_eq!(
+            humanize(Elapsed::with_ms(2, 2 * DAY_MS), crate::i18n::Lang::Ja),
+            "2日前"
+        );
+        assert_eq!(
+            humanize(Elapsed::days_only(1), crate::i18n::Lang::Ja),
+            "昨日"
+        );
+        assert_eq!(
+            humanize(Elapsed::days_only(5), crate::i18n::Lang::Ja),
+            "5日前"
+        );
     }
 
     #[test]
     fn humanize_clamps_negatives_and_sub_minute() {
-        assert_eq!(humanize(Elapsed::with_ms(0, 0)), "たった今");
-        assert_eq!(humanize(Elapsed::with_ms(0, 30_000)), "たった今");
+        assert_eq!(
+            humanize(Elapsed::with_ms(0, 0), crate::i18n::Lang::Ja),
+            "たった今"
+        );
+        assert_eq!(
+            humanize(Elapsed::with_ms(0, 30_000), crate::i18n::Lang::Ja),
+            "たった今"
+        );
         // 端末時計のズレでも壊れた表示にしない
-        assert_eq!(humanize(Elapsed::with_ms(0, -5000)), "たった今");
-        assert_eq!(humanize(Elapsed::with_ms(-1, 5_000)), "たった今");
-        assert_eq!(humanize(Elapsed::days_only(-1)), "今日");
+        assert_eq!(
+            humanize(Elapsed::with_ms(0, -5000), crate::i18n::Lang::Ja),
+            "たった今"
+        );
+        assert_eq!(
+            humanize(Elapsed::with_ms(-1, 5_000), crate::i18n::Lang::Ja),
+            "たった今"
+        );
+        assert_eq!(
+            humanize(Elapsed::days_only(-1), crate::i18n::Lang::Ja),
+            "今日"
+        );
     }
 
     #[test]
     fn humanize_falls_back_to_the_date_key_when_at_contradicts_it() {
         // 同じ暦日なのに 2 週間分の経過 = 壊れたデータ。「336時間」を出さず日付キーを勝たせる
-        assert_eq!(humanize(Elapsed::with_ms(0, 14 * DAY_MS)), "今日");
+        assert_eq!(
+            humanize(Elapsed::with_ms(0, 14 * DAY_MS), crate::i18n::Lang::Ja),
+            "今日"
+        );
     }
 
     #[test]
     fn short_elapsed_and_recency_use_calendar_days() {
-        assert_eq!(short_elapsed(Elapsed::days_only(0)), "今日");
-        assert_eq!(short_elapsed(Elapsed::with_ms(1, 12 * HOUR_MS)), "1d");
-        assert_eq!(short_elapsed(Elapsed::days_only(10)), "10d");
+        assert_eq!(
+            short_elapsed(Elapsed::days_only(0), crate::i18n::Lang::Ja),
+            "今日"
+        );
+        assert_eq!(
+            short_elapsed(Elapsed::with_ms(1, 12 * HOUR_MS), crate::i18n::Lang::Ja),
+            "1d"
+        );
+        assert_eq!(
+            short_elapsed(Elapsed::days_only(10), crate::i18n::Lang::Ja),
+            "10d"
+        );
 
         assert_eq!(recency_class(None), "none");
         assert_eq!(recency_class(Some(Elapsed::days_only(0))), "fresh");
@@ -5033,7 +5145,7 @@ mod tests {
 
     #[test]
     fn migrate_round_trips_a_seeded_db() {
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let bench = db.exercises[0].id;
         put(
             &mut db,
@@ -5094,7 +5206,7 @@ mod tests {
 
     /// ベンチプレス 2 セット + 体重 + 体調メモの 1 日。
     fn tsv_sample() -> Db {
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         db.sessions.insert(
             date_key(d(2026, 8, 1)),
@@ -5132,10 +5244,125 @@ mod tests {
     ///   バイト一致で固定する（形式の進化規則 1「列は足すだけ」の実行部）。
     #[test]
     fn export_tsv_starts_with_the_documented_header() {
-        let tsv = export_tsv(&crate::presets::seeded_db(), jst());
+        let tsv = export_tsv(
+            &crate::presets::seeded_db(crate::i18n::Lang::Ja),
+            jst(),
+            crate::i18n::Lang::Ja,
+        );
         assert_eq!(
             tsv.lines().next().expect("見出し行"),
             "日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン"
+        );
+    }
+
+    /// 英語の見出しも**同じ強度で固定する**。TSV は版番号を持てないので、
+    /// 一度出した綴りは永久の外部仕様（adr/storage/tsv-header-follows-the-ui-language.md）。
+    #[test]
+    fn export_tsv_in_english_starts_with_the_documented_header() {
+        let tsv = export_tsv(
+            &crate::presets::seeded_db(crate::i18n::Lang::En),
+            jst(),
+            crate::i18n::Lang::En,
+        );
+        assert_eq!(
+            tsv.lines().next().expect("見出し行"),
+            "Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine"
+        );
+    }
+
+    /// 日英の見出しが**1 語も衝突しない**。衝突すると `tsv_cols` の `match` で
+    /// 片方の腕が到達不能になり、列が黙って別の意味に読まれる。
+    #[test]
+    fn tsv_header_names_do_not_collide_across_languages() {
+        for ja in TSV_HEADER_JA {
+            assert!(
+                !TSV_HEADER_EN.contains(&ja),
+                "{ja} が日英の見出しで衝突している"
+            );
+        }
+        assert_eq!(TSV_HEADER_JA.len(), TSV_HEADER_EN.len());
+    }
+
+    /// **過去に書き出した日本語 TSV が、英語で使っている端末でもそのまま取り込める。**
+    /// ここが落ちると、言語を切り替えた人の手元のファイルが読めなくなる。
+    #[test]
+    fn a_japanese_tsv_still_imports_on_an_english_device() {
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::En);
+        let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\n                   2026-08-01\t胸\tベンチプレス\t1\t60\t10\n";
+
+        let db = parse_import(tsv, &mut ids(), &mine).expect("日本語 TSV が読めること");
+
+        // 固定 ID に寄っている＝種目が 2 本に割れていない
+        let log = &db.sessions["2026-08-01"].logs[0];
+        assert_eq!(log.exercise_id, ExerciseId::from_bits(0x11));
+        assert_eq!(log.sets[0].reps, 10);
+    }
+
+    /// 逆向き。英語の見出しと英語のプリセット名で書かれた TSV を、日本語で使っている
+    /// 端末が取り込んでも同じ固定 ID に寄る。
+    #[test]
+    fn an_english_tsv_imports_on_a_japanese_device() {
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let tsv = "Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\n                   2026-08-01\tChest\tBench Press\t1\t60\t10\n";
+
+        let incoming = parse_import(tsv, &mut ids(), &mine).expect("英語 TSV が読めること");
+        assert_eq!(
+            incoming.sessions["2026-08-01"].logs[0].exercise_id,
+            ExerciseId::from_bits(0x11),
+            "英語の綴りが固定 ID に寄っていない"
+        );
+
+        // 取り込みはマージのみ（adr/storage/import-is-merge-only.md）。実際の経路で見る
+        let before = mine.exercises.len();
+        merge_db(&mut mine, incoming);
+
+        assert_eq!(
+            mine.exercises.len(),
+            before,
+            "英語 TSV の取り込みで種目が増えている（同じ種目が 2 本に割れた）"
+        );
+        // ★ 既に持っている名前は**上書きされない**。取り込みで自分の付けた名前が
+        //   相手の言語に書き換わったら、それは記録ではなく破壊
+        let ex = mine
+            .exercises
+            .iter()
+            .find(|e| e.id == ExerciseId::from_bits(0x11))
+            .expect("ベンチプレス");
+        assert_eq!(ex.name, "ベンチプレス");
+        assert_eq!(mine.sessions["2026-08-01"].logs[0].sets[0].reps, 10);
+    }
+
+    /// 英語で書き出したものを英語で取り込む往復。**種目が増えない**ことを見る。
+    #[test]
+    fn export_import_round_trips_in_english() {
+        let en = crate::i18n::Lang::En;
+        let mut mine = crate::presets::seeded_db(en);
+        mine.sessions.insert(
+            "2026-08-01".to_string(),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: ExerciseId::from_bits(0x11),
+                    sets: vec![SetEntry {
+                        weight: 60.0,
+                        reps: 10,
+                        note: String::new(),
+                    }],
+                    at: None,
+                    note: String::new(),
+                }],
+                ..Default::default()
+            },
+        );
+
+        let tsv = export_tsv(&mine, jst(), en);
+        let before = mine.exercises.len();
+        let parsed = parse_import(&tsv, &mut ids(), &mine).expect("往復できること");
+
+        merge_db(&mut mine, parsed);
+        assert_eq!(
+            mine.exercises.len(),
+            before,
+            "往復で種目が増えている（固定 ID に寄っていない）"
         );
     }
 
@@ -5254,7 +5481,7 @@ mod tests {
 
     #[test]
     fn export_tsv_writes_one_row_per_set_with_a_one_based_index() {
-        let tsv = export_tsv(&tsv_sample(), jst());
+        let tsv = export_tsv(&tsv_sample(), jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
         assert_eq!(r.len(), 3, "見出し + 2 セット: {tsv}");
         assert_eq!(
@@ -5272,7 +5499,7 @@ mod tests {
     ///   体重グラフが嘘の値を出す。日・ログの先頭 1 行にだけ書く。
     #[test]
     fn export_tsv_writes_the_day_scoped_cells_only_once() {
-        let tsv = export_tsv(&tsv_sample(), jst());
+        let tsv = export_tsv(&tsv_sample(), jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
         assert_eq!(
             (r[1][6], r[1][8], r[1][9]),
@@ -5285,7 +5512,7 @@ mod tests {
     /// シートで平均・グラフから外れる空セルと意味が一致する。
     #[test]
     fn export_tsv_leaves_the_weight_cell_empty_for_bodyweight_sets() {
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let pullup = crate::presets::preset_exercise_id("懸垂").expect("プリセット");
         db.sessions.insert(
             date_key(d(2026, 8, 2)),
@@ -5304,7 +5531,7 @@ mod tests {
                 note: String::new(),
             },
         );
-        let tsv = export_tsv(&db, jst());
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
         assert_eq!(r[1][4], "", "重量 0 が 0 として書かれている");
         assert_eq!(r[1][5], "12");
@@ -5313,7 +5540,7 @@ mod tests {
     /// `ExerciseLog::is_empty` が「残す」と決めた形（セット 0・メモあり）を落とさない。
     #[test]
     fn export_tsv_keeps_a_note_only_log_as_a_row_without_sets() {
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         db.sessions.insert(
             date_key(d(2026, 8, 3)),
@@ -5328,7 +5555,7 @@ mod tests {
                 note: String::new(),
             },
         );
-        let tsv = export_tsv(&db, jst());
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
         assert_eq!(r[1][2], "ベンチプレス");
         assert_eq!((r[1][3], r[1][5]), ("", ""), "セットが立っている");
@@ -5338,7 +5565,7 @@ mod tests {
     /// 体重・体調メモだけの日も 1 行残す（`Session::is_empty` が残すと決めた形）。
     #[test]
     fn export_tsv_keeps_a_day_that_only_has_a_body_weight() {
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         db.sessions.insert(
             date_key(d(2026, 8, 4)),
             Session {
@@ -5347,7 +5574,7 @@ mod tests {
                 note: String::new(),
             },
         );
-        let tsv = export_tsv(&db, jst());
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
         assert_eq!(r[1][0], "2026-08-04");
         assert_eq!((r[1][2], r[1][6]), ("", "71"));
@@ -5357,7 +5584,7 @@ mod tests {
     ///   （新規インストールに必ず同じ固定 ID で居るので、書かなくても失われない）。
     #[test]
     fn export_tsv_writes_a_master_row_only_for_exercises_that_could_be_lost() {
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let mut g = ids();
         db.exercises.push(Exercise {
             id: g.alloc(),
@@ -5367,7 +5594,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
         });
-        let tsv = export_tsv(&db, jst());
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
         assert_eq!(r.len(), 2, "プリセット 28 種目まで書かれている: {tsv}");
         assert_eq!(r[1][0..3], ["", "胸", "自作マシン"]);
@@ -5377,7 +5604,7 @@ mod tests {
     ///   潰さないと行が崩壊して、その日の記録が丸ごと壊れる。
     #[test]
     fn export_tsv_flattens_tabs_and_newlines_in_notes() {
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         db.sessions.insert(
             date_key(d(2026, 8, 5)),
@@ -5396,7 +5623,7 @@ mod tests {
                 note: String::new(),
             },
         );
-        let tsv = export_tsv(&db, jst());
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         assert_eq!(tsv.lines().count(), 2, "改行でレコードが割れている: {tsv}");
         let r = rows(&tsv);
         assert_eq!(r[1].len(), 13, "タブで列がずれている");
@@ -5408,7 +5635,7 @@ mod tests {
     /// 前日の行に時刻として並べない（`ExerciseLog::at` の契約を表示にも通す）。
     #[test]
     fn export_tsv_writes_the_time_only_when_it_agrees_with_the_date() {
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         // 2026-08-01 18:32 JST
         let at = d(2026, 8, 1)
@@ -5445,7 +5672,7 @@ mod tests {
                 note: String::new(),
             },
         );
-        let tsv = export_tsv(&db, jst());
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
         assert_eq!(r[1][10], "18:32");
         assert_eq!(r[2][10], "", "日付と食い違う at を時刻として出している");
@@ -5455,9 +5682,9 @@ mod tests {
     #[test]
     fn tsv_round_trips_every_record_except_the_clock() {
         let db = tsv_sample();
-        let tsv = export_tsv(&db, jst());
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 
-        let mut mine = crate::presets::seeded_db();
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
         merge_db(&mut mine, incoming);
 
@@ -5506,8 +5733,8 @@ mod tests {
             exercises: Vec::new(),
         });
 
-        let tsv = export_tsv(&db, jst());
-        let mut mine = crate::presets::seeded_db();
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
         merge_db(&mut mine, incoming);
 
@@ -5530,7 +5757,7 @@ mod tests {
         let fly = crate::presets::preset_exercise_id("チェストフライ").expect("プリセット");
         let push = crate::presets::preset_exercise_id("プッシュアップ").expect("プリセット");
         let mut g = ids();
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         db.routines.push(Routine {
             id: g.alloc(),
             name: "胸の日".into(),
@@ -5542,8 +5769,8 @@ mod tests {
             exercises: vec![bench, push],
         });
 
-        let tsv = export_tsv(&db, jst());
-        let mut mine = crate::presets::seeded_db();
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
         merge_db(&mut mine, incoming);
 
@@ -5572,9 +5799,9 @@ mod tests {
             name: "胸の日".into(),
             exercises: vec![bench],
         });
-        let tsv = export_tsv(&db, jst());
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 
-        let mut mine = crate::presets::seeded_db();
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let first = parse_import(&tsv, &mut ids(), &mine).expect("1 回目");
         merge_db(&mut mine, first);
         let second = parse_import(&tsv, &mut ids(), &mine).expect("2 回目");
@@ -5587,8 +5814,8 @@ mod tests {
     /// ★ 冪等性は**数**で見る（`MergeReport` の注記どおり）。
     #[test]
     fn importing_the_same_tsv_twice_adds_nothing() {
-        let tsv = export_tsv(&tsv_sample(), jst());
-        let mut mine = crate::presets::seeded_db();
+        let tsv = export_tsv(&tsv_sample(), jst(), crate::i18n::Lang::Ja);
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
 
         let first = parse_import(&tsv, &mut ids(), &mine).expect("1 回目");
         merge_db(&mut mine, first);
@@ -5614,7 +5841,7 @@ mod tests {
             pins: Vec::new(),
         });
 
-        let tsv = export_tsv(&mine, jst());
+        let tsv = export_tsv(&mine, jst(), crate::i18n::Lang::Ja);
         let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読める");
         let report = merge_db(&mut mine, incoming);
 
@@ -5626,9 +5853,9 @@ mod tests {
     ///   名前照合だけに頼ると壊れる形（adr/data-model/random-ids-for-safe-merge.md）。
     #[test]
     fn tsv_import_joins_history_with_a_renamed_preset() {
-        let tsv = export_tsv(&tsv_sample(), jst());
+        let tsv = export_tsv(&tsv_sample(), jst(), crate::i18n::Lang::Ja);
 
-        let mut theirs = crate::presets::seeded_db();
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         let before = theirs.exercises.len();
         theirs
@@ -5651,7 +5878,7 @@ mod tests {
     ///   曖昧なら新規に倒す（`pin_presets` と同じガード）。
     #[test]
     fn tsv_import_does_not_pin_a_preset_name_that_is_ambiguous() {
-        let mut mine = crate::presets::seeded_db();
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let mut g = ids();
         // プリセットと同名の自作種目（画面から作れてしまう）
         mine.exercises.push(Exercise {
@@ -5678,7 +5905,7 @@ mod tests {
     ///   胸のログに移る。
     #[test]
     fn tsv_round_trips_two_exercises_that_share_a_name_across_groups() {
-        let mut mine = crate::presets::seeded_db();
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let mut g = ids();
         let shoulder_bench = g.alloc();
         mine.exercises.push(Exercise {
@@ -5717,7 +5944,7 @@ mod tests {
             },
         );
 
-        let tsv = export_tsv(&mine, jst());
+        let tsv = export_tsv(&mine, jst(), crate::i18n::Lang::Ja);
         let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読める");
         let report = merge_db(&mut mine, incoming);
 
@@ -5736,7 +5963,7 @@ mod tests {
     ///   保存まで抜け、2000 年前の記録としてカレンダーに残り二度と見つけられない。
     #[test]
     fn tsv_import_rejects_a_two_digit_year_instead_of_inventing_one() {
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\n8/1/26\t胸\tベンチプレス\t1\t60\t10\n";
         assert_eq!(
             parse_import(tsv, &mut ids(), &mine),
@@ -5749,7 +5976,7 @@ mod tests {
     ///   全部落ちたことに気づけないまま終わる。
     #[test]
     fn tsv_import_says_so_when_every_row_failed_to_parse() {
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         // 日付がロケール書き戻しで全滅
         let bad_dates =
             "日付\t部位\t種目\tセット\t重量kg\t回数\nAugust 1, 2026\t胸\tベンチプレス\t1\t60\t10\n";
@@ -5812,7 +6039,7 @@ mod tests {
     ///   「シートで編集して戻す」という機能の主目的が成立しない。
     #[test]
     fn tsv_import_accepts_decimal_reps_and_set_numbers() {
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\n\
                    2026-08-01\t胸\tベンチプレス\t2.0\t62.5\t8.0\n\
                    2026-08-01\t胸\tベンチプレス\t1.0\t60.0\t10.0\n";
@@ -5844,12 +6071,12 @@ mod tests {
             body_weight: None,
             note: String::new(),
         };
-        let mut mine = crate::presets::seeded_db();
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         mine.sessions.insert(
             date_key(d(2026, 8, 1)),
             day(vec![set(10)], Some(1_800_000_000_000)),
         );
-        let mut theirs = crate::presets::seeded_db();
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         theirs
             .sessions
             .insert(date_key(d(2026, 8, 1)), day(vec![set(10), set(8)], None));
@@ -5869,7 +6096,7 @@ mod tests {
         let bom = format!("\u{feff}{plain}");
         let no_eol = plain.trim_end_matches('\n').to_string();
 
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let read = |raw: &str| parse_import(raw, &mut ids(), &mine).expect("読める");
         let base = read(plain);
         for variant in [crlf.as_str(), bom.as_str(), no_eol.as_str()] {
@@ -5882,7 +6109,7 @@ mod tests {
     fn tsv_import_reads_columns_by_name_and_ignores_unknown_ones() {
         let shuffled =
             "メモ2\t回数\t種目\t重量kg\t部位\t日付\n無視\t10\tベンチプレス\t60\t胸\t2026-08-01\n";
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let db = parse_import(shuffled, &mut ids(), &mine).expect("読める");
         let s = db.sessions.get("2026-08-01").expect("その日がある");
         assert_eq!(
@@ -5902,7 +6129,7 @@ mod tests {
                    2026-08-01\t胸\tベンチプレス\t3\t65\t6\n\
                    2026-08-01\t胸\tベンチプレス\t1\t60\t10\n\
                    2026-08-01\t胸\tベンチプレス\t2\t62.5\t8\n";
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let db = parse_import(tsv, &mut ids(), &mine).expect("読める");
         let sets = &db.sessions.get("2026-08-01").expect("その日").logs[0].sets;
         assert_eq!(
@@ -5916,7 +6143,7 @@ mod tests {
     fn tsv_import_accepts_slash_dates_and_comma_decimals() {
         let tsv =
             "日付\t部位\t種目\tセット\t重量kg\t回数\n2026/8/1\t胸\tベンチプレス\t1\t62,5\t8\n";
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let db = parse_import(tsv, &mut ids(), &mine).expect("読める");
         let sets = &db.sessions.get("2026-08-01").expect("その日").logs[0].sets;
         assert_eq!(sets[0].weight, 62.5);
@@ -5924,7 +6151,7 @@ mod tests {
 
     #[test]
     fn tsv_import_errors_tell_the_user_what_to_do_next() {
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         // 見出しが無い（知っている列名も無い）→ うちのファイルではない
         assert_eq!(
             parse_import("あ\tい\nう\tえ\n", &mut ids(), &mine),
@@ -5952,7 +6179,7 @@ mod tests {
     fn tsv_import_does_not_run_the_json_repair_on_notes() {
         let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\tセットメモ\n\
                    2026-08-01\t胸\tベンチプレス\t1\t60\t10\t\u{201c}軽い\u{201d}\n";
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let db = parse_import(tsv, &mut ids(), &mine).expect("読める");
         let sets = &db.sessions.get("2026-08-01").expect("その日").logs[0].sets;
         assert_eq!(
@@ -5965,7 +6192,7 @@ mod tests {
     #[test]
     fn tsv_import_drops_a_new_exercise_without_a_group() {
         let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\n2026-08-01\t\t謎の種目\t1\t60\t10\n";
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         assert_eq!(
             parse_import(tsv, &mut ids(), &mine),
             Err(ImportError::NoRecords)
@@ -5977,7 +6204,7 @@ mod tests {
     fn tsv_import_keeps_a_note_only_row_out_of_the_trained_days() {
         let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\t種目メモ\n\
                    2026-08-01\t胸\tベンチプレス\t\t\t\t肩が痛いのでやめた\n";
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let db = parse_import(tsv, &mut ids(), &mine).expect("読める");
         let s = db.sessions.get("2026-08-01").expect("その日がある");
         assert!(!s.is_trained(), "セットが無いのに実施日になっている");
@@ -5988,7 +6215,7 @@ mod tests {
     #[test]
     fn json_still_imports_after_the_format_dispatch() {
         let db = tsv_sample();
-        let mine = crate::presets::seeded_db();
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         assert_eq!(
             parse_import(&export_json(&db), &mut ids(), &mine).expect("JSON が読める"),
             db
@@ -6033,7 +6260,7 @@ mod tests {
     /// ★ この機能の生命線。書き出したものが、そのまま読み戻せる。
     #[test]
     fn export_round_trips_through_parse_import() {
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         db.sessions.insert(
             date_key(d(2026, 8, 8)),
@@ -6064,7 +6291,7 @@ mod tests {
     fn export_round_trips_the_routines_too() {
         // 書き出し形式 = 保存形式なので `export_json` に手は要らないが、
         // 「メニューが往復で消えない」は明示的に固定しておく
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         db.routines.push(Routine {
             id: r(1),
@@ -6120,7 +6347,7 @@ mod tests {
 
     #[test]
     fn import_repairs_decorations_added_by_copy_paste() {
-        let db = crate::presets::seeded_db();
+        let db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let raw = export_json(&db);
 
         for decorated in [
@@ -6141,7 +6368,7 @@ mod tests {
     /// 入っていても壊さない。ここが崩れると、正常なデータを黙って書き換える。
     #[test]
     fn import_does_not_touch_valid_data_containing_curly_quotes() {
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         db.exercises.push(Exercise {
             id: ExerciseId::from_bits(0xD00D),
             name: "\u{201c}特別\u{201d}なベンチ".into(),
@@ -6167,7 +6394,7 @@ mod tests {
 
     #[test]
     fn summarize_counts_what_the_confirmation_screen_shows() {
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         db.sessions.insert(
             date_key(d(2026, 8, 1)),
@@ -6216,7 +6443,7 @@ mod tests {
         // ★ `DbSummary` にメモの件数は足さない。取り込み事故を止めている 3 つの数
         //   （種目 / 実施日 / セット）が 1 行の中で薄まる。メモだけの DB は
         //   「0 日・0 セット」と出るので、置き換えようとした利用者には異常が見える
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         db.sessions.insert(
             date_key(d(2026, 8, 1)),
             Session {
@@ -6298,7 +6525,7 @@ mod tests {
 
     /// 端末 A: プリセットに「わたしの種目」を足し、8/1 に記録。
     fn device_a() -> Db {
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         let chest = crate::presets::preset_group_id("胸").expect("プリセット");
         db.exercises.push(Exercise {
@@ -6349,7 +6576,7 @@ mod tests {
     /// 8/1 の「わたしの種目」のログが「べつの種目」を指すようになる — この移行が
     /// 潰そうとしている壊れ方そのもの。
     fn device_b() -> Db {
-        let mut db = crate::presets::seeded_db();
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         db.exercises
             .iter_mut()
@@ -6493,7 +6720,7 @@ mod tests {
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         let day = date_key(d(2026, 8, 1));
         let with = |sets: Vec<SetEntry>| {
-            let mut db = crate::presets::seeded_db();
+            let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
             db.sessions.insert(
                 day.clone(),
                 Session {
@@ -6559,7 +6786,7 @@ mod tests {
         let chest = crate::presets::preset_group_id("胸").expect("プリセット");
 
         // mine: ベンチプレスを「マイベンチ」に改名済み
-        let mut mine = crate::presets::seeded_db();
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         mine.exercises
             .iter_mut()
             .find(|e| e.id == bench)
@@ -6567,7 +6794,7 @@ mod tests {
             .name = "マイベンチ".into();
 
         // theirs: 同じ ID の「ベンチプレス」と、別 ID の「マイベンチ」を両方持つ
-        let mut theirs = crate::presets::seeded_db();
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let other = ExerciseId::from_bits(0xE001);
         theirs.exercises.push(Exercise {
             id: other,
@@ -6635,7 +6862,7 @@ mod tests {
     #[test]
     fn merge_does_not_append_the_same_note_twice() {
         let mut a = device_a();
-        let mut b = crate::presets::seeded_db();
+        let mut b = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         b.sessions.insert(
             date_key(d(2026, 8, 1)),
             Session {
@@ -6662,7 +6889,10 @@ mod tests {
     /// メニューだけを見るための最小の 2 台。プリセットの固定 ID を使うので
     /// 「独立に seed された 2 台」の前提がそのまま成り立つ。
     fn routine_devices() -> (Db, Db) {
-        (crate::presets::seeded_db(), crate::presets::seeded_db())
+        (
+            crate::presets::seeded_db(crate::i18n::Lang::Ja),
+            crate::presets::seeded_db(crate::i18n::Lang::Ja),
+        )
     }
 
     fn preset(name: &str) -> ExerciseId {
@@ -6865,7 +7095,7 @@ mod tests {
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         let day = date_key(d(2026, 8, 1));
         let build = |note: &str, sets: &[(f32, u32, &str)]| {
-            let mut db = crate::presets::seeded_db();
+            let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
             db.sessions.insert(
                 day.clone(),
                 Session {
@@ -7092,7 +7322,7 @@ mod tests {
     /// 取り込む側にしか無い日は、ログごと採用する。**そのログも写像を通っている。**
     #[test]
     fn merge_maps_ids_even_for_days_taken_wholesale() {
-        let mut a = crate::presets::seeded_db();
+        let mut a = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         // A には「じぶんの種目」を ID X で持たせる
         a.exercises.push(Exercise {
             id: ExerciseId::from_bits(0xB001),
@@ -7104,7 +7334,7 @@ mod tests {
         });
 
         // B は同名の種目を**別の ID** で持ち、A に無い日に記録している
-        let mut b = crate::presets::seeded_db();
+        let mut b = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         b.exercises.push(Exercise {
             id: ExerciseId::from_bits(0xC002),
             name: "じぶんの種目".into(),

@@ -2778,9 +2778,10 @@ test('★ 設定タブの入口は節の一覧で、中身は入るまで出な�
   await blurActive(page);
   await page.getByTestId('tab-settings').click();
 
-  // トップは 4 行だけ。種目もメニューも 1 件も出ていない
-  // （`.row` で数える。手順シートの <dialog> も同じ親に出るので `> *` だと 5 になる）
-  await expect(page.getByTestId('settings-rows').locator('.row')).toHaveCount(4);
+  // トップは 5 行だけ（書き出し / メニュー / 種目 / ホーム画面 / 言語）。
+  // 種目もメニューも 1 件も出ていない
+  // （`.row` で数える。手順シートの <dialog> も同じ親に出るので `> *` だと 1 多くなる）
+  await expect(page.getByTestId('settings-rows').locator('.row')).toHaveCount(5);
   await expect(page.getByTestId('group-item')).toHaveCount(0);
   await expect(page.getByTestId('routine-item')).toHaveCount(0);
   await expect(page.getByTestId('settings-add-group')).toHaveCount(0);

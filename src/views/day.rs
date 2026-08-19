@@ -14,7 +14,9 @@ use web_sys::PointerEvent;
 
 use crate::core;
 use crate::core::Metric;
-use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, RoutineId, SetEntry};
+use crate::model::{
+    Db, ExerciseId, ExerciseLog, GroupId, MAX_PIN_LEN, MAX_PINS, RoutineId, SetEntry,
+};
 use crate::reorder;
 
 use super::drag::{
@@ -60,6 +62,17 @@ impl Row {
             note: String::new(),
         }
     }
+}
+
+/// 編集中のマシンのピン 1 個。`Row` と同じ理由で文字列（保存形も `String`）。
+///
+/// `key` を持つのは `<For>` のキーにするため。**値そのものをキーにできない** —
+/// 同じ番号を 2 つ並べた瞬間（「シート高 3 / バー位置 3」は正当な入力）にキーが
+/// 重複し、keyed diff が壊れる（wasm では panic ＝ アプリが死ぬ）。
+#[derive(Clone, Debug, PartialEq)]
+struct PinRow {
+    key: u32,
+    value: String,
 }
 
 fn card_dom_id(ex: ExerciseId) -> String {
@@ -857,6 +870,31 @@ fn ExerciseCard(
     //   adr/ux/exercise-and-set-notes-behind-one-toggle.md
     let note_open = RwSignal::new(false);
 
+    // ── マシンのピン（adr/ux/machine-pins-on-the-exercise.md）───────────────────
+    //
+    // ★ **種目に紐づく永続設定**なので `db.exercises` から読む（セット行と種目メモが
+    //   「その日のログ」から読むのと対照）。日を切り替えても同じ値が出る。
+    //
+    // ★ 編集中はローカル signal に持つ。`db` を直接読む生クロージャで入力欄を作ると、
+    //   1 文字打つたびに構造ごと作り直されて**入力中の文字が消える**（`rows` と同じ）。
+    let pins0: Vec<String> =
+        db.with_untracked(|d| d.exercise(ex).map(|e| e.pins.clone()).unwrap_or_default());
+    let next_pin_key = RwSignal::new(pins0.len() as u32);
+    let pin_rows = RwSignal::new(
+        pins0
+            .into_iter()
+            .enumerate()
+            .map(|(i, value)| PinRow {
+                key: i as u32,
+                value,
+            })
+            .collect::<Vec<_>>(),
+    );
+    // 閉じているときに薄字で出す値。**保存済みのものだけ**なので `db` から引く
+    // （編集中の空チップや入力途中の文字を静止表示に漏らさない）。
+    let pins =
+        Memo::new(move |_| db.with(|d| d.exercise(ex).map(|e| e.pins.clone()).unwrap_or_default()));
+
     // ★ この種目が普段「重量を使う」種目かを**実データから**判定する。
     //
     // 旧実装は `Kind::Weighted` で判定していたが `Kind` は無くなった。単に
@@ -906,6 +944,33 @@ fn ExerciseCard(
             write_log(d, date, ex, sets, note, is_today);
             core::reorder_logs(d, date, &order);
         });
+    };
+
+    // ★ 正規化（空欄落とし・空白分割・上限）は `core::set_pins` に委ねる。ここで
+    //   別に trim すると、画面からの書き込みと取り込みで規則が 2 本に割れる。
+    let commit_pins = move || {
+        let values: Vec<String> =
+            pin_rows.with_untracked(|rs| rs.iter().map(|r| r.value.clone()).collect());
+        db.update(|d| core::set_pins(d, ex, values));
+    };
+
+    let add_pin = move |_| {
+        let key = next_pin_key.get_untracked();
+        next_pin_key.set(key + 1);
+        pin_rows.update(|rs| {
+            rs.push(PinRow {
+                key,
+                value: String::new(),
+            })
+        });
+        // 空欄は `set_pins` が落とすので commit は要らない（`add_row` と同じ）
+    };
+
+    // ★ 確認を挟まない。セット行の削除（`remove_row`）と同じ判断で、消えるのは
+    //   数字 1 個。打ち直しは数秒で、確認のコストのほうが高い。
+    let remove_pin = move |key: u32| {
+        pin_rows.update(|rs| rs.retain(|r| r.key != key));
+        commit_pins();
     };
 
     let fresh_key = move || {
@@ -1565,6 +1630,104 @@ fn ExerciseCard(
                     </button>
                 </div>
             </div>
+
+            // ── マシンのピン ──────────────────────────────────────────────────
+            //
+            // ★ セット行群の下・種目メモの**上**に置く。読み順が「準備（ピン）→
+            //   観測（メモ）」になる。`.last-row` の直下に置くと 12px --muted の行が
+            //   前回の記録の続きに読める（adr/ux/exercise-and-set-notes-behind-one-toggle.md
+            //   決定 4）。すぐ下の種目メモとは**先頭の「ピン」ラベルの有無**で読み分ける
+            //   （種目メモにラベル文字は無い）。
+            //
+            // ★ 入口を増やさない。開閉は種目メモと同じ `note_open` に相乗りする。
+            //   カード内に 44px のタップ標的を新設できる場所は無く（同 ADR）、ヘッダは
+            //   `e2e/smoke.spec.mjs` が `.card-head button` を 0 件で固定している。
+            //   adr/ux/machine-pins-on-the-exercise.md
+            {move || {
+                if note_open.get() {
+                    view! {
+                        <div class="pin-box" data-testid="pin-box">
+                            <span class="pin-label">"ピン"</span>
+                            <For
+                                each=move || pin_rows.get()
+                                key=|r| r.key
+                                children=move |row| {
+                                    let key = row.key;
+                                    view! {
+                                        <span class="pin-chip">
+                                            <input
+                                                class="pin-num"
+                                                type="text"
+                                                // ★ 数字キーパッドを出すためのヒント。保存は
+                                                //   文字列なので、取り込んだ `A` / `赤` は
+                                                //   ここを通らずそのまま残る
+                                                inputmode="decimal"
+                                                pattern="[0-9]*([.,][0-9]*)?"
+                                                maxlength=MAX_PIN_LEN.to_string()
+                                                value=row.value.clone()
+                                                aria-label="ピンの番号"
+                                                data-testid="pin-value"
+                                                on:focusin=move |_| kb_focus(kb)
+                                                on:focusout=move |_| kb_blur(kb)
+                                                on:input=move |ev| {
+                                                    let v = event_target_value(&ev);
+                                                    pin_rows
+                                                        .update(|rs| {
+                                                            if let Some(r) = rs
+                                                                .iter_mut()
+                                                                .find(|r| r.key == key)
+                                                            {
+                                                                r.value = v;
+                                                            }
+                                                        });
+                                                    commit_pins();
+                                                }
+                                            />
+                                            <button
+                                                class="icon-btn pin-remove"
+                                                aria-label="このピンを削除"
+                                                data-testid="pin-remove"
+                                                on:click=move |_| remove_pin(key)
+                                            >
+                                                {icon(icon::X)}
+                                            </button>
+                                        </span>
+                                    }
+                                }
+                            />
+                            // ★ 上限に達したら出さない（押しても何も起きないボタンを作らない）
+                            {move || {
+                                (pin_rows.with(Vec::len) < MAX_PINS)
+                                    .then(|| {
+                                        view! {
+                                            <button
+                                                class="link-btn pin-add"
+                                                aria-label="ピンを追加"
+                                                data-testid="pin-add"
+                                                on:click=add_pin
+                                            >
+                                                "＋"
+                                            </button>
+                                        }
+                                    })
+                            }}
+                        </div>
+                    }
+                        .into_any()
+                } else {
+                    // 閉じていても保存済みのピンは読める。マシンをセットするとき
+                    // タップが要らない（種目メモの `.ex-note-read` と同じ作法）
+                    (!pins.with(Vec::is_empty))
+                        .then(|| {
+                            view! {
+                                <p class="pin-read" data-testid="pin-read">
+                                    {move || format!("ピン {}", pins.with(|p| p.join("・")))}
+                                </p>
+                            }
+                        })
+                        .into_any()
+                }
+            }}
 
             // ── 種目メモ ──────────────────────────────────────────────────────
             //

@@ -96,7 +96,7 @@ test('manifest が取得でき display=standalone かつ id がある', async ({
 
   // description は Chrome のインストールプロンプトに出る（adr/seo/crawler-metadata-and-hardcoded-origin.md）
   expect(manifest.description).toBeTruthy();
-  expect(manifest.lang).toBe('ja');
+  expect(manifest.lang).toBe('en');
 
   // ★ ホーム画面のアイコン下に出るのは short_name / apple-mobile-web-app-title であって
   //   <title> ではない。4 箇所揃っていないと DOM だけ英語で iPhone は日本語のまま残る

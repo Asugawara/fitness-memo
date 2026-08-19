@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use chrono::{Datelike, NaiveDate, TimeDelta};
 
 use crate::model::{
-    Db, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, Routine, RoutineId, SCHEMA,
-    Session, SetEntry,
+    Db, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, MAX_PIN_LEN, MAX_PINS, Routine,
+    RoutineId, SCHEMA, Session, SetEntry,
 };
 
 /// `Db::sessions` のキー書式。ゼロ埋め ISO なので辞書順 = 時系列順になる。
@@ -1057,6 +1057,7 @@ pub fn migrate(raw: &str, ids: &mut IdGen) -> Result<Db, RestoreError> {
 /// `ids` はトレーニングメニューの ID 重複を解くためだけに使う（[`normalize_routines`]）。
 fn normalize(db: &mut Db, ids: &mut IdGen) {
     normalize_routines(db, ids);
+    normalize_exercises(db);
 
     let mut sessions: BTreeMap<String, Session> = BTreeMap::new();
     for (key, session) in std::mem::take(&mut db.sessions) {
@@ -1115,6 +1116,68 @@ fn normalize_routines(db: &mut Db, ids: &mut IdGen) {
             r.id = ids.alloc();
         }
         seen.push(r.id);
+    }
+}
+
+/// 種目の正規化。いまは [`Exercise::pins`]（マシンのピン）だけを見る。
+///
+/// ★ ここの `split_whitespace` は**書式の整形ではなく構造の適用**なので、
+/// [`normalize_routines`] の「取り込んだデータを trim しない」規則とは矛盾しない。
+/// あちらが守るのは利用者が書いた**自由記述の中身**で、こちらが守るのは
+/// 「1 要素 = 空白を含まない 1 個の値」という [`Exercise::pins`] の不変条件。
+/// TSV の `ピン` 列はセル内を空白で区切る（[`export_tsv`]）ので、ここが崩れると
+/// 書き出して読み戻した値が一致しなくなる。
+fn normalize_exercises(db: &mut Db) {
+    for e in &mut db.exercises {
+        e.pins = clean_pins(std::mem::take(&mut e.pins));
+    }
+}
+
+/// [`normalize_exercises`] と [`set_pins`] が共有する 1 種目ぶんの規則。
+///
+/// ★ **2 経路に分けて書かない。** 食い違うと「画面で消えたはずの値が取り込みで
+/// 生き返る」「取り込みで落ちた値が画面からは入る」が起きる。
+///
+/// ★ 重複は消さない。「シート高 3 / バー位置 3」は正当な入力で、
+/// [`normalize_routines`] が `ExerciseId` の重複を消すのとは前提が違う（あちらは
+/// 消さないと「1 日 1 種目 1 ログ」が破れる）。
+///
+/// ★ 並べ替えない。`Vec` の順が「上から下へ触る順」そのもの。
+fn clean_pins(pins: Vec<String>) -> Vec<String> {
+    pins.iter()
+        .flat_map(|p| p.split_whitespace())
+        // ★ char で数える。バイトで切ると UTF-8 の途中で割れて panic する
+        .map(|p| p.chars().take(MAX_PIN_LEN).collect::<String>())
+        // ★ 分割の**後**で本数を見る。`"1 2 3 4 5 6 7 8 9"` が 1 要素で入りうる
+        .take(MAX_PINS)
+        .collect()
+}
+
+/// 種目のマシンのピンを差し替える（記録タブの入力欄から呼ぶ）。
+///
+/// ★ 正規化を `views` 側に持たせない。`views/*` には unit test が無いので、
+/// [`normalize_exercises`] と規則がずれても気づけない。
+pub fn set_pins(db: &mut Db, id: ExerciseId, pins: Vec<String>) {
+    if let Some(e) = db.exercises.iter_mut().find(|e| e.id == id) {
+        e.pins = clean_pins(pins);
+    }
+}
+
+/// 既存の種目に取り込み側のピンを**空のときだけ**入れる（[`merge_db`] から呼ぶ）。
+///
+/// ★ これが無いと、新品端末へ書き出しを戻したときに**ピンだけが黙って落ちる**。
+/// プリセットは固定 ID を持つ（[`crate::presets::preset_exercise_id`]）ので取り込みは
+/// 必ず「ID 一致」の枝を通り、その枝は取り込み側の `Exercise` を丸ごと捨てるため。
+///
+/// ★ 上書きはしない（adr/storage/import-is-merge-only.md の「足すだけ」）。マシンは
+/// 端末ではなく**ジムに紐づく**ので、上書きすると引っ越し先で入れ直した値が
+/// 古いファイル 1 枚で巻き戻る。体重の「最初の非空を採る」と同じ規則。
+///
+/// ★ `Conflict` は積まない。`order` / `archived` を黙って落としているのと同じ粒度で、
+/// ここで報告を増やすと実質同じデータの取り込みでも確認画面が赤くなる。
+fn fill_pins(existing: &mut Exercise, incoming: &Exercise) {
+    if existing.pins.is_empty() {
+        existing.pins = incoming.pins.clone();
     }
 }
 
@@ -1268,6 +1331,7 @@ fn upgrade_from_sequential(old: legacy::Db, ids: &mut IdGen) -> Db {
                 group_id: to_group(e.group_id),
                 order: e.order,
                 archived: e.archived,
+                pins: Vec::new(),
             })
             .collect(),
         // schema ≤2 にトレーニングメニューは存在しない（`legacy::Db` にフィールドが無い）
@@ -1430,7 +1494,7 @@ pub fn export_filename(now: chrono::NaiveDateTime) -> String {
 pub const TSV_MIME: &str = "text/tab-separated-values";
 
 /// 見出し行。**この並びが外部仕様**なので、テストがバイト一致で固定している。
-const TSV_HEADER: [&str; 12] = [
+const TSV_HEADER: [&str; 13] = [
     "日付",
     "部位",
     "種目",
@@ -1445,6 +1509,10 @@ const TSV_HEADER: [&str; 12] = [
     // ★ 後から**足した**列（進化規則 1）。既存 11 列の意味は変えていないので、
     //   この列を知らない古いアプリでも記録は今までどおり読める
     "メニュー",
+    // ★ 同じく後から足した列。ピンは種目に 1 つなので**その種目が最初に現れた行**に
+    //   だけ書く（体重・種目メモと同じ「使ったら空にする」）。セル内は半角空白区切りで、
+    //   1 要素が空白を含まないことは `normalize_exercises` が保証する
+    "ピン",
 ];
 
 /// 1 セルに落とす。**タブと改行を半角空白に潰す。**
@@ -1462,7 +1530,7 @@ fn flatten_cell(s: &str) -> String {
 }
 
 /// 1 行書く。★ 引数 11 個の関数を作らないための入れ物（`clippy::too_many_arguments`）。
-fn push_row(out: &mut String, cells: [&str; 12]) {
+fn push_row(out: &mut String, cells: [&str; 13]) {
     for (i, cell) in cells.iter().enumerate() {
         if i > 0 {
             out.push('\t');
@@ -1518,6 +1586,10 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
         .iter()
         .flat_map(|r| r.exercises.iter().copied())
         .collect();
+    // ピンを書き終えた種目。★ その種目が**ファイル中で最初に現れた行**にだけ書く
+    //   （体重・種目メモの「使ったら空にする」と同じ手）。毎行書くとシートで同じ
+    //   文字列が縦に伸びて読みづらく、行数ぶん容量も増える
+    let mut pins_written: HashSet<ExerciseId> = HashSet::new();
 
     for (key, session) in &db.sessions {
         let Some(date) = parse_date_key(key) else {
@@ -1542,6 +1614,12 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
                 .unwrap_or_default();
             let time = tsv_time(log.at, date, tz);
             let mut log_note = log.note.as_str();
+            let ex_pins = if pins_written.insert(ex.id) {
+                ex.pins.join(" ")
+            } else {
+                String::new()
+            };
+            let mut pins_cell = ex_pins.as_str();
 
             if log.sets.is_empty() {
                 // セットが 1 本も無いログ（「肩が痛いのでやめた」）。メモだけの行として残す。
@@ -1550,7 +1628,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
                     &mut out,
                     [
                         key, group, &ex.name, "", "", "", day_weight, "", log_note, day_note,
-                        &time, "",
+                        &time, "", pins_cell,
                     ],
                 );
                 day_weight = "";
@@ -1571,12 +1649,13 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
                     &mut out,
                     [
                         key, group, &ex.name, &no, &w, &reps, day_weight, &set.note, log_note,
-                        day_note, &time, "",
+                        day_note, &time, "", pins_cell,
                     ],
                 );
                 day_weight = "";
                 day_note = "";
                 log_note = "";
+                pins_cell = "";
                 wrote_any = true;
             }
         }
@@ -1586,7 +1665,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
             push_row(
                 &mut out,
                 [
-                    key, "", "", "", "", "", day_weight, "", "", day_note, "", "",
+                    key, "", "", "", "", "", day_weight, "", "", day_note, "", "", "",
                 ],
             );
         }
@@ -1597,17 +1676,23 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
         if logged.contains(&ex.id) {
             continue;
         }
-        // 手つかずのプリセット（名前も ID もそのまま）は書かない
-        if crate::presets::preset_exercise_id(&ex.name) == Some(ex.id) {
+        // 手つかずのプリセット（名前も ID もそのまま）は書かない。新規インストールに
+        // 必ず同じ固定 ID で居るので、書かなくても失われない。
+        // ★ ただしピンを入れた種目は「手つかず」ではない。ここで弾くと、記録もメニューも
+        //   無いプリセットに付けたピンだけが黙って消える
+        if ex.pins.is_empty() && crate::presets::preset_exercise_id(&ex.name) == Some(ex.id) {
             continue;
         }
+        let pins = ex.pins.join(" ");
         let group = db
             .group(ex.group_id)
             .map(|g| g.name.as_str())
             .unwrap_or_default();
         push_row(
             &mut out,
-            ["", group, &ex.name, "", "", "", "", "", "", "", "", ""],
+            [
+                "", group, &ex.name, "", "", "", "", "", "", "", "", "", &pins,
+            ],
         );
     }
     // 種目を 1 つも持たない部位。画面から作れるので、書かないと静かに消える
@@ -1620,7 +1705,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
         }
         push_row(
             &mut out,
-            ["", &g.name, "", "", "", "", "", "", "", "", "", ""],
+            ["", &g.name, "", "", "", "", "", "", "", "", "", "", ""],
         );
     }
 
@@ -1640,7 +1725,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
             // 名前だけのメニュー（種目を選ぶ前に閉じた状態）。`migrate` が残すと決めた形
             push_row(
                 &mut out,
-                ["", "", "", "", "", "", "", "", "", "", "", &r.name],
+                ["", "", "", "", "", "", "", "", "", "", "", &r.name, ""],
             );
             continue;
         }
@@ -1652,6 +1737,11 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
             };
             no += 1;
             let pos = no.to_string();
+            let pins = if pins_written.insert(ex.id) {
+                ex.pins.join(" ")
+            } else {
+                String::new()
+            };
             let group = db
                 .group(ex.group_id)
                 .map(|g| g.name.as_str())
@@ -1659,7 +1749,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset) -> String {
             push_row(
                 &mut out,
                 [
-                    "", group, &ex.name, &pos, "", "", "", "", "", "", "", &r.name,
+                    "", group, &ex.name, &pos, "", "", "", "", "", "", "", &r.name, &pins,
                 ],
             );
         }
@@ -1804,6 +1894,7 @@ struct TsvCols {
     log_note: Option<usize>,
     day_note: Option<usize>,
     routine: Option<usize>,
+    pins: Option<usize>,
 }
 
 /// 見出し行 → 列の対応。知らない列は無視する（形式の進化規則 2）。
@@ -1825,6 +1916,7 @@ fn tsv_header(line: &str) -> Option<TsvCols> {
             "種目メモ" => &mut cols.log_note,
             "体調メモ" => &mut cols.day_note,
             "メニュー" => &mut cols.routine,
+            "ピン" => &mut cols.pins,
             // 「時刻」は書き出し専用（[`export_tsv`] の doc 参照）。読まない
             _ => continue,
         };
@@ -1991,6 +2083,7 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
                     ex_name,
                 )
             {
+                take_pins(&mut out, id, at(cols.pins));
                 // ★ 重複は初出だけ残す。同じ種目が 2 回入ると展開時にログが 2 本でき、
                 //   「1 日 1 種目 1 ログ」が破れる（`normalize_routines` も同じことをする）
                 if !members.contains(&id) {
@@ -2022,6 +2115,10 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
                 ex_name,
             )
         };
+
+        if let Some(id) = ex_id {
+            take_pins(&mut out, id, at(cols.pins));
+        }
 
         let Some(date) = date else {
             continue; // 種目マスタ行。ここまでで `out.exercises` に載っている
@@ -2147,6 +2244,24 @@ fn exactly_one<T>(mut it: impl Iterator<Item = T>) -> Option<T> {
     it.next().is_none().then_some(first)
 }
 
+/// 取り込んだ行の `ピン` 列を `out` の種目へ入れる。**空のときだけ**入れる。
+///
+/// ★ 「最初の非空を採る」のは体重・体調メモと同じ規則で、書き出しが種目の初出行に
+/// しか書かない一方、シートで並べ替えられていても拾えるようにするため。
+///
+/// ★ 上書きしないのは `fill_pins`（`merge_db`）と同じ理由。梯子 1・2 で手元の種目を
+/// 複製した枝では、ここに来た時点で既にローカルのピンが入っている。
+fn take_pins(out: &mut Db, id: ExerciseId, cell: &str) {
+    if cell.trim().is_empty() {
+        return;
+    }
+    if let Some(e) = out.exercises.iter_mut().find(|e| e.id == id)
+        && e.pins.is_empty()
+    {
+        e.pins = clean_pins(vec![cell.to_string()]);
+    }
+}
+
 /// 部位名 → `GroupId`。引き当てた部位は `out.groups` にも載せる。
 fn resolve_group(
     out: &mut Db,
@@ -2227,6 +2342,7 @@ fn resolve_exercise(
             group_id,
             order: 0,
             archived: false,
+            pins: Vec::new(),
         }
     };
 
@@ -2426,7 +2542,7 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
     // ── 種目 ──
     let mut exercise_alias: HashMap<ExerciseId, ExerciseId> = HashMap::new();
     for e in theirs.exercises {
-        if let Some(existing) = mine.exercise(e.id) {
+        if let Some(existing) = mine.exercises.iter_mut().find(|x| x.id == e.id) {
             if existing.name != e.name {
                 // 改名は正当な操作。取り込み先の名前を残し、あったことだけ伝える
                 report.conflicts.push(Conflict::Renamed {
@@ -2434,11 +2550,13 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
                     incoming: e.name.clone(),
                 });
             }
+            fill_pins(existing, &e);
             exercise_alias.insert(e.id, e.id);
             continue;
         }
-        if let Some(existing) = mine.exercises.iter().find(|x| x.name == e.name) {
+        if let Some(existing) = mine.exercises.iter_mut().find(|x| x.name == e.name) {
             exercise_alias.insert(e.id, existing.id);
+            fill_pins(existing, &e);
             report.conflicts.push(Conflict::NameMatched {
                 name: e.name.clone(),
             });
@@ -2693,6 +2811,7 @@ mod tests {
             group_id: g(group_id),
             order: 0,
             archived: false,
+            pins: Vec::new(),
         }
     }
 
@@ -4914,7 +5033,7 @@ mod tests {
         let tsv = export_tsv(&crate::presets::seeded_db(), jst());
         assert_eq!(
             tsv.lines().next().expect("見出し行"),
-            "日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー"
+            "日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン"
         );
     }
 
@@ -5144,6 +5263,7 @@ mod tests {
             group_id: crate::presets::preset_group_id("胸").expect("プリセット"),
             order: 99,
             archived: false,
+            pins: Vec::new(),
         });
         let tsv = export_tsv(&db, jst());
         let r = rows(&tsv);
@@ -5177,7 +5297,7 @@ mod tests {
         let tsv = export_tsv(&db, jst());
         assert_eq!(tsv.lines().count(), 2, "改行でレコードが割れている: {tsv}");
         let r = rows(&tsv);
-        assert_eq!(r[1].len(), 12, "タブで列がずれている");
+        assert_eq!(r[1].len(), 13, "タブで列がずれている");
         assert_eq!(r[1][7], "前半 きつい");
         assert_eq!(r[1][8], "1 本目 2 本目");
     }
@@ -5389,6 +5509,7 @@ mod tests {
             group_id: crate::presets::preset_group_id("胸").expect("プリセット"),
             order: 99,
             archived: false,
+            pins: Vec::new(),
         });
 
         let tsv = export_tsv(&mine, jst());
@@ -5437,6 +5558,7 @@ mod tests {
             group_id: crate::presets::preset_group_id("肩").expect("プリセット"),
             order: 9,
             archived: false,
+            pins: Vec::new(),
         });
 
         let tsv =
@@ -5463,6 +5585,7 @@ mod tests {
             group_id: crate::presets::preset_group_id("肩").expect("プリセット"),
             order: 9,
             archived: false,
+            pins: Vec::new(),
         });
         let chest_bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         let set = |weight, reps| SetEntry {
@@ -5874,6 +5997,7 @@ mod tests {
             group_id: crate::presets::preset_group_id("胸").expect("プリセット"),
             order: 9,
             archived: false,
+            pins: Vec::new(),
         });
 
         let raw = export_json(&db);
@@ -6032,6 +6156,7 @@ mod tests {
             group_id: chest,
             order: 9,
             archived: false,
+            pins: Vec::new(),
         });
         db.sessions.insert(
             date_key(d(2026, 8, 1)),
@@ -6086,6 +6211,7 @@ mod tests {
             group_id: crate::presets::preset_group_id("背中").expect("プリセット"),
             order: 9,
             archived: false,
+            pins: Vec::new(),
         });
         db.sessions.insert(
             date_key(d(2026, 8, 2)),
@@ -6298,6 +6424,7 @@ mod tests {
             group_id: chest,
             order: 9,
             archived: false,
+            pins: Vec::new(),
         });
         theirs.sessions.insert(
             date_key(d(2026, 9, 9)),
@@ -6425,6 +6552,7 @@ mod tests {
                 group_id: chest,
                 order: 9,
                 archived: false,
+                pins: Vec::new(),
             });
         }
         theirs.routines.push(Routine {
@@ -6456,6 +6584,7 @@ mod tests {
             group_id: chest,
             order: 9,
             archived: false,
+            pins: Vec::new(),
         });
         theirs.routines.push(Routine {
             id: r(1),
@@ -6820,6 +6949,7 @@ mod tests {
             group_id: crate::presets::preset_group_id("胸").expect("プリセット"),
             order: 9,
             archived: false,
+            pins: Vec::new(),
         });
 
         // B は同名の種目を**別の ID** で持ち、A に無い日に記録している
@@ -6830,6 +6960,7 @@ mod tests {
             group_id: crate::presets::preset_group_id("胸").expect("プリセット"),
             order: 9,
             archived: false,
+            pins: Vec::new(),
         });
         b.sessions.insert(
             date_key(d(2026, 9, 9)),
@@ -6862,5 +6993,345 @@ mod tests {
             1,
             "同名の種目が 2 つに増えた"
         );
+    }
+
+    // ── マシンのピン（adr/ux/machine-pins-on-the-exercise.md）──────────────────
+
+    /// 取り込んだ JSON がどんな形でも、`Vec` の 1 要素は「空白を含まない 1 個の値」に
+    /// なる。TSV の `ピン` 列がセル内を空白で区切るので、ここが崩れると書き出して
+    /// 読み戻した値が一致しなくなる。
+    #[test]
+    fn normalize_splits_a_pin_that_contains_whitespace() {
+        assert_eq!(clean_pins(vec!["3 5".into()]), ["3", "5"]);
+        assert_eq!(clean_pins(vec!["  7  ".into()]), ["7"]);
+        assert_eq!(clean_pins(vec!["3\t5\n2".into()]), ["3", "5", "2"]);
+    }
+
+    #[test]
+    fn normalize_drops_blank_pins() {
+        assert_eq!(clean_pins(vec!["".into(), " ".into(), "3".into()]), ["3"]);
+        assert!(clean_pins(vec!["".into(), "　".into()]).is_empty());
+    }
+
+    /// 上限は UI の制限ではなく**取り込みのための門番**（`drop_unrepresentable_weights`
+    /// と同じ立場）。★ 数えるのは分割の**後** — `"1 2 3 …"` が 1 要素で入りうる。
+    #[test]
+    fn normalize_caps_the_number_of_pins() {
+        let many: Vec<String> = (0..MAX_PINS + 5).map(|i| i.to_string()).collect();
+        assert_eq!(clean_pins(many).len(), MAX_PINS);
+        assert_eq!(
+            clean_pins(vec!["1 2 3 4 5 6 7 8 9 10 11".into()]).len(),
+            MAX_PINS
+        );
+    }
+
+    /// ★ char で切る。バイトで切ると UTF-8 の途中で割れて panic する。
+    #[test]
+    fn normalize_truncates_a_long_pin_by_chars_not_bytes() {
+        assert_eq!(
+            clean_pins(vec!["あいうえおかきくけこ".into()]),
+            ["あいうえおか"]
+        );
+    }
+
+    /// 「シート高 3 / バー位置 3」は正当な入力。`normalize_routines` が `ExerciseId` の
+    /// 重複を消すのとは前提が違う（あちらは消さないと「1 日 1 種目 1 ログ」が破れる）。
+    #[test]
+    fn normalize_keeps_duplicate_pins() {
+        assert_eq!(clean_pins(vec!["3".into(), "3".into()]), ["3", "3"]);
+    }
+
+    /// `Vec` の順が「上から下へ触る順」そのもの。並べ替えたら別のマシン設定になる。
+    #[test]
+    fn normalize_keeps_the_pin_order() {
+        assert_eq!(
+            clean_pins(vec!["9".into(), "1".into(), "5".into()]),
+            ["9", "1", "5"]
+        );
+    }
+
+    /// 画面からの書き込みと取り込みで規則が食い違うと、**画面で消えたはずの値が
+    /// 取り込みで生き返る**（またはその逆）。
+    #[test]
+    fn set_pins_normalizes_the_same_way_as_normalize() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let raw: Vec<String> = vec!["  3 5 ".into(), "".into(), "あいうえおかきく".into()];
+
+        let mut through_ui = crate::presets::seeded_db();
+        set_pins(&mut through_ui, bench, raw.clone());
+
+        let mut through_import = crate::presets::seeded_db();
+        if let Some(e) = through_import.exercises.iter_mut().find(|e| e.id == bench) {
+            e.pins = raw;
+        }
+        normalize_exercises(&mut through_import);
+
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").pins,
+            ["3", "5", "あいうえおか"]
+        );
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").pins,
+            through_import.exercise(bench).expect("種目").pins,
+            "画面からの書き込みと取り込みで規則がずれている"
+        );
+    }
+
+    /// ★ ピンを足しても schema は上げない（`model::SCHEMA` の doc）。上げると旧版が
+    /// `RestoreError::Unsupported` で退避し、前方互換を積極的に壊す側になる。
+    #[test]
+    fn migrate_does_not_bump_the_schema_for_pins() {
+        let db = migrate(
+            r#"{"schema":3,"groups":[],"exercises":[{"id":"000000000001","name":"自作マシン","group_id":"000000000002","order":0,"archived":false,"pins":["3 5"]}],"sessions":{}}"#,
+            &mut ids(),
+        )
+        .expect("読める");
+
+        assert_eq!(db.schema, SCHEMA);
+        assert_eq!(SCHEMA, 3, "ピンの追加で schema を上げてはいけない");
+        assert_eq!(
+            db.exercises[0].pins,
+            ["3", "5"],
+            "migrate が normalize_exercises を通っていない"
+        );
+    }
+
+    /// ★ **これが落ちると機能そのものが成立しない。**
+    ///
+    /// 新品端末へ書き出しを戻す経路は「プリセットは固定 ID を持つので必ず ID 一致
+    /// する」（`presets::preset_exercise_id`、`resolve_exercise` の梯子 3）を通る。
+    /// ID 一致の枝が取り込み側のピンを見ないと **機種変更でピンだけ黙って消える** —
+    /// しかも記録は全部戻ってくるので気づきにくい。
+    #[test]
+    fn merge_fills_empty_pins_from_the_incoming_db() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut mine = crate::presets::seeded_db();
+        let mut theirs = crate::presets::seeded_db();
+        set_pins(&mut theirs, bench, vec!["3".into(), "5".into()]);
+
+        merge_db(&mut mine, theirs);
+
+        assert_eq!(
+            mine.exercise(bench).expect("種目").pins,
+            ["3", "5"],
+            "ID 一致の枝でピンが落ちた"
+        );
+    }
+
+    /// 名前一致の枝（2 台で別々に作った同名の自作種目）も同じ扱い。
+    #[test]
+    fn merge_fills_empty_pins_when_the_exercise_matched_by_name() {
+        let chest = crate::presets::preset_group_id("胸").expect("プリセット");
+        let mut mine = crate::presets::seeded_db();
+        mine.exercises.push(Exercise {
+            id: ExerciseId::from_bits(0xB001),
+            name: "ペックフライ".into(),
+            group_id: chest,
+            order: 9,
+            archived: false,
+            pins: Vec::new(),
+        });
+        let mut theirs = crate::presets::seeded_db();
+        theirs.exercises.push(Exercise {
+            id: ExerciseId::from_bits(0xC001),
+            name: "ペックフライ".into(),
+            group_id: chest,
+            order: 9,
+            archived: false,
+            pins: vec!["7".into()],
+        });
+
+        merge_db(&mut mine, theirs);
+
+        assert_eq!(
+            mine.exercise(ExerciseId::from_bits(0xB001))
+                .expect("種目")
+                .pins,
+            ["7"],
+            "名前一致の枝でピンが落ちた"
+        );
+    }
+
+    /// 取り込みは足すだけ（adr/storage/import-is-merge-only.md）。ピンも同じで、
+    /// **手元に値があるなら触らない**。マシンは端末ではなくジムに紐づくので、
+    /// 上書きすると「引っ越し先のジムの値」が古いファイルで巻き戻る。
+    #[test]
+    fn merge_never_overwrites_pins_that_are_already_set() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut mine = crate::presets::seeded_db();
+        set_pins(&mut mine, bench, vec!["1".into()]);
+        let mut theirs = crate::presets::seeded_db();
+        set_pins(&mut theirs, bench, vec!["9".into()]);
+
+        merge_db(&mut mine, theirs);
+
+        assert_eq!(
+            mine.exercise(bench).expect("種目").pins,
+            ["1"],
+            "取り込みが手元のピンを書き換えた"
+        );
+    }
+
+    /// ピンの列位置を見出しから引く（テストが列順に依存しないように）。
+    fn pin_col(r: &[Vec<&str>]) -> usize {
+        r[0].iter()
+            .position(|c| *c == "ピン")
+            .expect("ピン列がある")
+    }
+
+    /// 毎行書くとシートで同じ文字列が縦に伸び、行数ぶん容量も増える。
+    /// 体重・種目メモと同じ「まとまりの先頭 1 行だけ」。
+    #[test]
+    fn export_tsv_writes_the_pins_only_on_the_first_row_of_an_exercise() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = crate::presets::seeded_db();
+        set_pins(&mut db, bench, vec!["3".into(), "5".into()]);
+        db.sessions.insert(
+            date_key(d(2026, 8, 1)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: bench,
+                    sets: vec![
+                        SetEntry {
+                            weight: 60.0,
+                            reps: 10,
+                            note: String::new(),
+                        },
+                        SetEntry {
+                            weight: 60.0,
+                            reps: 8,
+                            note: String::new(),
+                        },
+                    ],
+                    at: None,
+                    note: String::new(),
+                }],
+                ..Session::default()
+            },
+        );
+
+        let tsv = export_tsv(&db, jst());
+        let r = rows(&tsv);
+        let col = pin_col(&r);
+        let cells: Vec<&str> = r[1..]
+            .iter()
+            .filter(|row| row[2] == "ベンチプレス")
+            .map(|row| row[col])
+            .collect();
+
+        assert_eq!(
+            cells,
+            ["3 5", ""],
+            "毎行書いている（または 1 行も書いていない）"
+        );
+    }
+
+    /// ★ 手つかずのプリセットを書き出さない規則の穴。記録にもメニューにも出てこない
+    /// 種目にピンだけ付けると、種目マスタ行の「プリセットは書かない」で弾かれて
+    /// **ピンだけが黙って消える**。
+    #[test]
+    fn export_tsv_keeps_a_preset_that_only_has_pins() {
+        let squat = crate::presets::preset_exercise_id("スクワット").expect("プリセット");
+        let mut db = crate::presets::seeded_db();
+        set_pins(&mut db, squat, vec!["7".into()]);
+
+        let tsv = export_tsv(&db, jst());
+        let r = rows(&tsv);
+        let col = pin_col(&r);
+        let row = r[1..]
+            .iter()
+            .find(|row| row[2] == "スクワット")
+            .expect("ピンを持つプリセットは種目マスタ行に出る");
+
+        assert_eq!(row[col], "7");
+        // 手つかずのプリセットは今までどおり書かない（この規則自体は壊していない）
+        assert!(
+            !r[1..].iter().any(|row| row[2] == "デッドリフト"),
+            "ピンの無いプリセットまで書き出している"
+        );
+    }
+
+    /// 書き出し → 新品端末へ戻す。**この経路が通らないと機種変更でピンが消える。**
+    #[test]
+    fn tsv_round_trips_pins() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = crate::presets::seeded_db();
+        set_pins(&mut db, bench, vec!["3".into(), "5".into(), "2".into()]);
+        let tsv = export_tsv(&db, jst());
+
+        let mut fresh = crate::presets::seeded_db();
+        let incoming = parse_import(&tsv, &mut ids(), &fresh).expect("読み戻せる");
+        merge_db(&mut fresh, incoming);
+
+        assert_eq!(
+            fresh.exercise(bench).expect("種目").pins,
+            ["3", "5", "2"],
+            "TSV の往復でピンが落ちた"
+        );
+    }
+
+    /// 自作種目（プリセットに無い名前）でも往復する。ID は取り込み側で採番されるので、
+    /// 名前で引き直して見る。
+    #[test]
+    fn tsv_round_trips_pins_for_a_custom_exercise() {
+        let chest = crate::presets::preset_group_id("胸").expect("プリセット");
+        let mut db = crate::presets::seeded_db();
+        db.exercises.push(Exercise {
+            id: ExerciseId::from_bits(0xD001),
+            name: "ペックフライ".into(),
+            group_id: chest,
+            order: 9,
+            archived: false,
+            pins: vec!["4".into(), "12".into()],
+        });
+        let tsv = export_tsv(&db, jst());
+
+        let mut fresh = crate::presets::seeded_db();
+        let incoming = parse_import(&tsv, &mut ids(), &fresh).expect("読み戻せる");
+        merge_db(&mut fresh, incoming);
+
+        let got = fresh
+            .exercises
+            .iter()
+            .find(|e| e.name == "ペックフライ")
+            .expect("自作種目が復活する");
+        assert_eq!(got.pins, ["4", "12"]);
+    }
+
+    /// 取り込みは足すだけ。`merge_db` の `fill_pins` と `parse_tsv` の `take_pins` の
+    /// **両方**が上書きしないことを、経路の端から端まで通して見る。
+    #[test]
+    fn tsv_import_does_not_overwrite_local_pins() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut theirs = crate::presets::seeded_db();
+        set_pins(&mut theirs, bench, vec!["9".into()]);
+        let tsv = export_tsv(&theirs, jst());
+
+        let mut mine = crate::presets::seeded_db();
+        set_pins(&mut mine, bench, vec!["1".into()]);
+        let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
+        merge_db(&mut mine, incoming);
+
+        assert_eq!(
+            mine.exercise(bench).expect("種目").pins,
+            ["1"],
+            "取り込みが手元のピンを書き換えた"
+        );
+    }
+
+    #[test]
+    fn importing_the_same_tsv_twice_keeps_the_pins_unchanged() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = crate::presets::seeded_db();
+        set_pins(&mut db, bench, vec!["3".into(), "5".into()]);
+        let tsv = export_tsv(&db, jst());
+
+        let mut mine = crate::presets::seeded_db();
+        for _ in 0..2 {
+            let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
+            merge_db(&mut mine, incoming);
+        }
+
+        assert_eq!(mine.exercise(bench).expect("種目").pins, ["3", "5"]);
     }
 }

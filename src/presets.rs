@@ -128,6 +128,7 @@ pub fn seed(db: &mut Db) {
                 group_id: preset.id,
                 order,
                 archived: false,
+                pins: Vec::new(),
             });
         }
     }

@@ -21,7 +21,7 @@ use leptos::prelude::*;
 
 use crate::chart_layout::{GRID_Y, X0, Y0, Y1, layout, n};
 
-use super::{cur_lang, fmt_date, fmt_metric, fmt_weight};
+use super::{cur_lang, fmt_date, fmt_metric, fmt_weight, t};
 
 /// "8/8"
 fn fmt_md(d: NaiveDate) -> String {
@@ -97,44 +97,38 @@ pub fn Chart(
                 let l = plot.get();
                 if l.is_empty() {
                     return view! {
-                        <p class="chart-empty" data-testid="chart-empty">"記録がありません"</p>
+                        <p class="chart-empty" data-testid="chart-empty">{t().progress.chart_empty}</p>
                     }
                         .into_any();
                 }
                 let x1 = l.x1;
+                // ★ 部品を助詞で繋いでいた組み立ては `Lang::chart_summary` に畳んである
+                //   （助詞の連結は英語に移せない）。ここは値を作って渡すだけ
+                let lang = cur_lang();
                 let span = l
                     .x_labels
                     .first()
                     .zip(l.x_labels.last())
                     .map(|((_, from, _), (_, to, _))| {
-                        format!("{} から {} まで", fmt_date(*from, cur_lang()), fmt_date(*to, cur_lang()))
-                    })
-                    .unwrap_or_default();
-                let metric_part = l
-                    .y_values
-                    .map(|_| format!("の推移。最大 {} {}", fmt_metric(l.max), unit.get()))
-                    .unwrap_or_else(|| "の体重の推移".to_string());
-                let weight_part = l
+                        (fmt_date(*from, lang), fmt_date(*to, lang))
+                    });
+                let max = fmt_metric(l.max);
+                let unit = unit.get();
+                let metric_part = l.y_values.map(|_| (max.as_str(), unit.as_str()));
+                let weight = l
                     .weight
                     .as_ref()
                     .filter(|_| l.y_values.is_some())
-                    .map(|w| {
-                        format!(
-                            "。体重 {}〜{} kg",
-                            fmt_weight_label(w.min),
-                            fmt_weight_label(w.max),
-                        )
-                    })
-                    .unwrap_or_default();
+                    .map(|w| (fmt_weight_label(w.min), fmt_weight_label(w.max)));
                 // ★ 線が週平均に落ちていることは画面からは分からない（破線を静かに保つため
                 //   注記を出していない）。読み上げには事実として残す
                 let weight_smoothed = l.weight.as_ref().is_some_and(|w| w.aggregated);
-                let smoothed = if weight_smoothed {
-                    "。体重の線は週平均"
-                } else {
-                    ""
-                };
-                let label = format!("{span}{metric_part}{weight_part}{smoothed}");
+                let label = lang.chart_summary(
+                    span.as_ref().map(|(f, t)| (f.as_str(), t.as_str())),
+                    metric_part,
+                    weight.as_ref().map(|(lo, hi)| (lo.as_str(), hi.as_str())),
+                    weight_smoothed,
+                );
                 let show_dots = !l.dense;
                 let last_idx = l.pts.len().saturating_sub(1);
                 let weight_points = l.weight.as_ref().map_or(0, |w| w.points);

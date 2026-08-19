@@ -1401,6 +1401,69 @@ test('「前回をコピー」は今日書いた種目メモを上書きしな�
   await expect(card.getByTestId('set-note').first()).toHaveValue('軽い');
 });
 
+test('「前回をコピー」は今日打ったセットメモを上書きしない（数値は置き換える）', async ({ page }) => {
+  // ★ このボタンは「保存済みのセットが空か」で出る。回数の無い行のメモは保存されず
+  //   画面にだけあり、行には「回数を入れると保存されます」が出ている状態で押せる
+  await seedPastLogs(page, [
+    {
+      daysAgo: 3,
+      exerciseName: 'ベンチプレス',
+      sets: [
+        { weight: 60, reps: 10, note: '軽い' },
+        { weight: 80, reps: 8, note: '限界まで' },
+      ],
+    },
+  ]);
+  const card = await addExercise(page, 'ベンチプレス');
+  await openNotes(page, card);
+  await card.getByTestId('set-note').first().fill('今日は左肩に違和感');
+  await blurActive(page);
+  // 保存されていないので copy-last は出たまま
+  await expect(card.getByTestId('copy-last')).toBeVisible();
+
+  await card.getByTestId('copy-last').click();
+
+  const rows = card.getByTestId('set-row');
+  await expect(rows).toHaveCount(2);
+  // 数値は前回どおりに流し込む（それがこのボタンの目的）
+  await expect(rows.nth(0).getByTestId('set-weight')).toHaveValue('60');
+  await expect(rows.nth(0).getByTestId('set-reps')).toHaveValue('10');
+  // ★ 今日打った 1 行目のメモは残る。打っていない 2 行目には前回のものが入る
+  await expect(rows.nth(0).getByTestId('set-note')).toHaveValue('今日は左肩に違和感');
+  await expect(rows.nth(1).getByTestId('set-note')).toHaveValue('限界まで');
+});
+
+test('コピーしたあとセットを全部消すと、残るメモだけのログに実施時刻は残らない', async ({ page }) => {
+  // ★ `at` は「その日に実施した」証拠。セットを打った時点で押されるが、行を全部
+  //   消すとメモだけのログが残るので、落とさないと時刻が居座って書き出しに出る
+  await seedPastLogs(page, [
+    {
+      daysAgo: 3,
+      exerciseName: 'ベンチプレス',
+      exerciseNote: 'セーフティ 2 穴目',
+      sets: [{ weight: 60, reps: 10, note: '軽い' }],
+    },
+  ]);
+  const card = await addExercise(page, 'ベンチプレス');
+  await card.getByTestId('copy-last').click();
+
+  await flushToStorage(page);
+  const before = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
+  const withSets = Object.values(JSON.parse(before).sessions).at(-1);
+  expect(withSets.logs[0].at, 'セットがあるうちは当日の時刻が入る').not.toBeNull();
+
+  // 行を全部消す（誤タップに気づいて取り消す動き）
+  await card.getByTestId('remove-set').first().click();
+  await blurActive(page);
+
+  await flushToStorage(page);
+  const after = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
+  const log = Object.values(JSON.parse(after).sessions).at(-1).logs[0];
+  expect(log.sets, 'セットは消えている').toEqual([]);
+  expect(log.note, '種目メモは残る（メモだけのログは残す仕様）').toBe('セーフティ 2 穴目');
+  expect(log.at, 'メモだけのログに実施時刻を持たせない').toBeNull();
+});
+
 test('メモ欄を開いたままコピーしても種目メモが入力欄に入る', async ({ page }) => {
   // ★ 開いている枝の `value=` は初期値を 1 度読むだけで signal を追跡しない。DOM を
   //   直さないと「画面は空・Db にはメモ」になり、次の 1 打鍵で消える

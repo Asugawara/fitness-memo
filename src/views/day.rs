@@ -241,7 +241,17 @@ fn write_log(
                 //     ないので、メモだけのログに時刻が入ると「その日に実施した」証拠を
                 //     持ってしまう（adr/data-model/at-optional-same-day-only.md）。
                 //     旧実装はセットが空なら削除枝に入っていたのでこの判定が要らなかった
-                if is_today && !log.sets.is_empty() {
+                //
+                //   ★ **セットが無くなったら時刻を落とす。** 押すだけでは足りない。
+                //     セットを打った（`at` が入った）あとに行を全部消すとメモだけのログが
+                //     残るので、**書いた時点の時刻が「実施した証拠」として居座る**。
+                //     `export_tsv` はセット無しのログにも「時刻」列を書くので、
+                //     やっていないトレーニングの実施時刻が書き出しに出る。
+                //     コピーがメモを運ぶようになって初めて届く経路になった
+                //     （adr/ux/copy-carries-the-notes.md）
+                if log.sets.is_empty() {
+                    log.at = None;
+                } else if is_today {
                     log.at = Some(now_ms());
                 }
             }
@@ -1047,6 +1057,16 @@ fn ExerciseCard(
         // ★ 新しいキーを振る。既存キーを再利用すると <For> が DOM を作り直さないため
         //   入力欄の value が古いまま残る
         let base = next_key.get_untracked();
+        // ★ 今日その行に打ってあるメモ。**位置で拾って残す。**
+        //   このボタンは「保存済みのセットが空か」で出るので、**回数の無い行に書いた
+        //   メモは保存されておらず、画面にだけある**（`commit` の `parse_reps` で落ちる）。
+        //   しかもその行には `note_orphan` が「回数を入れると保存されます」と出ていて、
+        //   打った文字が生きていることを約束している。数値は「前回どおりに流し込む」が
+        //   このボタンの目的そのものなので置き換えるが、メモは打ち直しの手が重く、
+        //   約束もしているので上書きしない（種目メモと同じ「既に書いてある場所には
+        //   書かない」を行単位に降ろしたもの。adr/ux/copy-carries-the-notes.md 決定 4）
+        let typed: Vec<String> =
+            rows.with_untracked(|rs| rs.iter().map(|r| r.note.clone()).collect());
         let filled: Vec<Row> = log
             .sets
             .iter()
@@ -1057,7 +1077,10 @@ fn ExerciseCard(
                 reps: s.reps.to_string(),
                 // ★ セットメモも運ぶ。core::copy_day / apply_routine と同じ規則
                 //   （adr/ux/copy-carries-the-notes.md）
-                note: s.note.clone(),
+                note: match typed.get(i) {
+                    Some(mine) if !mine.trim().is_empty() => mine.clone(),
+                    _ => s.note.clone(),
+                },
             })
             .collect();
         next_key.set(base + filled.len() as u32 + 1);

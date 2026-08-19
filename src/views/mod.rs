@@ -656,11 +656,9 @@ pub fn App() -> impl IntoView {
     //   og:locale と揃えてある — adr/seo/static-metadata-in-english.md）。
     //   ここは実行時の上書きで、切り替えのたびに追随する
     Effect::new(move |_| {
-        let l = lang.get();
-        // ★ キャッシュを先に更新する。この後の作り直しで各画面が `cur_lang()` を読む
-        CURRENT_LANG.set(l);
+        let tag = lang.get().tag();
         if let Some(root) = document().document_element() {
-            let _ = root.set_attribute("lang", l.tag());
+            let _ = root.set_attribute("lang", tag);
         }
     });
 
@@ -717,7 +715,15 @@ pub fn App() -> impl IntoView {
             //   ★ 押したボタン自身がこの中で破棄されるが、leptos は現在のイベント
             //     ハンドラを抜けてから破棄するので安全（設定の「‹ 設定」で実証済み）。
             {move || {
-                let t = lang.get().strings();
+                let l = lang.get();
+                // ★ **`view!` を作る前にキャッシュを更新する。** 子は `t()` /
+                //   `cur_lang()` から読むので、ここで更新しないと古い言語のまま描かれる。
+                //   `Effect` に任せると間に合わない — 描画クロージャは signal の変更で
+                //   同期に走るのに対し、`Effect` は DOM を作り終えた後に走るので、
+                //   ボトムタブ（この `l` を直接使う）だけが新しい言語になり、
+                //   その下の画面が前の言語で残る
+                CURRENT_LANG.set(l);
+                let t = l.strings();
                 view! {
                     {move || {
                         notice

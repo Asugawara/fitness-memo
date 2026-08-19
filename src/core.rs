@@ -2234,6 +2234,29 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
     //   ロケール書き戻しで全滅したファイルが `Ok(sessions: {})` で通り、画面は
     //   「新しく取り込むものはありません」と出す。**全部落ちたことに気づけない**のが
     //   このアプリでいちばん避けたい終わり方なので、読めなかったセルがあるなら言う
+    //   ★ **「セッションが残ったか」ではなく「セットが 1 本でも読めたか」で見る枝を先に置く。**
+    //   種目メモの列があると、回数が全滅してもログが**メモで生き残る**（この関数は回数を
+    //   読む前にログを push して `append_note` する。`dedupe_logs` の刈り取りは
+    //   「セットもメモも無い」なので落ちない）。すると `sessions` が非空になって下の
+    //   判定を素通りし、`summarize` は「0 日・0 セット」と出るのに `added_text` は
+    //   「N 日分・M 件の記録を追加します」と言う、という食い違いになる。
+    //   コピーがメモを全記録日に載せるようになった（adr/ux/copy-carries-the-notes.md）
+    //   ので、この形が例外ではなく既定になった。
+    //
+    //   ★ **下の式を書き換えて済ませてはいけない。** あちらは `(unread > 0 ||
+    //   exercises.is_empty())` を含むので、条件を「セットが無い」に緩めると
+    //   **体重・体調メモだけの正当なファイル**（`unread == 0`）が `NoRecords` になる。
+    //   `unread > 0` を前置した別の枝にすれば、読めなかったセルが 1 つも無いファイルは
+    //   1 本も触らない
+    if unread > 0
+        && out
+            .sessions
+            .values()
+            .all(|s| s.logs.iter().all(|l| l.sets.is_empty()))
+    {
+        return Err(ImportError::Unreadable);
+    }
+
     if out.sessions.is_empty()
         && out.routines.is_empty()
         && (unread > 0 || out.exercises.is_empty())
@@ -5717,6 +5740,38 @@ mod tests {
             parse_import(bad_dates, &mut ids(), &mine),
             Err(ImportError::Unreadable)
         );
+    }
+
+    /// ★ **種目メモがあると上のテストをすり抜ける経路**を塞いだことの網。
+    ///   `parse_tsv` は回数を読む**前に**ログを push して `append_note` するので、
+    ///   種目メモの列に値があると回数が全滅してもログがメモで生き残る。
+    ///   `dedupe_logs` は「セットもメモも無い」ログしか落とさないので `sessions` が
+    ///   非空になり、`sessions.is_empty()` を見る判定を素通りしていた。
+    ///   コピーがメモを全記録日に載せるようになった（adr/ux/copy-carries-the-notes.md）
+    ///   ので、これが例外ではなく既定の形になる。
+    #[test]
+    fn tsv_import_says_so_when_every_count_failed_even_with_a_note() {
+        let mine = crate::presets::seeded_db();
+        // 回数が「10回」で全滅。種目メモだけは読める
+        let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\tセットメモ\t種目メモ\n                   2026-08-01\t胸\tベンチプレス\t1\t60\t10回\t軽い\tセーフティ 2 穴目\n";
+        assert_eq!(
+            parse_import(tsv, &mut ids(), &mine),
+            Err(ImportError::Unreadable),
+            "セットが 1 本も読めていないなら、メモが残っていても失敗と言う"
+        );
+    }
+
+    /// ★ 上の枝が**正当なファイルを巻き込んでいない**ことの網。メモだけの記録
+    ///   （「肩が痛いのでやめた」）は `export_tsv` がセット無しの行として書き出す形で、
+    ///   読めなかったセルは 1 つも無い。ここが落ちるなら枝の条件が広すぎる。
+    #[test]
+    fn tsv_import_keeps_a_file_that_only_holds_notes_and_reads_every_cell() {
+        let mine = crate::presets::seeded_db();
+        let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\tセットメモ\t種目メモ\n                   2026-08-01\t胸\tベンチプレス\t\t\t\t\t肩が痛いのでやめた\n";
+        let db = parse_import(tsv, &mut ids(), &mine).expect("読める");
+        let log = &db.sessions.get("2026-08-01").expect("その日").logs[0];
+        assert_eq!(log.note, "肩が痛いのでやめた");
+        assert!(log.sets.is_empty());
     }
 
     /// ★ シートが数値列を `10.0` と書き戻してもセットが消えない。ここが落ちると

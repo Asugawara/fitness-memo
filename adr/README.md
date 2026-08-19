@@ -27,6 +27,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [ブラウザサポートは Safari を基準にし、polyfill を入れない](architecture/browser-support-policy.md) | 採用 |
 | [読み込みと操作は実測して、何も入れないと決めた](architecture/measure-before-optimizing-and-do-nothing.md) | 採用 |
 | [アイコンに lucide を採り、`assets/icons/*.svg` を `include_str!` で埋め込む](architecture/lucide-icons-as-included-svg.md) | 採用 |
+| [i18n crate を入れず、`src/i18n.rs` の struct + `const` 2 枚で文言を持つ](architecture/i18n-hand-rolled-string-table.md) | 採用 |
 
 ### data-model — データ構造と不変条件
 
@@ -59,6 +60,8 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [取り込みは「足すだけ」に固定する](storage/import-is-merge-only.md) | 採用 |
 | [同一オリジン内の多層バックアップを採用しない](storage/no-same-origin-redundancy.md) | 採用 |
 | [UI の状態を `Db` に入れず別キーに置く](storage/ui-state-in-separate-key.md) | 採用 |
+| [プリセット名は初回投入の言語で固定し、ユーザーデータとして扱う](storage/preset-names-are-user-data-seeded-once.md) | 採用 |
+| [TSV の見出しは UI 言語で書き、読み込みは日英どちらも受ける](storage/tsv-header-follows-the-ui-language.md) | 採用 |
 
 ### pwa — オフライン動作と iOS 実機
 
@@ -102,6 +105,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [メニュー編集シートの「選択中」をドラッグで並べ替え、種目ピッカーを複数開けるアコーディオンにする](ux/routine-editor-drag-and-accordion.md) | 採用 |
 | [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](ux/machine-pins-on-the-exercise.md) | 採用 |
 | [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](ux/copy-carries-the-notes.md) | 採用 |
+| [言語はブラウザに従い、選んだらそれを優先する](ux/language-follows-the-browser-then-the-setting.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 
@@ -117,7 +121,9 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 
 | タイトル | 状態 |
 |---|---|
-| [クローラ向けメタデータを本番 URL のハードコードで持ち、オフラインシェルから外す](seo/crawler-metadata-and-hardcoded-origin.md) | 採用 |
+| [クローラ向けメタデータを本番 URL のハードコードで持ち、オフラインシェルから外す](seo/crawler-metadata-and-hardcoded-origin.md) | 採用（メタデータの言語は下記で英語に改訂） |
+| [静的メタデータを英語に統一し、`<html lang>` は実行時に切り替える](seo/static-metadata-in-english.md) | 採用 |
+| [GitHub の Social preview 画像を `assets/` に生成し、アップロードは手作業と割り切る](seo/github-social-preview-image.md) | 採用 |
 
 ### process — 進め方
 
@@ -126,3 +132,4 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [実装前に敵対的レビューを回す](process/adversarial-review-before-implementation.md) | 採用 |
 | [Herdr の波状並列でファイル所有権を分けて実装する](process/herdr-wave-parallelism.md) | 採用 |
 | [ADR を `adr/` にカテゴリ別で置く](process/adr-in-adr-directory.md) | 採用 |
+| [README を英語で正とし、日本語版を `README.ja.md` に置く](process/readme-in-english-with-japanese-mirror.md) | 採用 |

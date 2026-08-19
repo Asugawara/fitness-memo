@@ -1,22 +1,52 @@
-# 筋トレメモ
+<p align="center">
+  <img src="public/icons/icon-192.png" alt="" width="96" height="96">
+</p>
+
+<h1 align="center">筋トレメモ</h1>
+
+<p align="center">
+  オフラインで動く筋トレ記録 PWA — アカウントもサーバも通信も無し。
+</p>
+
+<p align="center">
+  <a href="https://asugawara.github.io/fitness-memo/"><b>アプリを開く</b></a>
+  &nbsp;·&nbsp;
+  <a href="README.md">English</a>
+</p>
 
 iPhone のホーム画面から起動して完全オフラインで動く、個人用の筋トレ記録 PWA。
 サーバ通信もアカウント登録も持たず、記録は端末の `localStorage` にのみ保存する。
 「前回何をどれだけやったかを見て、同じかそれ以上をやる」というループだけを最短手数で回すことに絞っている。
 
-公開先: <https://asugawara.github.io/fitness-memo/>
+**日本語と英語**に対応している。初回はブラウザの言語で決まり、設定タブの「言語」から変更できる。
 
 ## 画面
 
-タブは **記録 / 推移 / 設定** の 3 つ。記録タブはカレンダーと選択日の入力欄が縦に並んだ 1 画面で、日セルをタップするとその下の入力欄がその日のものになる（[記録タブをカレンダー + 選択日エディタの単一画面にする](adr/ux/record-tab-calendar-with-day-editor.md)）。設定タブは **データの書き出し / 読み込み・トレーニングメニュー・種目・ホーム画面への追加のしかた** の 4 行だけを並べ、押すとその節に入る（[設定タブの入口を節の一覧にし、中身は 1 階層下ろす](adr/ux/settings-as-a-list-of-sections.md)）。
+タブは **記録 / 推移 / 設定** の 3 つ。記録タブはカレンダーと選択日の入力欄が縦に並んだ 1 画面で、日セルをタップするとその下の入力欄がその日のものになる（[記録タブをカレンダー + 選択日エディタの単一画面にする](adr/ux/record-tab-calendar-with-day-editor.md)）。設定タブは **エクスポート / インポート・トレーニングメニュー・種目・ホーム画面への追加のしかた・言語** の 5 行だけを並べ、押すとその節に入る（[設定タブの入口を節の一覧にし、中身は 1 階層下ろす](adr/ux/settings-as-a-list-of-sections.md)）。
 
 | 記録 | 推移 | 設定 |
 |---|---|---|
 | ![記録タブ](assets/1-record.png) | ![推移タブ](assets/2-progress.png) | ![設定タブ](assets/3-menu.png) |
 
-スクリーンショットは `trunk build && node scripts/shots.mjs` で撮り直す。端末（iPhone 15 Pro 相当）・standalone 起動・投入する記録を固定してあるので、UI を変えたら 3 枚まとめて同じ条件で更新できる。
+スクリーンショットは `trunk build && node scripts/shots.mjs` で撮り直す。端末（iPhone 15 Pro 相当）・standalone 起動・ロケール・投入する記録を固定してあるので、UI を変えたら 3 枚まとめて同じ条件で更新できる。
 
-アイコン（`assets/icon-master.png`）を差し替えたときは `sh scripts/gen-icons.sh` と `sh scripts/gen-og.sh` を両方回す。後者は SNS のカードに出る OGP 画像（`public/og.png`）で、アイコンを 1200x630 のキャンバスに置いただけのもの。**クローラしか取りに来ないので Service Worker のオフラインシェルからは外してある**（[クローラ向けメタデータを本番 URL のハードコードで持ち、オフラインシェルから外す](adr/seo/crawler-metadata-and-hardcoded-origin.md)）。URL がハッシュ無しの固定名なので、差し替えてリリースしたあとは Facebook の Sharing Debugger と X の Card Validator で再スクレイプさせないと各 SNS には古い絵が出続ける。
+## アイコンと共有画像
+
+すべて 1 枚のマスター（`assets/icon-master.png`、1024x1024）から生成する。差し替えたら次の 2 本を両方回す。
+
+```sh
+sh scripts/gen-icons.sh   # public/icons/*.png — favicon・ホーム画面・manifest
+sh scripts/gen-og.sh      # public/og.png (1200x630) + assets/social-preview.png (1280x640)
+```
+
+`public/og.png` は**アプリ**へのリンクを SNS に貼ったときのカードに出る OGP 画像。**クローラと SNS のスクレイパしか取りに来ないので Service Worker のオフラインシェルからは外してある**（[クローラ向けメタデータを本番 URL のハードコードで持ち、オフラインシェルから外す](adr/seo/crawler-metadata-and-hardcoded-origin.md)）。URL がハッシュ無しの固定名なので、差し替えてリリースしたあとは Facebook の Sharing Debugger と X の Card Validator で再スクレイプさせないと各 SNS には古い絵が出続ける。
+
+`assets/social-preview.png` は**このリポジトリ**へのリンクに GitHub が出す画像。サイトからは一度も配信されず、リポジトリと GitHub の CDN にしか存在しないので、`public/` ではなく `assets/` に置いてある。
+
+> [!IMPORTANT]
+> **ソーシャルプレビューのアップロードは手作業。** GitHub はこの API を持たない。
+> Settings → General → Social preview → Edit → *Upload an image…* から
+> `assets/social-preview.png` を選ぶ。ファイルを作り直しただけでは GitHub 上の絵は変わらない。
 
 ## 主な機能
 
@@ -31,6 +61,7 @@ iPhone のホーム画面から起動して完全オフラインで動く、個�
 - **最後のトレーニングからの経過** — 全体と部位ごとに表示する。**日数はローカル暦の日差**で、日を跨いだら「昨日 / 3日前」、同じ日のうちだけ「45分 / 12時間」の時刻粒度になる。経過時間を 24 時間で割ると繰り上がりがトレーニング時刻の 24 時間後に来てしまい、昨夜の記録が翌朝に「今日」と出る（[経過日数をローカル暦の日差にし、時刻粒度を同じ日の中だけに閉じる](adr/data-model/elapsed-in-local-calendar-days.md)）。
 - **体重と体調メモ** — 日ごとに 1 行で記録できる。トレーニングしていない日でも記録でき、その日も上のグラフに乗る。
 - **種目メモとセットメモ** — 種目カードのフッタの「＋ メモ」で、その日のその種目のメモと各セット行のメモが一斉に開く。閉じていても入力済みのメモは薄字で読めるので、開くのは書くときだけでいい（[メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](adr/ux/exercise-and-set-notes-behind-one-toggle.md)）。
+- **日本語 / 英語** — ブラウザの言語で自動判定し、設定タブの「言語」から切り替えられる（[言語はブラウザに従い、選んだらそれを優先する](adr/ux/language-follows-the-browser-then-the-setting.md)）。
 
 **指標は種目の属性ではなくグラフの表示設定**にしている。種目ごとに単位が違うと同じ軸で比べられず、後から種目の性質が変わると過去のグラフが遡って壊れるため（[指標を種目の属性ではなくグラフの表示設定にする](adr/data-model/metric-is-a-view-setting.md)）。重量欄は全種目に出し、**空欄は重量 1 として数える**ので、自重種目も時間種目も「入れなければよい」で成立する。
 
@@ -42,12 +73,16 @@ iPhone のホーム画面から起動して完全オフラインで動く、個�
 | ルーティング | なし。タブは enum の signal で切り替える |
 | グラフ | ライブラリを使わず SVG を自前で描画 |
 | アイコン | [lucide](https://lucide.dev/)（ISC / 一部 MIT）の SVG を `assets/icons/` に置き `include_str!` で埋め込む。npm 依存も CDN 参照も増やさない |
+| i18n | crate を入れず、`src/i18n.rs` に struct 1 つと `const` 2 枚で持つ。文言の書き忘れがコンパイルエラーになる（[i18n crate を入れず文言表を手書きする](adr/architecture/i18n-hand-rolled-string-table.md)） |
 | 永続化 | `localStorage` の単一キー `fitness-memo/v3` に JSON 全体（旧 `v2` / `v1` は読み取り専用で引き継ぐ） |
 | CSS | 素の CSS 1 ファイル + CSS 変数 |
 | デプロイ | GitHub Pages の branch deploy（`release` ブランチの `/docs`） |
 | CI | **GitHub Actions のワークフローファイルを書かない。** `.githooks/pre-commit` でローカル実行する |
 
-UI 層（`leptos` / `web-sys` に依存する部分）は `[target.'cfg(target_arch = "wasm32")'.dependencies]` に置いてあるので、`cargo test` はホスト向けに leptos の依存グラフをビルドしない。純ロジックは `src/core.rs`（`Db` を読む計算）と `src/chart_layout.rs`（グラフの座標計算）に集約してあり、ここが単体テストの主対象になる。
+UI 層（`leptos` / `web-sys` に依存する部分）は `[target.'cfg(target_arch = "wasm32")'.dependencies]` に置いてあるので、`cargo test` はホスト向けに leptos の依存グラフをビルドしない。純ロジックは `src/core.rs`（`Db` を読む計算）と `src/chart_layout.rs`（グラフの座標計算）と `src/i18n.rs`（文言表）に集約してあり、ここが単体テストの主対象になる。
+
+> [!NOTE]
+> `index.html` と manifest のメタデータは**英語だけ**にしてある（決定）。静的な層は 1 言語しか持てず、混ぜると検索エンジンのページ言語判定が割れるため（[静的メタデータを英語に統一し、`<html lang>` は実行時に切り替える](adr/seo/static-metadata-in-english.md)）。アプリ側が実行時に `document.documentElement.lang` を UI の言語へ書き換える。
 
 ## 開発
 
@@ -83,6 +118,8 @@ npx playwright test                     # 全 project（Chromium / iPhone 15 Pro
 ```
 
 `.githooks/pre-commit` は `main` への `docs/` 混入をガードしたうえで、`cargo fmt --all -- --check` → `cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings` → `cargo test` → `trunk build` → `npx playwright test --project=chromium --project=harness` を順に実行する。緊急時は `SKIP_HOOKS=1 git commit` で飛ばせる。
+
+`playwright.config.mjs` は `locale: 'ja-JP'` を固定しているので既存の spec は日本語 UI を見る。英語 UI は `e2e/i18n.spec.mjs` が `en-US` に切り替えて見る。
 
 複数人（または複数エージェント）で並行作業する場合、`dist/` と Playwright のポート 4173 は共有資源になる。出力先を分けたいときは `trunk build --dist <ディレクトリ>` と `DIST_DIR=<同じディレクトリ> npx playwright test` を組み合わせる。
 
@@ -127,13 +164,14 @@ sh scripts/release.sh             # 2 回目以降
 
 設定タブの「エクスポート / インポート」から:
 
-- **エクスポート** — 1 タップで **TSV**（`fitness-memo-YYYYMMDD-HHMM.tsv`）を出す。iPhone では共有シートが開くので、**「ファイルに保存」→ iCloud Drive / Google Drive** を選ぶと機種を替えても残る。**Google スプレッドシートでそのまま開ける**（1 セット 1 行の表）
+- **エクスポート** — 1 タップで **TSV**（`fitness-memo-YYYYMMDD-HHMM.tsv`）を出す。iPhone では共有シートが開くので、**「ファイルに保存」→ iCloud Drive / Google Drive** を選ぶと機種を替えても残る。**Google スプレッドシートでそのまま開ける**（1 セット 1 行の表）。列名は UI の言語に追従し、取り込みは日英どちらの見出しも受けるので、言語を切り替える前に出したファイルもそのまま読める（[TSV の見出しは UI 言語で書き、読み込みは日英どちらも受ける](adr/storage/tsv-header-follows-the-ui-language.md)）
 - **インポート** — エクスポートしたファイルを選ぶ。実行前に「現在」と「取り込み後」の件数、そして何が増えるかを出し、**取り込む直前に今のデータを自動で退避**してから適用する（直後なら「元に戻す」で戻せる）
   - 取り込みは**足すだけ**に固定してある。今の記録は 1 つも消えず、無い日と無い種目だけが増える（[`adr/storage/import-is-merge-only.md`](adr/storage/import-is-merge-only.md)）
   - 旧版が書いた `.json` もそのまま読める
 
 ## 現時点の制限
 
+- **言語を切り替えても、既に登録済みの種目名・部位名は変わらない。** これらは「自分で付けた名前」として扱うデータで、改名は正当な操作なのでアプリが勝手に書き換えない（[プリセット名は初回投入の言語で固定し、ユーザーデータとして扱う](adr/storage/preset-names-are-user-data-seeded-once.md)）。変えたいときは設定タブの「種目」から 1 つずつ編集する。
 - 保存済み JSON のパースに失敗した場合は、上書きせず `fitness-memo/v3.bak-<epoch>` に退避してから初期状態で起動し、起動時に一度だけ通知を出す（破損データをプリセットで黙って上書きしないため）。**退避したデータを画面から取り出す導線は今は無い**（[`adr/storage/quarantine-on-parse-failure.md`](adr/storage/quarantine-on-parse-failure.md) の追記）。
 - 書き出しの TSV は `Db` の全部を持たない。**ID・部位の色・並び順・アーカイブ状態・記録時刻**は落ち、取り込み時に名前とプリセットの固定 ID から作り直す（色と並び順は既定に戻る）。
 - スプレッドシートで編集して戻す経路は best effort。改行・CRLF・`YYYY/M/D`・`62,5`・列の増減・行の並べ替えは吸収するが、**`=` `+` `-` `@` で始まるメモはシート上で数式になる**ので直せない。

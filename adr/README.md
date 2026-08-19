@@ -100,6 +100,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [書き出し / 読み込みを 1 画面に畳み、逃げ道 UI を常設しない](ux/one-screen-export-import.md) | 採用 |
 | [`<input type="file">` を視覚的に隠し、ボタンから `click()` する](ux/hidden-file-input-behind-a-button.md) | 採用 |
 | [メニュー編集シートの「選択中」をドラッグで並べ替え、種目ピッカーを複数開けるアコーディオンにする](ux/routine-editor-drag-and-accordion.md) | 採用 |
+| [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](ux/machine-pins-on-the-exercise.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

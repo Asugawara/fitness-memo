@@ -653,6 +653,69 @@ h3 {
   color: var(--muted);
 }
 
+/* ── マシンのピン（adr/ux/machine-pins-on-the-exercise.md）───────────────────
+   マシンのシート高・バー位置。種目メモの**真上**、セット行群の下に置く
+   （DOM もその順）。開閉は種目メモと同じトグル 1 つに相乗りしていて、
+   カード内に新しい 44px のタップ標的は 1 つも増えていない。 */
+
+/* 閉じていても読める薄字。`.ex-note-read` と同じ 12px + --muted の段
+   （.last-row と同じ「本文ではない利用者のデータ」）。
+   ★ 薄さを opacity で作らない — 非テキストの 3:1 を割り、ダークで消える。
+   ★ 字下げしない。すぐ下の `.ex-note-read`（種目メモ）と左端が揃い、両方
+     出ていても段が乱れない。2 つを分けているのは先頭の「ピン」ラベルだけで、
+     種目メモ側はラベルを持たないという対比になっている。 */
+.pin-read {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* 開いた状態。ラベルの段は `.ex-note`（種目メモ）と揃える。
+   チップは折り返す（393px 幅で 2〜3 個 / 行）。 */
+.pin-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  /* 列間 10px は「✕ がどのチップのものか」を間隔だけで読ませるため。
+     チップ内（入力欄 ↔ ✕）の 2px と 5 倍差をつける */
+  gap: 6px 10px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.pin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* 箱は `.set-row .num` / `.ex-note input` をなぞる。`.num` を共有しないのは、
+   あちらが `.set-row` スコープで width: 4.2em を持つため。
+   ★ 削除の ✕ は `.icon-btn` の 44px のまま縮めない。静かにするのは色と文字
+     サイズだけで、当たり判定ではない
+     （adr/ux/destructive-affordance-quiet-at-rest.md）。 */
+.pin-num {
+  width: 2.9em;
+  min-height: 44px;
+  padding: 4px 8px;
+  text-align: right;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  /* ラベルの --muted を継がせない（`.ex-note input` と同じ事情） */
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 「＋」。カードでいちばん彩度の高い色を、めったに使わない追加に与えない
+   （`.card-foot .note-toggle` と同じ規則）。詳細度の事情も同じで、
+   .link-btn（0,1,0）と同詳細度では上書きできないので子孫セレクタ（0,2,0）。 */
+.pin-box .pin-add {
+  min-width: 44px;
+  color: var(--muted);
+}
+
 .card-foot {
   display: flex;
   justify-content: space-between;

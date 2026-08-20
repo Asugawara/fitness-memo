@@ -16,14 +16,15 @@ function metaContent(page, selector) {
 test('description と canonical と OGP と Twitter Card が揃っている', async ({ page }) => {
   await page.goto('./');
 
-  // description は検索結果のスニペットに出る。<title> は fitness-memo のままなので
-  // （アプリ名 4 点セットを崩さないため）、日本語のキーワードはここが主な置き場になる
+  // description は検索結果のスニペットに出る。静的メタデータは英語に統一してある
+  // （adr/seo/static-metadata-in-english.md）ので、キーワードは英語で見る
   const description = await metaContent(page, 'meta[name="description"]');
-  expect(description).toContain('筋トレ');
-  expect(description.length).toBeGreaterThan(50);
-  // 日本語のスニペットはモバイルで全角 50〜60 字ほどで切られる。全部は出ない前提だが、
-  // 冒頭 1 文で「何のアプリか」が完結する長さに収める（上限が無いと際限なく伸びる）
-  expect(description.length).toBeLessThan(120);
+  expect(description).toContain('workout');
+  // ★ **上下限は言語依存の数値。** 英語のスニペットは PC で 155〜160 字ほどで切られる
+  //   （日本語だった頃は全角 50〜60 字を根拠に 50〜120 に置いていた）。意図は変わらず、
+  //   下限は「1 文で何のアプリかが完結する」を保つため、上限は際限なく伸ばさないため
+  expect(description.length).toBeGreaterThan(80);
+  expect(description.length).toBeLessThan(160);
 
   // ★ 絶対 URL であることが本題。相対に書き戻すとスクレイパが解決できない
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', SITE);
@@ -31,14 +32,14 @@ test('description と canonical と OGP と Twitter Card が揃っている', as
   expect(await metaContent(page, 'meta[property="og:image"]')).toBe(`${SITE}og.png`);
 
   expect(await metaContent(page, 'meta[property="og:type"]')).toBe('website');
-  expect(await metaContent(page, 'meta[property="og:locale"]')).toBe('ja_JP');
+  expect(await metaContent(page, 'meta[property="og:locale"]')).toBe('en_US');
   expect(await metaContent(page, 'meta[property="og:site_name"]')).toBe('fitness-memo');
 
   // OGP 画像はアイコンだけで情報量が無いので、「何のアプリか」を伝えるのは
-  // カードの見出し文＝ og:title だけになる。日本語の説明が入っていること
+  // カードの見出し文＝ og:title だけになる。説明が入っていること
   const ogTitle = await metaContent(page, 'meta[property="og:title"]');
   expect(ogTitle).toContain('fitness-memo');
-  expect(ogTitle).toContain('筋トレ');
+  expect(ogTitle).toContain('workout');
 
   // og:description は「何のアプリか」ではなく中身を説明する担当（それは og:title が持つ）。
   // Slack / LINE / Discord / Facebook のカードは長い説明を途中で切るので、文が途切れない
@@ -84,8 +85,13 @@ test('JSON-LD が JSON として読め、url が canonical と一致する', asy
   expect(ld['@type']).toBe('WebApplication');
   expect(ld.url, 'JSON-LD の url が canonical とズレると別ページ扱いになる').toBe(SITE);
   expect(ld.name).toBe('fitness-memo');
+  // ★ **この行は移行漏れではなく見張り番。** ページ全体を英語にしたあと、
+  //   alternateName だけは日本語で残してある（inLanguage はページ本文の言語を指す
+  //   もので、英語ページに日本語の別名が載るのは schema.org 的に正しい）。
+  //   アプリ本体は日本語のブラウザには日本語で出るので、ここを消すとページから
+  //   日本語の機械可読トークンが全滅する。「英語化のやり残し」に見えても消さないこと
   expect(ld.alternateName).toBe('筋トレメモ');
-  expect(ld.inLanguage).toBe('ja');
+  expect(ld.inLanguage).toBe('en');
 });
 
 // ★ このファイルで一番効くテスト。scripts/stamp-sw.sh の除外は find の 1 語なので
@@ -112,6 +118,9 @@ test('JS 無効時のフォールバック文が noscript に入っている', a
   // scripting 有効な文書では noscript の中身は要素に parse されず生テキストになるので、
   // innerText ではなく textContent を見る（display:none なので innerText は空）
   const fallback = await page.locator('noscript').textContent();
-  expect(fallback).toContain('筋トレメモ');
   expect(fallback).toContain('fitness-memo');
+  expect(fallback).toContain('workout');
+  // ★ ここも見張り番（上の alternateName と同じ理由）。末尾の 1 段落だけ日本語で
+  //   残してあり、JS を実行しないクローラに対する唯一の日本語の手掛かりになっている
+  expect(fallback).toContain('筋トレメモ');
 });

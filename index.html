@@ -1,5 +1,8 @@
 <!DOCTYPE html>
-<html lang="ja">
+<!-- ★ 静的な値は en。クローラが見るのはここで、英語の description / og:locale と
+     揃えてある（adr/seo/static-metadata-in-english.md）。実行時はアプリが
+     document.documentElement.lang を UI の言語に書き換える（src/views/mod.rs の App） -->
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -28,27 +31,32 @@
        manifest を相対に統一した adr/pwa/manifest-relative-urls.md とは対象が違う（あちらはブラウザが
        ローカルでも本番でも読むので、相対でないと両方では成立しない）。
        相対に書き戻すと X / Slack / LINE でカードが出なくなる。
+     ★ **静的メタデータは英語で 1 本に揃える**（adr/seo/static-metadata-in-english.md）。
+       description / og:* / JSON-LD / noscript / <html lang> / manifest の lang を
+       全部 en にする。混ぜると検索エンジンのページ言語判定が割れるし、
+       Googlebot は既定で Accept-Language: en-US で来るので、ブラウザ言語で
+       切り替わるアプリはどのみち英語をレンダリングして見せることになる。
+       日本語の手掛かりは JSON-LD の alternateName と noscript 末尾の 1 段落に残す。
      ★ <title> は fitness-memo のまま。ホーム画面のアイコン下に出る名前を決める
        4 点セット（title / apple-mobile-web-app-title / manifest の name と
-       short_name）を崩さない。日本語のキーワードは description / og:title /
-       JSON-LD が担う。
+       short_name）は元から英語なので、今回の英語化で触る行は無い。
      e2e/seo.spec.mjs がこのブロックの内容と「絶対 URL であること」を固定している -->
-<meta name="description" content="オフラインで動く筋トレ記録アプリ。種目ごとに前回のセット数・回数・重量を見返しながら記録できます。アカウント登録もサーバ送信もなく、データは端末内だけに保存。iPhone のホーム画面に追加して使える無料の PWA です。">
+<meta name="description" content="Offline workout log PWA for iPhone. Every exercise shows last time's sets, reps and weight. No account, no server — data stays on your device.">
 <link rel="canonical" href="https://asugawara.github.io/fitness-memo/">
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="fitness-memo">
-<meta property="og:locale" content="ja_JP">
+<meta property="og:locale" content="en_US">
 <!-- OGP 画像はアイコンだけで情報量が無いので、「何のアプリか」を伝えるのはこの見出し文
-     だけになる。アプリ名 4 点セットには含まれないタグなので日本語の説明を足せる -->
-<meta property="og:title" content="fitness-memo — オフラインで使える筋トレ記録アプリ">
-<meta property="og:description" content="種目ごとに前回のセット数・回数・重量を見返しながら、同じかそれ以上を積み上げる。アカウント登録もサーバ送信もなく、記録は端末内だけに保存。">
+     だけになる -->
+<meta property="og:title" content="fitness-memo — an offline workout log that never leaves your phone">
+<meta property="og:description" content="Look back at last time's sets, reps and weight, then do the same or a little more. No account, no server.">
 <meta property="og:url" content="https://asugawara.github.io/fitness-memo/">
 <meta property="og:image" content="https://asugawara.github.io/fitness-memo/og.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="fitness-memo のアイコン">
+<meta property="og:image:alt" content="The fitness-memo icon — a white flame on a deep red gradient">
 <!-- twitter:title / description / image は og:* にフォールバックするので書かない（二重管理を作らない） -->
 <meta name="twitter:card" content="summary_large_image">
 
@@ -60,11 +68,11 @@
   "alternateName": "筋トレメモ",
   "url": "https://asugawara.github.io/fitness-memo/",
   "image": "https://asugawara.github.io/fitness-memo/og.png",
-  "description": "オフラインで動く筋トレ記録アプリ。種目ごとの前回のセット数・回数・重量を見返しながら記録する。アカウント登録もサーバ送信もなく、データは端末内だけに保存する。",
+  "description": "An offline workout log PWA. Every exercise shows last time's sets, reps and weight while you record today's. No account, no server; data is stored only on the device.",
   "applicationCategory": "HealthApplication",
   "operatingSystem": "iOS, Android, Web",
   "browserRequirements": "Requires JavaScript and WebAssembly",
-  "inLanguage": "ja",
+  "inLanguage": "en",
   "isAccessibleForFree": true,
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "JPY" },
   "author": { "@type": "Person", "name": "Asugawara" }
@@ -141,11 +149,16 @@
        （append）と競合しない。静的コンテンツを body に直接置いて JS で消す方式は、
        wasm のロード完了まで実在してレイアウトシフトを起こすので採らない -->
 <noscript>
-  <h1>fitness-memo（筋トレメモ）</h1>
-  <p>iPhone のホーム画面から起動して完全オフラインで動く、筋トレ記録の PWA です。「前回何をどれだけやったかを見て、同じかそれ以上をやる」というループだけを最短手数で回すことに絞っています。</p>
-  <p>種目ごとに前回のセット数・回数・重量を表示し、その日のセットが空なら 1 タップでプリフィルできます。胸 / 背中 / 肩 / 腕 / 脚 / 体幹 の 6 部位 28 種目をプリセットとして持ち、部位も種目も追加・改名・削除ができます。推移グラフは ボリューム / セット数 / 回数 を切り替えられ、記録した体重を右軸の破線として常に重ねます。</p>
-  <p>アカウント登録もサーバ通信もありません。記録は端末の localStorage にのみ保存し、TSV で書き出し・読み込みできます（表計算アプリでそのまま開けます）。</p>
-  <p>表示には JavaScript と WebAssembly が必要です。<a href="https://github.com/Asugawara/fitness-memo">GitHub のリポジトリ</a></p>
+  <h1>fitness-memo — an offline workout log</h1>
+  <p>A workout-log PWA you launch from the iPhone home screen and use completely offline. It is built around one loop and nothing else: look at what you did last time, then do the same or a little more.</p>
+  <p>Every exercise shows last time's sets, reps and weight, and while today's sets are still empty you can prefill them with one tap. 28 exercises across 6 muscle groups (chest / back / shoulders / arms / legs / core) come preset, and groups and exercises can be added, renamed and deleted. The progress chart switches between volume, set count and rep count, and always overlays your body weight as a dashed line on a second axis.</p>
+  <p>There is no account and no server. Your log is stored only in this device's localStorage, and you can export and import it as TSV, which opens directly in a spreadsheet.</p>
+  <p>Displaying this app requires JavaScript and WebAssembly. <a href="https://github.com/Asugawara/fitness-memo">GitHub repository</a></p>
+  <!-- ★ 末尾の 1 段落だけ日本語で残す。アプリ本体は日本語のブラウザには日本語で出るのに、
+       JS を実行しないクローラ（LLM 系を含む）に対して日本語の手掛かりが 1 つも
+       無くなるのを避ける。scripting 有効な文書では noscript の中身は要素に
+       パースされないので、この lang="ja" は狙った読者にだけ効く -->
+  <p lang="ja">日本語: fitness-memo（筋トレメモ）は、iPhone のホーム画面から起動して完全オフラインで動く筋トレ記録の PWA です。アカウント登録もサーバ通信もなく、記録は端末の localStorage にのみ保存します。</p>
 </noscript>
 <script>
 if ('serviceWorker' in navigator) {

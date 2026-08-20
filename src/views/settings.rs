@@ -25,6 +25,7 @@
 
 use leptos::prelude::*;
 
+use crate::i18n::Lang;
 use crate::model::{Db, Exercise, ExerciseId, Group, GroupId, RoutineId};
 use crate::storage;
 
@@ -32,8 +33,8 @@ use super::help::InstallHelpLink;
 use super::icon::{self, icon};
 use super::routine::{RoutineEditor, routine_exercise_names};
 use super::{
-    SettingsPage, Sheet, kb_blur, kb_focus, scroll_into_view_if_needed, use_db, use_kb,
-    use_open_group, use_settings_page,
+    SettingsPage, Sheet, cur_lang, ex_name, grp_name, kb_blur, kb_focus,
+    scroll_into_view_if_needed, t, use_db, use_kb, use_lang, use_open_group, use_settings_page,
 };
 
 /// 部位を追加するときの既定色。プリセットの 6 色を順に回す。
@@ -158,6 +159,7 @@ fn add_exercise(db: &mut Db, id: ExerciseId, group: GroupId, name: String) {
         group_id: group,
         order,
         archived: false,
+        pins: Vec::new(),
     });
 }
 
@@ -208,12 +210,12 @@ enum Editor {
 /// （`aria-label` も見出しも、閉じた `<dialog>` は支援技術から辿れない）。
 fn editor_title(target: Option<Editor>) -> &'static str {
     match target {
-        Some(Editor::Group(_)) => "部位を編集",
-        Some(Editor::NewGroup) => "部位を追加",
-        Some(Editor::Exercise(_)) => "種目を編集",
-        Some(Editor::NewExercise(_)) => "種目を追加",
-        Some(Editor::Routine(_)) => "メニューを編集",
-        Some(Editor::NewRoutine) => "メニューを追加",
+        Some(Editor::Group(_)) => t().settings.edit_group,
+        Some(Editor::NewGroup) => t().settings.add_group,
+        Some(Editor::Exercise(_)) => t().settings.edit_exercise,
+        Some(Editor::NewExercise(_)) => t().settings.add_exercise,
+        Some(Editor::Routine(_)) => t().settings.edit_routine,
+        Some(Editor::NewRoutine) => t().settings.add_routine,
         None => "",
     }
 }
@@ -248,7 +250,7 @@ fn section_row(
 fn back_head(title: &'static str, back: impl Fn() + 'static) -> impl IntoView {
     view! {
         <header class="settings-head">
-            <button class="icon-btn" aria-label="設定へ戻る" data-testid="settings-back"
+            <button class="icon-btn" aria-label=t().settings.back data-testid="settings-back"
                 on:click=move |_| back()>
                 {icon(icon::CHEVRON_LEFT)}
             </button>
@@ -280,6 +282,10 @@ fn opt_button(
 
 #[component]
 pub fn Settings() -> impl IntoView {
+    // ★ 文言は本体の先頭で 1 回だけ引く（`views::t` の doc を参照）。
+    //   言語シグナルは購読しない — 切り替えの反映は `App` が画面ごと作り直して起こす
+    let t = t();
+    let lang = use_lang();
     let db = use_db();
     let editor: RwSignal<Option<Editor>> = RwSignal::new(None);
     let backup_open = RwSignal::new(false);
@@ -333,14 +339,14 @@ pub fn Settings() -> impl IntoView {
                 SettingsPage::Root => {
                     view! {
                         <header class="settings-head">
-                            <h1>"設定"</h1>
+                            <h1>{t.settings.title}</h1>
                         </header>
 
                         <div class="rows" data-testid="settings-rows">
                             // ★ 先頭に置く。データを失う前に見つけてもらう必要があるので、
                             //   ここだけは他の節より上（旧レイアウトの sticky と同じ意図）
                             {section_row(
-                                "エクスポート / インポート",
+                                t.settings.row_backup,
                                 None,
                                 "open-backup",
                                 move || {
@@ -349,13 +355,13 @@ pub fn Settings() -> impl IntoView {
                                 },
                             )}
                             {section_row(
-                                "トレーニングメニュー",
+                                t.settings.row_routines,
                                 Some(Signal::derive(move || routine_ids.get().len().to_string())),
                                 "settings-row-routines",
                                 move || go(SettingsPage::Routines),
                             )}
                             {section_row(
-                                "種目",
+                                t.settings.row_exercises,
                                 Some(
                                     Signal::derive(move || {
                                         db.with(|d| d.exercises.iter().filter(|e| !e.archived).count())
@@ -367,13 +373,72 @@ pub fn Settings() -> impl IntoView {
                             )}
                             // 手順シートを開くだけなので、節ではなく行として並べる
                             <InstallHelpLink />
+                            // ★ 末尾に置く。先頭はデータを失う前に見つけてもらう必要がある
+                            //   エクスポート / インポートで固定されているし、言語は
+                            //   一生に一度の操作なので探しに来る頻度が最も低い。
+                            //   ★ 右端は件数ではなく**現在値**（iOS の設定アプリと同じ形）。
+                            //     表記は必ず endonym — 「Japanese」と英語で書くと、
+                            //     英語を読めない人が自分の言語を選べない
+                            {section_row(
+                                t.settings.row_language,
+                                Some(Signal::derive(move || lang.get().endonym().to_string())),
+                                "settings-row-language",
+                                move || go(SettingsPage::Language),
+                            )}
                         </div>
+                    }
+                        .into_any()
+                }
+                SettingsPage::Language => {
+                    // ★ 同値ガード。`set` は同値でも購読者へ通知するので、素で書くと
+                    //   選択済みの言語を押すたびに画面が丸ごと作り直される
+                    //   （`DateCtx::open` / `TabCtx::switch` と同じ規則）
+                    let pick = move |l: Lang| {
+                        if lang.get_untracked() == l {
+                            return;
+                        }
+                        storage::save_lang(l);
+                        lang.set(l);
+                    };
+                    view! {
+                        {back_head(t.settings.row_language, move || go(SettingsPage::Root))}
+
+                        // ★ `.segmented` は推移タブの指標 / 期間と同じ既存部品。
+                        //   新しい CSS もアイコンも足さずに「2 択のうち今どちらか」が絵に出る
+                        <div
+                            class="segmented"
+                            role="group"
+                            aria-label=t.settings.row_language
+                            data-testid="lang-select"
+                        >
+                            {Lang::CHOICES
+                                .into_iter()
+                                .map(|(l, endonym)| {
+                                    view! {
+                                        <button
+                                            class="seg-btn"
+                                            class:active=move || lang.get() == l
+                                            aria-pressed=move || (lang.get() == l).to_string()
+                                            data-testid="lang-btn"
+                                            data-lang=l.tag()
+                                            on:click=move |_| pick(l)
+                                        >
+                                            {endonym}
+                                        </button>
+                                    }
+                                })
+                                .collect::<Vec<_>>()}
+                        </div>
+
+                        <p class="settings-note muted" data-testid="lang-note">
+                            {t.settings.language_note}
+                        </p>
                     }
                         .into_any()
                 }
                 SettingsPage::Routines => {
                     view! {
-                        {back_head("トレーニングメニュー", move || go(SettingsPage::Root))}
+                        {back_head(t.settings.row_routines, move || go(SettingsPage::Root))}
 
                         <For
                             each=move || routine_ids.get()
@@ -387,7 +452,7 @@ pub fn Settings() -> impl IntoView {
                                 .then(|| {
                                     view! {
                                         <p class="settings-note muted" data-testid="routines-empty">
-                                            "よくやる種目の組み合わせに名前を付けておくと、記録タブで 1 タップで呼び出せます"
+                                            {t.settings.routines_empty}
                                         </p>
                                     }
                                 })
@@ -398,7 +463,7 @@ pub fn Settings() -> impl IntoView {
                                 data-testid="settings-add-routine"
                                 on:click=move |_| editor.set(Some(Editor::NewRoutine))
                             >
-                                "＋ メニューを追加"
+                                {t.settings.add_routine_cta}
                             </button>
                         </div>
                     }
@@ -406,10 +471,10 @@ pub fn Settings() -> impl IntoView {
                 }
                 SettingsPage::Exercises => {
                     view! {
-                        {back_head("種目", move || go(SettingsPage::Root))}
+                        {back_head(t.settings.row_exercises, move || go(SettingsPage::Root))}
 
                         <p class="settings-note muted">
-                            "アーカイブした種目は「種目を追加」に出なくなりますが、過去の記録は残り推移タブから参照できます"
+                            {t.settings.archive_note}
                         </p>
                         <For
                             each=move || group_ids.get()
@@ -425,7 +490,7 @@ pub fn Settings() -> impl IntoView {
                                 data-testid="settings-add-group"
                                 on:click=move |_| editor.set(Some(Editor::NewGroup))
                             >
-                                "＋ 部位を追加"
+                                {t.settings.add_group_cta}
                             </button>
                         </div>
 
@@ -535,11 +600,11 @@ fn RoutineBlock(routine: RoutineId, editor: RwSignal<Option<Editor>>) -> impl In
                     <b data-testid="routine-name">
                         {move || {
                             let n = name.get();
-                            if n.trim().is_empty() { "（名前なし）".to_string() } else { n }
+                            if n.trim().is_empty() { t().settings.unnamed.to_string() } else { n }
                         }}
                     </b>
                     <i class="muted" data-testid="routine-count">
-                        {move || format!("{} 種目", open_count.get())}
+                        {move || cur_lang().n_exercises(open_count.get())}
                     </i>
                 </span>
                 // ★ 名前はアーカイブ済みも出す。アーカイブは可逆なので、ここで隠すと
@@ -554,7 +619,7 @@ fn RoutineBlock(routine: RoutineId, editor: RwSignal<Option<Editor>>) -> impl In
                         return Some(
                             view! {
                                 <span class="rtn-warn" data-testid="routine-unusable">
-                                    "使える種目がないため記録タブに出ません"
+                                    {t().settings.no_usable_exercise}
                                 </span>
                             }
                                 .into_any(),
@@ -565,7 +630,7 @@ fn RoutineBlock(routine: RoutineId, editor: RwSignal<Option<Editor>>) -> impl In
                         .then(|| {
                             view! {
                                 <span class="rtn-warn" data-testid="routine-partial">
-                                    {format!("アーカイブ済みの {n} 種目は記録タブに出ません")}
+                                    {cur_lang().archived_only(n)}
                                 </span>
                             }
                                 .into_any()
@@ -586,7 +651,7 @@ fn GroupBlock(
     let db = use_db();
 
     let name = Memo::new(move |_| {
-        db.with(|d| d.group(group).map(|g| g.name.clone()))
+        db.with(|d| d.group(group).map(|g| grp_name(g).to_string()))
             .unwrap_or_default()
     });
     let color = Memo::new(move |_| {
@@ -625,13 +690,13 @@ fn GroupBlock(
                     <span class="dot" style=move || format!("--dot:{}", color.get())></span>
                     <span class="grp-name" data-testid="group-name">{move || name.get()}</span>
                     <span class="grp-count muted" data-testid="group-count">
-                        {move || format!("{} 種目", ex_ids.get().len())}
+                        {move || cur_lang().n_exercises(ex_ids.get().len())}
                     </span>
                 </button>
                 // 名前だけでは何のボタンか読めないので aria-label に部位名を入れる
                 <button
                     class="icon-btn grp-edit"
-                    aria-label=move || format!("{} の名前と色を編集", name.get())
+                    aria-label=move || cur_lang().edit_group_label(&name.get())
                     data-testid="group-edit"
                     on:click=move |_| editor.set(Some(Editor::Group(group)))
                 >
@@ -655,7 +720,7 @@ fn GroupBlock(
                                     data-testid="settings-add-exercise"
                                     on:click=move |_| editor.set(Some(Editor::NewExercise(group)))
                                 >
-                                    "＋ 種目を追加"
+                                    {t().settings.add_exercise_cta}
                                 </button>
                             </div>
                         }
@@ -670,7 +735,7 @@ fn ExerciseRow(ex: ExerciseId, editor: RwSignal<Option<Editor>>) -> impl IntoVie
     let db = use_db();
 
     let name = Memo::new(move |_| {
-        db.with(|d| d.exercise(ex).map(|e| e.name.clone()))
+        db.with(|d| d.exercise(ex).map(|e| ex_name(e).to_string()))
             .unwrap_or_default()
     });
 
@@ -697,8 +762,8 @@ fn ArchivedSection(ids: Vec<ExerciseId>, open_group: RwSignal<Option<GroupId>>) 
     view! {
         <section class="archived" data-testid="archived-section">
             <h2 class="archived-head">
-                "アーカイブ済み "
-                <span class="muted" data-testid="archived-count">{format!("{count} 件")}</span>
+                {t().settings.archived_header}
+                <span class="muted" data-testid="archived-count">{cur_lang().n_items(count)}</span>
             </h2>
             {ids
                 .into_iter()
@@ -709,9 +774,9 @@ fn ArchivedSection(ids: Vec<ExerciseId>, open_group: RwSignal<Option<GroupId>>) 
                                 .map(|e| {
                                     let group = d
                                         .group(e.group_id)
-                                        .map(|g| g.name.clone())
-                                        .unwrap_or_else(|| "(部位なし)".to_string());
-                                    format!("{} · {}", e.name, group)
+                                        .map(grp_name).map(str::to_string)
+                                        .unwrap_or_else(|| t().settings.no_group.to_string());
+                                    format!("{} · {}", ex_name(e), group)
                                 })
                         })
                         .unwrap_or_default();
@@ -741,7 +806,7 @@ fn ArchivedSection(ids: Vec<ExerciseId>, open_group: RwSignal<Option<GroupId>>) 
                                     }
                                 }
                             >
-                                "戻す"
+                                {t().settings.restore}
                             </button>
                         </div>
                     }
@@ -763,7 +828,10 @@ fn GroupEditor(
     let kb = use_kb();
 
     let (name0, color0) = db
-        .with_untracked(|d| d.group(id).map(|g| (g.name.clone(), g.color.clone())))
+        .with_untracked(|d| {
+            d.group(id)
+                .map(|g| (grp_name(g).to_string(), g.color.clone()))
+        })
         .unwrap_or_default();
     let name = RwSignal::new(name0.clone());
     let confirming = RwSignal::new(false);
@@ -792,7 +860,7 @@ fn GroupEditor(
 
     view! {
         <label class="field">
-            <span>"名前"</span>
+            <span>{t().settings.field_name}</span>
             <input
                 class="text-input"
                 type="text"
@@ -808,7 +876,7 @@ fn GroupEditor(
         </label>
 
         <label class="field">
-            <span>"色"</span>
+            <span>{t().settings.field_color}</span>
             <input
                 type="color"
                 value=color0
@@ -826,7 +894,7 @@ fn GroupEditor(
                 data-testid="delete-group"
                 on:click=move |_| confirming.set(true)
             >
-                "この部位を削除"
+                {t().settings.delete_group}
             </button>
         </div>
 
@@ -844,24 +912,20 @@ fn GroupEditor(
                             //   「種目が 5 件あるため」と言われると、画面のどこを見ても
                             //   理由が読めない状態になる
                             <p data-testid="delete-blocked">
-                                {if archived == total {
-                                    format!("アーカイブ済み種目が {total} 件あるため削除できません")
-                                } else {
-                                    format!("種目が {total} 件あるため削除できません")
-                                }}
+                                {cur_lang().cannot_delete_group(total, archived == total)}
                             </p>
                             {(archived > 0 && archived < total)
                                 .then(|| {
                                     view! {
                                         // 画面に出ていない種目が理由なのは分からないので件数を出す
                                         <p data-testid="delete-blocked-archived">
-                                            {format!("うち {archived} 件はアーカイブ済みです")}
+                                            {cur_lang().of_which_archived(archived)}
                                         </p>
                                     }
                                 })}
-                            <p class="muted">"先に種目を別の部位へ移してください"</p>
+                            <p class="muted">{t().settings.move_exercises_first}</p>
                             <button class="link-btn" on:click=move |_| confirming.set(false)>
-                                "閉じる"
+                                {t().settings.close}
                             </button>
                         </div>
                     }
@@ -869,7 +933,7 @@ fn GroupEditor(
                     } else {
                         view! {
                             <div class="warn-box">
-                                <p>"この部位を削除します"</p>
+                                <p>{t().settings.delete_group_confirm}</p>
                                 <div class="sheet-actions">
                                     <button
                                         class="primary"
@@ -883,10 +947,10 @@ fn GroupEditor(
                                             editor.set(None);
                                         }
                                     >
-                                        "削除する"
+                                        {t().settings.delete_yes}
                                     </button>
                                     <button class="link-btn" on:click=move |_| confirming.set(false)>
-                                        "やめる"
+                                        {t().settings.delete_no}
                                     </button>
                                 </div>
                             </div>
@@ -918,8 +982,11 @@ fn NewGroupEditor(
         if value.is_empty() {
             return;
         }
-        // 同名を許すとプリセット投入の同名スキップと噛み合わなくなる
-        if db.with_untracked(|d| d.groups.iter().any(|g| g.name == value)) {
+        // 同名を許すとプリセット投入の同名スキップと噛み合わなくなる。
+        // ★ **表示名で比べる。** 保存名で比べると、英語で使っている人が "Chest" と
+        //   打ったときに、保存名が「胸」のプリセットと衝突せず素通りしてしまい、
+        //   画面に "Chest" が 2 つ並ぶ
+        if db.with_untracked(|d| d.groups.iter().any(|g| grp_name(g) == value)) {
             duplicate.set(true);
             return;
         }
@@ -934,7 +1001,7 @@ fn NewGroupEditor(
 
     view! {
         <label class="field">
-            <span>"名前"</span>
+            <span>{t().settings.field_name}</span>
             <input
                 class="text-input"
                 type="text"
@@ -949,7 +1016,7 @@ fn NewGroupEditor(
         </label>
 
         <label class="field">
-            <span>"色"</span>
+            <span>{t().settings.field_color}</span>
             <input
                 type="color"
                 value=color0
@@ -964,7 +1031,7 @@ fn NewGroupEditor(
                 .then(|| {
                     view! {
                         <div class="warn-box">
-                            <p data-testid="duplicate-name">"同じ名前の部位があります"</p>
+                            <p data-testid="duplicate-name">{t().settings.duplicate_group}</p>
                         </div>
                     }
                 })
@@ -972,7 +1039,7 @@ fn NewGroupEditor(
 
         <div class="sheet-actions">
             <button class="primary" data-testid="new-group-submit" on:click=submit>
-                "追加"
+                {t().settings.add}
             </button>
         </div>
     }
@@ -988,13 +1055,13 @@ fn ExerciseEditor(
     let kb = use_kb();
 
     let name0 = db
-        .with_untracked(|d| d.exercise(id).map(|e| e.name.clone()))
+        .with_untracked(|d| d.exercise(id).map(|e| ex_name(e).to_string()))
         .unwrap_or_default();
     // 部位の選択肢は untracked で固定する（編集中に一覧が動いてボタンが作り直されるのを防ぐ）
     let groups: Vec<(GroupId, String)> = db.with_untracked(|d| {
         ordered_group_ids(d)
             .into_iter()
-            .filter_map(|g| d.group(g).map(|g| (g.id, g.name.clone())))
+            .filter_map(|g| d.group(g).map(|g| (g.id, grp_name(g).to_string())))
             .collect()
     });
     let name = RwSignal::new(name0.clone());
@@ -1013,7 +1080,7 @@ fn ExerciseEditor(
 
     view! {
         <label class="field">
-            <span>"名前"</span>
+            <span>{t().settings.field_name}</span>
             <input
                 class="text-input"
                 type="text"
@@ -1029,7 +1096,7 @@ fn ExerciseEditor(
         </label>
 
         <div class="field">
-            <span>"部位"</span>
+            <span>{t().settings.field_group}</span>
             <div class="opts" data-testid="exercise-groups">
                 {groups
                     .into_iter()
@@ -1065,11 +1132,11 @@ fn ExerciseEditor(
                     editor.set(None);
                 }
             >
-                "この種目をアーカイブ"
+                {t().settings.archive_exercise}
             </button>
         </div>
         <p class="settings-note muted">
-            "アーカイブは記録を消しません。過去のログは残り、「種目を追加」に出なくなります"
+            {t().settings.archive_explain}
         </p>
     }
 }
@@ -1084,7 +1151,7 @@ fn NewExerciseEditor(
     let kb = use_kb();
 
     let group_name = db
-        .with_untracked(|d| d.group(group).map(|g| g.name.clone()))
+        .with_untracked(|d| d.group(group).map(grp_name).map(str::to_string))
         .unwrap_or_default();
     let name = RwSignal::new(String::new());
     let duplicate = RwSignal::new(false);
@@ -1095,8 +1162,9 @@ fn NewExerciseEditor(
             return;
         }
         // アーカイブ済みも含めて全体で見る（同名があると移行時にプリセットの
-        // 固定 ID へ寄せられなくなる — core::pin_presets が「ちょうど 1 件」を要求する）
-        if db.with_untracked(|d| d.exercises.iter().any(|e| e.name == value)) {
+        // 固定 ID へ寄せられなくなる — core::pin_presets が「ちょうど 1 件」を要求する）。
+        // ★ 表示名で比べる理由は上の部位側と同じ
+        if db.with_untracked(|d| d.exercises.iter().any(|e| ex_name(e) == value)) {
             duplicate.set(true);
             return;
         }
@@ -1109,10 +1177,10 @@ fn NewExerciseEditor(
     };
 
     view! {
-        <p class="settings-note muted">{format!("{group_name} に追加します")}</p>
+        <p class="settings-note muted">{cur_lang().adding_to_group(&group_name)}</p>
 
         <label class="field">
-            <span>"名前"</span>
+            <span>{t().settings.field_name}</span>
             <input
                 class="text-input"
                 type="text"
@@ -1132,7 +1200,7 @@ fn NewExerciseEditor(
                 .then(|| {
                     view! {
                         <div class="warn-box">
-                            <p data-testid="duplicate-name">"同じ名前の種目があります"</p>
+                            <p data-testid="duplicate-name">{t().settings.duplicate_exercise}</p>
                         </div>
                     }
                 })
@@ -1140,7 +1208,7 @@ fn NewExerciseEditor(
 
         <div class="sheet-actions">
             <button class="primary" data-testid="new-exercise-submit" on:click=submit>
-                "追加"
+                {t().settings.add}
             </button>
         </div>
     }

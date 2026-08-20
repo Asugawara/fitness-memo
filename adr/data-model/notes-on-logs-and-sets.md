@@ -3,7 +3,13 @@
 - **状態**: 採用
 - **日付**: 2026-08-09
 - **カテゴリ**: data-model
-- **関連**: [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](../ux/exercise-and-set-notes-behind-one-toggle.md)（画面側）, [「1日1種目1ログ」を不変条件にする](one-log-per-exercise-per-day.md), [`at` を `Option<i64>` にし当日入力時のみ埋める](at-optional-same-day-only.md), [保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す](../storage/storage-key-per-schema-generation.md), [localStorage の単一キーに JSON 全体を持つ](../storage/localstorage-single-key-json.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md)
+- **関連**: [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](../ux/exercise-and-set-notes-behind-one-toggle.md)（画面側）, [「1日1種目1ログ」を不変条件にする](one-log-per-exercise-per-day.md), [`at` を `Option<i64>` にし当日入力時のみ埋める](at-optional-same-day-only.md), [保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す](../storage/storage-key-per-schema-generation.md), [localStorage の単一キーに JSON 全体を持つ](../storage/localstorage-single-key-json.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](../ux/copy-carries-the-notes.md)（決定 7 を改訂）
+
+> **改訂**: 決定 7（`copy_day` / `copy_last` / `+ セット` はメモを複製しない）のうち、
+> **コピーの 3 経路は [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](../ux/copy-carries-the-notes.md) で反転した。**
+> 実使用で種目メモに入ったのは観測ではなくセッティング（「セーフティ 2 穴目」）で、毎回消える
+> ほうが実害が大きかった。**`+ セット` が運ばないことも、体調メモ・体重・`at` を運ばないことも
+> 変わっていない。** 他の決定（1〜6, 8, 9）はすべて生きている。
 
 ## 背景
 
@@ -63,6 +69,8 @@ KEY を切る積極的な害もある。v4 に切ると全利用者が「v3 か�
 `l.sets.clone()` は**メモまで運ぶ**ので、明示的に落としている。
 
 重量をプリフィルするのとは扱いが違う。重量は**次のセットの計画値**、メモは**そのセットで起きたことの観測値**。[セット追加は直前行の重量をコピーして回数欄へフォーカスする](../ux/set-entry-prefill-and-focus.md) が引き継ぐ理由はメモには当たらない。
+
+> **→ 採り直した（[コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](../ux/copy-carries-the-notes.md)）。** 「観測値を複製すると起きていない観測が生える」は正しかったが、**気づける害（生えたメモは薄字で画面に見える）と気づけない害（消えたセッティングは画面に痕跡が無い）を同じ重みで扱っていた**。種目メモに実際に書かれたのは観測ではなくセッティングだった。**`+ セット` に対する論（次のセットにはまだ観測が無い）はそのまま生きている。**
 
 ### 8. メモの合流規則は `append_note` の 1 本にする
 

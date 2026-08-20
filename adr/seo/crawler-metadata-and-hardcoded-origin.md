@@ -3,7 +3,16 @@
 - **状態**: 採用
 - **日付**: 2026-08-09
 - **カテゴリ**: seo
-- **関連**: [Rust + Leptos (CSR) + trunk を採用する](../architecture/rust-leptos-csr-trunk.md), [Service Worker はシェル全体を BUILD_ID で原子的に入れ替える](../pwa/sw-atomic-shell-swap.md), [manifest の URL を全て相対にする](../pwa/manifest-relative-urls.md), [GitHub Pages の branch deploy（`release` / `docs`）を使う](../deploy/github-pages-branch-deploy.md)
+- **関連**: [Rust + Leptos (CSR) + trunk を採用する](../architecture/rust-leptos-csr-trunk.md), [Service Worker はシェル全体を BUILD_ID で原子的に入れ替える](../pwa/sw-atomic-shell-swap.md), [manifest の URL を全て相対にする](../pwa/manifest-relative-urls.md), [GitHub Pages の branch deploy（`release` / `docs`）を使う](../deploy/github-pages-branch-deploy.md), [静的メタデータを英語に統一し、`<html lang>` は実行時に切り替える](static-metadata-in-english.md)（メタデータの言語を改訂）
+
+> **一部改訂。** 下の決定 3 と理由にある「**日本語**のキーワードは description /
+> og:title / JSON-LD が担う」という前提は、アプリが日英を実行時に切り替えるようになった
+> 時点で成立しなくなり、[静的メタデータを英語に統一し、`<html lang>` は実行時に切り替える](static-metadata-in-english.md) で
+> **静的メタデータを英語に統一**した（`<html lang>` も `en` にし、実行時にアプリが上書きする）。
+> 日本語は JSON-LD の `alternateName` と noscript 末尾の 1 段落にだけ残してある。
+>
+> **ハードコード origin の決定（決定 1・2）は無変更で有効。** canonical / og:url / og:image を
+> 本番 URL の絶対値で持つことも、og.png をオフラインシェルから外すことも変えていない。
 
 ## 背景
 

@@ -14,12 +14,13 @@ pub mod settings;
 use std::cell::Cell;
 use std::time::Duration;
 
-use chrono::{Datelike, Local, NaiveDate, Weekday};
+use chrono::{Datelike, Local, NaiveDate};
 use leptos::prelude::*;
 // シートを閉じたときのフォーカス復帰で Element → HtmlElement に落とすのに使う
 use wasm_bindgen::JsCast;
 
-use crate::model::{Db, GroupId, SetEntry};
+use crate::i18n::{self, Lang, S};
+use crate::model::{Db, Exercise, Group, GroupId, SetEntry};
 use crate::storage;
 
 use calendar::Calendar;
@@ -126,6 +127,7 @@ pub enum SettingsPage {
     Root,
     Routines,
     Exercises,
+    Language,
 }
 
 #[derive(Clone, Copy)]
@@ -155,6 +157,66 @@ pub fn use_open_group() -> RwSignal<Option<GroupId>> {
     use_context::<OpenGroupCtx>()
         .expect("OpenGroupCtx が provide されていない")
         .0
+}
+
+/// UI の言語（adr/ux/language-follows-the-browser-then-the-setting.md）。
+///
+/// ★ 他のコンテキストと違い、**文言はこのシグナルを購読しない**（[`t`] は
+///   `get_untracked`）。264 箇所の文字列を全部 `move ||` で包むのは現実的でないので、
+///   反映経路を `App` の 1 箇所に集約している（`App` の該当箇所のコメントを参照）。
+#[derive(Clone, Copy)]
+pub struct LangCtx(pub RwSignal<Lang>);
+
+pub fn use_lang() -> RwSignal<Lang> {
+    use_context::<LangCtx>()
+        .expect("LangCtx が provide されていない")
+        .0
+}
+
+thread_local! {
+    /// 現在の言語のプロセス内キャッシュ。`App` が [`LangCtx`] と同期させる。
+    ///
+    /// ★ **コンテキストではなくここから読む理由。** `use_context` はリアクティブな
+    ///   owner の中でしか引けない。文言が要る場所はイベントハンドラ（書き出しボタン、
+    ///   ファイル選択のコールバック）にもあり、そこで `use_context` を呼ぶと
+    ///   `None` が返って `expect` で落ちる — 実際に「壊れたファイルの取り込み」で
+    ///   踏んだ。読み取りを owner から独立させて、この失敗クラスごと無くす。
+    ///
+    /// ★ グローバル可変状態だが **UI 層に閉じている**。`core` / `presets` / `i18n` は
+    ///   今までどおり `Lang` を引数で受けるので、ホストの `cargo test` が
+    ///   言語ごとの挙動を検証できる性質は失われない
+    ///   （adr/architecture/i18n-hand-rolled-string-table.md）。
+    static CURRENT_LANG: Cell<Lang> = const { Cell::new(Lang::Ja) };
+}
+
+/// 現在の文言表。**コンポーネント本体の先頭で 1 回だけ引く。**
+///
+/// ★ 購読しないのが要点。ここで購読すると「文言を読んだだけの」コンポーネントが
+///   軒並み lang の購読者になり、切り替え時の作り直しが `App` の境界と二重に走る。
+///   反映を起こすのは `App` の `lang.get()` 1 箇所だけにしてある。
+pub fn t() -> &'static S {
+    cur_lang().strings()
+}
+
+/// 表示に使う種目名。**未改名のプリセットだけが言語に追従する。**
+///
+/// ★ `Exercise.name` を直接描かず必ずここを通す。素で描くと、日本語で初期化した端末を
+///   英語にしたときに種目名だけ日本語で残る（部位名も同じ理由で [`grp_name`] を通す）。
+pub fn ex_name(e: &Exercise) -> &str {
+    crate::presets::exercise_name(e.id, &e.name, cur_lang())
+}
+
+/// 表示に使う部位名。規則は [`ex_name`] と同じ。
+pub fn grp_name(g: &Group) -> &str {
+    crate::presets::group_name(g.id, &g.name, cur_lang())
+}
+
+/// 現在の言語。`fmt_date` のように `Lang` そのものを要求する関数へ渡すために引く。
+///
+/// ★ 名前が `lang` でないのは、Rust の組み込み属性 `#[lang = ".."]` と綴りが衝突して
+///   呼び出しが属性に解決されてしまうため。
+pub fn cur_lang() -> Lang {
+    CURRENT_LANG.get()
 }
 
 // ── キーボード対策 ──────────────────────────────────────────────────────────
@@ -204,21 +266,32 @@ pub fn now_ms() -> i64 {
     Local::now().timestamp_millis()
 }
 
-pub fn weekday_ja(d: NaiveDate) -> &'static str {
-    match d.weekday() {
-        Weekday::Mon => "月",
-        Weekday::Tue => "火",
-        Weekday::Wed => "水",
-        Weekday::Thu => "木",
-        Weekday::Fri => "金",
-        Weekday::Sat => "土",
-        Weekday::Sun => "日",
-    }
+/// 曜日の短縮表記。
+///
+/// ★ 表は `i18n::Cal::weekdays` に一本化してある（`views/calendar.rs` の `WEEKDAYS` と
+///   ここの `weekday_ja` に同じ並びが二重にあった）。**日曜始まり**なので
+///   `num_days_from_sunday()` の 0..=6 がそのまま添字になる。
+pub fn weekday(d: NaiveDate, lang: Lang) -> &'static str {
+    lang.strings().cal.weekdays[d.weekday().num_days_from_sunday() as usize]
 }
 
-/// "8/8 (金)"
-pub fn fmt_date(d: NaiveDate) -> String {
-    format!("{}/{} ({})", d.month(), d.day(), weekday_ja(d))
+/// "8/8 (金)" / "Aug 8 (Fri)"
+///
+/// ★ **英語で `8/8` を使わない。** 米式 M/D と英式 D/M は見た目が同じで意味が違うので、
+///   8 月 8 日以外は読み手のロケール次第で別の日に読める。月名の略記にすれば
+///   曖昧さが構造的に消える。カッコ付き曜日の形は日本語と揃えてあるので、
+///   CSS もレイアウトも動かない。
+pub fn fmt_date(d: NaiveDate, lang: Lang) -> String {
+    let wd = weekday(d, lang);
+    match lang {
+        Lang::Ja => format!("{}/{} ({})", d.month(), d.day(), wd),
+        Lang::En => format!(
+            "{} {} ({})",
+            lang.strings().cal.months_short[d.month0() as usize],
+            d.day(),
+            wd
+        ),
+    }
 }
 
 /// 指標を "1,080" の形にする（小数は落とす）。
@@ -284,6 +357,18 @@ pub fn storage_may_split() -> bool {
         .user_agent()
         .map(|ua| !ua.contains("Android"))
         .unwrap_or(true)
+}
+
+/// ブラウザが申告する言語。**`ja` で始まるものだけ日本語**、それ以外は英語。
+///
+/// ★ `navigator.languages`（優先順の配列）は見ない。1 本目で足りるし、web-sys の
+///   `languages()` は `js_sys::Array` を返すので走査のコードが要る。
+/// ★ 判定本体は `i18n::from_bcp47` に置いてある（ホストの `cargo test` で検証するため）。
+pub fn browser_lang() -> Lang {
+    window()
+        .navigator()
+        .language()
+        .map_or(Lang::En, |tag| i18n::from_bcp47(&tag))
 }
 
 /// 次のフレームで指定 id の要素までスクロールする（要素の上端を画面の上端に合わせる）。
@@ -474,7 +559,7 @@ pub fn Sheet(
                 // 「閉じる」で届く必要がある
                 <button
                     class="icon-btn"
-                    aria-label="閉じる"
+                    aria-label=t().common.close
                     data-testid=close_testid
                     on:click=move |_| on_close.run(())
                 >
@@ -535,7 +620,18 @@ impl TabCtx {
 
 #[component]
 pub fn App() -> impl IntoView {
-    let (initial, restore_note) = storage::load();
+    // ★ **言語を最初に決める。** `storage::load` はプリセットを投入する言語と起動時通知の
+    //   文言の両方にこれを使うので、`Db` より先でなければならない。
+    //   解決順序は「明示的に選ばれた値 → ブラウザの申告 → 英語」
+    //   （adr/ux/language-follows-the-browser-then-the-setting.md）
+    let initial_lang = storage::saved_lang().unwrap_or_else(browser_lang);
+    // ★ シグナルより先にキャッシュを埋める。`storage::load` も、この後に走る
+    //   どのコンポーネントも `cur_lang()` から読む
+    CURRENT_LANG.set(initial_lang);
+    let lang = RwSignal::new(initial_lang);
+    provide_context(LangCtx(lang));
+
+    let (initial, restore_note) = storage::load(lang.get_untracked());
     let db = RwSignal::new(initial);
     provide_context(DbCtx(db));
 
@@ -565,6 +661,20 @@ pub fn App() -> impl IntoView {
         storage::save_debounced(db.get());
     });
 
+    // ★ `<html lang>` を UI に合わせる。**任意ではなく必須** — スクリーンリーダーは
+    //   この属性から読み上げ音声を選ぶので、日本語の画面が `lang="en"` のままだと
+    //   英語音声で読まれて使い物にならない。CJK のフォント選択にも効く。
+    //
+    //   index.html の静的な値は `en`（クローラが見るのはそれで、英語の description /
+    //   og:locale と揃えてある — adr/seo/static-metadata-in-english.md）。
+    //   ここは実行時の上書きで、切り替えのたびに追随する
+    Effect::new(move |_| {
+        let tag = lang.get().tag();
+        if let Some(root) = document().document_element() {
+            let _ = root.set_attribute("lang", tag);
+        }
+    });
+
     // ★ hidden で flush、visible 復帰で「今日」を引き直す。
     //   visibilitychange は Document で発火するが bubbles: true なので window で捕捉できる。
     //   leptos に visibilitychange の typed event は無いので untyped を使う。
@@ -578,7 +688,10 @@ pub fn App() -> impl IntoView {
             //   数週間分の入力を失ってから気づくことになる
             if storage::save_failed() {
                 notice.set(Some(
-                    "記録を保存できていません。設定タブの「データの書き出し / 読み込み」から今すぐ控えを取ってください"
+                    lang.get_untracked()
+                        .strings()
+                        .common
+                        .save_failed
                         .to_string(),
                 ));
             }
@@ -604,38 +717,61 @@ pub fn App() -> impl IntoView {
 
     view! {
         <div class="app" class:kb-open=move || kb.0.get()>
+            // ★ **ここが言語の唯一の反映経路。** 各画面は `t()` で文言を
+            //   非リアクティブに読む（264 箇所を `move ||` で包まないため）ので、
+            //   切り替えたら中身を丸ごと作り直す。
+            //
+            //   ★ 失われるのはコンポーネント局所のシグナルだけ（編集シートの開閉、
+            //     カレンダーの表示月、推移タブの対象/指標/期間）。`DbCtx` / `DateCtx` /
+            //     `TabCtx` / `SettingsPageCtx` / `OpenGroupCtx` は `App` が持っているので
+            //     残り、切り替えた人は「設定 > 言語」に留まる。
+            //   ★ 押したボタン自身がこの中で破棄されるが、leptos は現在のイベント
+            //     ハンドラを抜けてから破棄するので安全（設定の「‹ 設定」で実証済み）。
             {move || {
-                notice
-                    .get()
-                    .map(|msg| {
-                        view! {
-                            <div class="notice" role="status" data-testid="restore-notice">
-                                <span>{msg}</span>
-                                <button
-                                    class="icon-btn"
-                                    aria-label="通知を閉じる"
-                                    on:click=move |_| notice.set(None)
-                                >
-                                    {icon(icon::X)}
-                                </button>
-                            </div>
-                        }
-                    })
+                let l = lang.get();
+                // ★ **`view!` を作る前にキャッシュを更新する。** 子は `t()` /
+                //   `cur_lang()` から読むので、ここで更新しないと古い言語のまま描かれる。
+                //   `Effect` に任せると間に合わない — 描画クロージャは signal の変更で
+                //   同期に走るのに対し、`Effect` は DOM を作り終えた後に走るので、
+                //   ボトムタブ（この `l` を直接使う）だけが新しい言語になり、
+                //   その下の画面が前の言語で残る
+                CURRENT_LANG.set(l);
+                let t = l.strings();
+                view! {
+                    {move || {
+                        notice
+                            .get()
+                            .map(|msg| {
+                                view! {
+                                    <div class="notice" role="status" data-testid="restore-notice">
+                                        <span>{msg}</span>
+                                        <button
+                                            class="icon-btn"
+                                            aria-label=t.common.close_notice
+                                            on:click=move |_| notice.set(None)
+                                        >
+                                            {icon(icon::X)}
+                                        </button>
+                                    </div>
+                                }
+                            })
+                    }}
+
+                    <main class="screen">
+                        {move || match tab.get() {
+                            Tab::Record => view! { <Calendar /> }.into_any(),
+                            Tab::Progress => view! { <Progress /> }.into_any(),
+                            Tab::Settings => view! { <Settings /> }.into_any(),
+                        }}
+                    </main>
+
+                    <nav class="bottom-tabs" data-testid="bottom-tabs">
+                        {tab_button(Tab::Record, t.common.tab_record, "tab-record")}
+                        {tab_button(Tab::Progress, t.common.tab_progress, "tab-progress")}
+                        {tab_button(Tab::Settings, t.common.tab_settings, "tab-settings")}
+                    </nav>
+                }
             }}
-
-            <main class="screen">
-                {move || match tab.get() {
-                    Tab::Record => view! { <Calendar /> }.into_any(),
-                    Tab::Progress => view! { <Progress /> }.into_any(),
-                    Tab::Settings => view! { <Settings /> }.into_any(),
-                }}
-            </main>
-
-            <nav class="bottom-tabs" data-testid="bottom-tabs">
-                {tab_button(Tab::Record, "記録", "tab-record")}
-                {tab_button(Tab::Progress, "推移", "tab-progress")}
-                {tab_button(Tab::Settings, "設定", "tab-settings")}
-            </nav>
         </div>
     }
 }

@@ -14,7 +14,9 @@ use web_sys::PointerEvent;
 
 use crate::core;
 use crate::core::Metric;
-use crate::model::{Db, ExerciseId, ExerciseLog, GroupId, RoutineId, SetEntry};
+use crate::model::{
+    Db, ExerciseId, ExerciseLog, GroupId, MAX_PIN_LEN, MAX_PINS, RoutineId, SetEntry,
+};
 use crate::reorder;
 
 use super::drag::{
@@ -23,8 +25,8 @@ use super::drag::{
 };
 use super::icon::{self, icon};
 use super::{
-    Sheet, fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms, parse_reps,
-    parse_weight, scroll_to_id, use_dates, use_db, use_kb,
+    Sheet, cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, fmt_weight, grp_name, kb_blur,
+    kb_focus, now_ms, parse_reps, parse_weight, scroll_to_id, t, use_dates, use_db, use_kb,
 };
 
 /// 選択日に並べているカード 1 枚。
@@ -60,6 +62,17 @@ impl Row {
             note: String::new(),
         }
     }
+}
+
+/// 編集中のマシンのピン 1 個。`Row` と同じ理由で文字列（保存形も `String`）。
+///
+/// `key` を持つのは `<For>` のキーにするため。**値そのものをキーにできない** —
+/// 同じ番号を 2 つ並べた瞬間（「シート高 3 / バー位置 3」は正当な入力）にキーが
+/// 重複し、keyed diff が壊れる（wasm では panic ＝ アプリが死ぬ）。
+#[derive(Clone, Debug, PartialEq)]
+struct PinRow {
+    key: u32,
+    value: String,
 }
 
 fn card_dom_id(ex: ExerciseId) -> String {
@@ -127,13 +140,13 @@ impl MenuRow {
         for id in exercises {
             // core 側で存在を確認済みだが、ここでも落とさず素通しできるようにしておく
             let Some(e) = db.exercise(*id) else { continue };
-            names.push(e.name.clone());
+            names.push(ex_name(e).to_string());
             if seen.contains(&e.group_id) {
                 continue;
             }
             seen.push(e.group_id);
             if let Some(g) = db.group(e.group_id) {
-                ordered.push((g.order, g.name.clone()));
+                ordered.push((g.order, grp_name(g).to_string()));
             }
         }
         // 部位は Group::order 順に直す。種目の入力順で並べると、同じ部位構成の日でも
@@ -145,14 +158,14 @@ impl MenuRow {
             ordered.len(),
             MENU_GROUP_CAP,
             "・",
-            |_| " 他".to_string(),
+            |_| cur_lang().and_more(),
         );
         let names = join_capped(
             names.iter().map(String::as_str),
             names.len(),
             MENU_NAME_CAP,
             ", ",
-            |rest| format!(" 他{rest}種目"),
+            |rest| cur_lang().and_n_more_exercises(rest),
         );
         Self {
             title,
@@ -228,7 +241,17 @@ fn write_log(
                 //     ないので、メモだけのログに時刻が入ると「その日に実施した」証拠を
                 //     持ってしまう（adr/data-model/at-optional-same-day-only.md）。
                 //     旧実装はセットが空なら削除枝に入っていたのでこの判定が要らなかった
-                if is_today && !log.sets.is_empty() {
+                //
+                //   ★ **セットが無くなったら時刻を落とす。** 押すだけでは足りない。
+                //     セットを打った（`at` が入った）あとに行を全部消すとメモだけのログが
+                //     残るので、**書いた時点の時刻が「実施した証拠」として居座る**。
+                //     `export_tsv` はセット無しのログにも「時刻」列を書くので、
+                //     やっていないトレーニングの実施時刻が書き出しに出る。
+                //     コピーがメモを運ぶようになって初めて届く経路になった
+                //     （adr/ux/copy-carries-the-notes.md）
+                if log.sets.is_empty() {
+                    log.at = None;
+                } else if is_today {
                     log.at = Some(now_ms());
                 }
             }
@@ -330,7 +353,7 @@ pub fn DayEditor() -> impl IntoView {
                 .into_iter()
                 .map(|g| {
                     let e = by_group.get(&g.id).copied();
-                    (g.name, e) as Chip
+                    (grp_name(&g).to_string(), e) as Chip
                 })
                 .collect::<Vec<_>>()
         })
@@ -371,7 +394,7 @@ pub fn DayEditor() -> impl IntoView {
                 .into_iter()
                 .map(|c| {
                     let title = if c.name.trim().is_empty() {
-                        "（名前なし）".to_string()
+                        t().day.unnamed.to_string()
                     } else {
                         c.name
                     };
@@ -380,7 +403,12 @@ pub fn DayEditor() -> impl IntoView {
                 .collect(),
             days: core::recent_menus(d, before, MENU_CANDIDATES)
                 .into_iter()
-                .map(|c| (c.date, MenuRow::build(d, fmt_date(c.date), &c.exercises)))
+                .map(|c| {
+                    (
+                        c.date,
+                        MenuRow::build(d, fmt_date(c.date, cur_lang()), &c.exercises),
+                    )
+                })
                 .collect(),
         })
     });
@@ -436,10 +464,10 @@ pub fn DayEditor() -> impl IntoView {
                 <div class="hero" data-testid="hero">
                     // ラベルと値を分けて持つ（値だけを読めるようにしておく）
                     <span class="hero-elapsed">
-                        "最後から "
+                        {t().day.since_last}
                         <b data-testid="elapsed">
                             {move || {
-                                elapsed.get().map_or_else(|| "—".to_string(), core::humanize)
+                                elapsed.get().map_or_else(|| "—".to_string(), |e| core::humanize(e, cur_lang()))
                             }}
                         </b>
                     </span>
@@ -450,7 +478,7 @@ pub fn DayEditor() -> impl IntoView {
                                 .into_iter()
                                 .map(|(name, e)| {
                                     let label = e
-                                        .map_or_else(|| "—".to_string(), core::short_elapsed);
+                                        .map_or_else(|| "—".to_string(), |e| core::short_elapsed(e, cur_lang()));
                                     view! {
                                         <span
                                             class="chip"
@@ -471,7 +499,7 @@ pub fn DayEditor() -> impl IntoView {
     // ★ h1 ではなく h2。記録タブは 1 画面にカレンダーと選択日の入力欄が縦に並ぶので
     // （adr/ux/record-tab-calendar-with-day-editor.md）、h1 は上のカレンダーの月見出しが持つ。両方を h1 にすると
     // 見出しの階層が 1 画面に 2 本立ち、支援技術のアウトラインで前後関係が読めなくなる
-    <h2 data-testid="today-date">{move || fmt_date(dates.selected.get())}</h2>
+    <h2 data-testid="today-date">{move || fmt_date(dates.selected.get(), cur_lang())}</h2>
                     {move || {
                         if dates.is_past_edit() {
                             view! {
@@ -480,12 +508,12 @@ pub fn DayEditor() -> impl IntoView {
                                     data-testid="back-to-today"
                                     on:click=move |_| dates.back_to_today()
                                 >
-                                    "今日へ戻る"
+                                    {t().day.back_to_today}
                                 </button>
                             }
                                 .into_any()
                         } else {
-                            view! { <span class="badge">"今日"</span> }.into_any()
+                            view! { <span class="badge">{t().day.today_badge}</span> }.into_any()
                         }
                     }}
                 </header>
@@ -496,7 +524,7 @@ pub fn DayEditor() -> impl IntoView {
                         .then(|| {
                             view! {
                                 <p class="past-banner" data-testid="past-banner">
-                                    {move || format!("{} を編集中", fmt_date(dates.selected.get()))}
+                                    {move || cur_lang().editing_day(&fmt_date(dates.selected.get(), cur_lang()))}
                                 </p>
                             }
                         })
@@ -540,7 +568,7 @@ pub fn DayEditor() -> impl IntoView {
                                 {split
                                     .then(|| {
                                         view! {
-                                            <h3 class="menu-copy-label">"トレーニングメニュー"</h3>
+                                            <h3 class="menu-copy-label">{t().day.menu_heading}</h3>
                                         }
                                     })}
                                 {c
@@ -566,7 +594,7 @@ pub fn DayEditor() -> impl IntoView {
                                     .then(|| {
                                         view! {
                                             <h3 class="menu-copy-label">
-                                                {if split { "最近の記録から" } else { "前回のメニューから始める" }}
+                                                {if split { t().day.from_recent } else { t().day.from_last_menu }}
                                             </h3>
                                         }
                                     })}
@@ -600,14 +628,14 @@ pub fn DayEditor() -> impl IntoView {
                         data-testid="add-exercise"
                         on:click=move |_| sheet.set(true)
                     >
-                        "種目を追加"
+                        {t().day.add_exercise}
                     </button>
                 </div>
 
                 <Sheet
                     open=sheet
                     on_close=Callback::new(move |_| sheet.set(false))
-                    title="種目を追加".to_string()
+                    title=t().day.add_exercise.to_string()
                     testid="add-sheet"
                     close_testid="add-sheet-close"
                 >
@@ -627,7 +655,7 @@ pub fn DayEditor() -> impl IntoView {
                                     exercises.sort_by_key(|e| e.order);
                                     view! {
                                         <section class="sheet-group">
-                                            <h3 style=format!("--dot:{}", g.color)>{g.name}</h3>
+                                            <h3 style=format!("--dot:{}", g.color)>{grp_name(&g).to_string()}</h3>
                                             <div class="pick-list">
                                                 {exercises
                                                     .into_iter()
@@ -645,7 +673,7 @@ pub fn DayEditor() -> impl IntoView {
                                                                 data-testid="pick-exercise"
                                                                 on:click=move |_| pick(id)
                                                             >
-                                                                {e.name}
+                                                                {ex_name(&e).to_string()}
                                                             </button>
                                                         }
                                                     })
@@ -717,7 +745,7 @@ fn ConditionRow() -> impl IntoView {
                 data-testid="condition-toggle"
                 on:click=move |_| open.update(|o| *o = !*o)
             >
-                {move || if open.get() { "－ コンディション" } else { "＋ コンディション" }}
+                {move || if open.get() { t().day.condition_close } else { t().day.condition_open }}
             </button>
             {move || {
                 open
@@ -726,7 +754,7 @@ fn ConditionRow() -> impl IntoView {
                         view! {
                             <div class="cond-fields">
                                 <label>
-                                    "体重"
+                                    {t().day.body_weight}
                                     <input
                                         type="text"
                                         inputmode="decimal"
@@ -743,7 +771,7 @@ fn ConditionRow() -> impl IntoView {
                                     <span class="unit">"kg"</span>
                                 </label>
                                 <label class="note">
-                                    "メモ"
+                                    {t().day.note}
                                     <input
                                         type="text"
                                         value=note0.clone()
@@ -777,14 +805,15 @@ fn ExerciseCard(
     // Memo にするのは「値が変わったときだけ」下流を再描画させるため。
     // 素の closure だと db が動くたびに構造ごと作り直され、入力中の文字列が消える
     let name = Memo::new(move |_| {
-        db.with(|d| d.exercise(ex).map(|e| e.name.clone()))
-            .unwrap_or_else(|| "(削除された種目)".to_string())
+        db.with(|d| d.exercise(ex).map(|e| ex_name(e).to_string()))
+            .unwrap_or_else(|| t().day.deleted_exercise.to_string())
     });
     let group_name = Memo::new(move |_| {
         db.with(|d| {
             d.exercise(ex)
                 .and_then(|e| d.group(e.group_id))
-                .map(|g| g.name.clone())
+                .map(grp_name)
+                .map(str::to_string)
         })
         .unwrap_or_default()
     });
@@ -836,6 +865,14 @@ fn ExerciseCard(
     });
     // その日のその種目のメモ。
     let ex_note = RwSignal::new(note0);
+    // ★ 種目メモの入力欄。**開いているときの `value=` は初期値を 1 度読むだけ**で、
+    //   あの閉包が追跡するのは `note_open` だけ（開いている枝は `get_untracked`）。
+    //   つまり `copy_last` が signal を書いても**開いている入力欄は古いまま残り**、
+    //   次の 1 打鍵の `on:input` が DOM 側の古い値で上書きしてコピーしたメモを消す。
+    //   セット行は `copy_last` が新しいキーを振るので `<For>` が DOM ごと作り直し、
+    //   同じ問題が起きない — 種目メモだけがキーを持たないので取り残される。
+    //   閉じているあいだは薄字側が `ex_note.get()` を追跡しているので自動で追いつく
+    let ex_note_ref = NodeRef::<leptos::html::Input>::new();
 
     // 「+ セット」で足した行。この行の回数欄へフォーカスを移したら None に戻す。
     let focus_key: RwSignal<Option<u32>> = RwSignal::new(None);
@@ -856,6 +893,31 @@ fn ExerciseCard(
     //   リロードで閉じるのは仕様（薄字が残るので情報は失われない）。
     //   adr/ux/exercise-and-set-notes-behind-one-toggle.md
     let note_open = RwSignal::new(false);
+
+    // ── マシンのピン（adr/ux/machine-pins-on-the-exercise.md）───────────────────
+    //
+    // ★ **種目に紐づく永続設定**なので `db.exercises` から読む（セット行と種目メモが
+    //   「その日のログ」から読むのと対照）。日を切り替えても同じ値が出る。
+    //
+    // ★ 編集中はローカル signal に持つ。`db` を直接読む生クロージャで入力欄を作ると、
+    //   1 文字打つたびに構造ごと作り直されて**入力中の文字が消える**（`rows` と同じ）。
+    let pins0: Vec<String> =
+        db.with_untracked(|d| d.exercise(ex).map(|e| e.pins.clone()).unwrap_or_default());
+    let next_pin_key = RwSignal::new(pins0.len() as u32);
+    let pin_rows = RwSignal::new(
+        pins0
+            .into_iter()
+            .enumerate()
+            .map(|(i, value)| PinRow {
+                key: i as u32,
+                value,
+            })
+            .collect::<Vec<_>>(),
+    );
+    // 閉じているときに薄字で出す値。**保存済みのものだけ**なので `db` から引く
+    // （編集中の空チップや入力途中の文字を静止表示に漏らさない）。
+    let pins =
+        Memo::new(move |_| db.with(|d| d.exercise(ex).map(|e| e.pins.clone()).unwrap_or_default()));
 
     // ★ この種目が普段「重量を使う」種目かを**実データから**判定する。
     //
@@ -908,6 +970,33 @@ fn ExerciseCard(
         });
     };
 
+    // ★ 正規化（空欄落とし・空白分割・上限）は `core::set_pins` に委ねる。ここで
+    //   別に trim すると、画面からの書き込みと取り込みで規則が 2 本に割れる。
+    let commit_pins = move || {
+        let values: Vec<String> =
+            pin_rows.with_untracked(|rs| rs.iter().map(|r| r.value.clone()).collect());
+        db.update(|d| core::set_pins(d, ex, values));
+    };
+
+    let add_pin = move |_| {
+        let key = next_pin_key.get_untracked();
+        next_pin_key.set(key + 1);
+        pin_rows.update(|rs| {
+            rs.push(PinRow {
+                key,
+                value: String::new(),
+            })
+        });
+        // 空欄は `set_pins` が落とすので commit は要らない（`add_row` と同じ）
+    };
+
+    // ★ 確認を挟まない。セット行の削除（`remove_row`）と同じ判断で、消えるのは
+    //   数字 1 個。打ち直しは数秒で、確認のコストのほうが高い。
+    let remove_pin = move |key: u32| {
+        pin_rows.update(|rs| rs.retain(|r| r.key != key));
+        commit_pins();
+    };
+
     let fresh_key = move || {
         let key = next_key.get_untracked();
         next_key.set(key + 1);
@@ -928,9 +1017,9 @@ fn ExerciseCard(
                 key,
                 weight,
                 reps: String::new(),
-                // ★ メモはプリフィルしない。重量を引き継ぐのはそれが**次のセットの計画値**
-                //   だからで、メモは**そのセットで起きたことの観測値**。コピーすると
-                //   起きていない観測を捏造する（copy_day が `at` を持ち込まないのと同型）
+                // ★ メモはプリフィルしない。ここが作るのは**まだ起きていない次のセット**で、
+                //   重量はその計画値だが、書くべき観測はまだ存在しない。過去のログを再現する
+                //   「前回をコピー」とは操作が違う（adr/ux/copy-carries-the-notes.md の決定 2）
                 note: String::new(),
             })
         });
@@ -974,6 +1063,16 @@ fn ExerciseCard(
         // ★ 新しいキーを振る。既存キーを再利用すると <For> が DOM を作り直さないため
         //   入力欄の value が古いまま残る
         let base = next_key.get_untracked();
+        // ★ 今日その行に打ってあるメモ。**位置で拾って残す。**
+        //   このボタンは「保存済みのセットが空か」で出るので、**回数の無い行に書いた
+        //   メモは保存されておらず、画面にだけある**（`commit` の `parse_reps` で落ちる）。
+        //   しかもその行には `note_orphan` が「回数を入れると保存されます」と出ていて、
+        //   打った文字が生きていることを約束している。数値は「前回どおりに流し込む」が
+        //   このボタンの目的そのものなので置き換えるが、メモは打ち直しの手が重く、
+        //   約束もしているので上書きしない（種目メモと同じ「既に書いてある場所には
+        //   書かない」を行単位に降ろしたもの。adr/ux/copy-carries-the-notes.md 決定 4）
+        let typed: Vec<String> =
+            rows.with_untracked(|rs| rs.iter().map(|r| r.note.clone()).collect());
         let filled: Vec<Row> = log
             .sets
             .iter()
@@ -982,13 +1081,34 @@ fn ExerciseCard(
                 key: base + i as u32,
                 weight: fmt_weight(s.weight),
                 reps: s.reps.to_string(),
-                // ★ 前回のメモは持ち込まない。「肩に違和感」は前回の観測で今日の観測では
-                //   ない。core::copy_day（メニューの丸ごとコピー）と同じ規則
-                note: String::new(),
+                // ★ セットメモも運ぶ。core::copy_day / apply_routine と同じ規則
+                //   （adr/ux/copy-carries-the-notes.md）
+                note: match typed.get(i) {
+                    Some(mine) if !mine.trim().is_empty() => mine.clone(),
+                    _ => s.note.clone(),
+                },
             })
             .collect();
         next_key.set(base + filled.len() as u32 + 1);
         rows.set(filled);
+
+        // ★ 種目メモは**今日が空のときだけ**入れる。このボタンはセットが空なら出るので
+        //   「メモだけ書いたカード」でも押せる（show_copy はセットしか見ない）。上書きすると
+        //   今日書いたものが undo 無しで消え、adr/ux/copy-button-only-when-empty.md が
+        //   消したはずの「誤タップで入力済みを失う」が別の入口から戻る。
+        //   3 経路に共通の規則: **コピーは、既に何か書いてある場所には書かない**
+        //   （copy_day / apply_routine は seed_day の has_logs_on ガードで日ごと、
+        //   こちらはフィールド単位で同じことを言っている）
+        if !log.note.trim().is_empty() && ex_note.with_untracked(|n| n.trim().is_empty()) {
+            ex_note.set(log.note.clone());
+            // ★ メモ欄が開いていると `value=` は初期値のままなので DOM も直す。
+            //   ここを抜くと「画面は空・Db にはメモ」になり、次の 1 打鍵で消える
+            if let Some(el) = ex_note_ref.get_untracked() {
+                el.set_value(&log.note);
+            }
+        }
+
+        // ★ `ex_note.set` の**後**に呼ぶ。commit は `ex_note.get_untracked()` を読む
         commit();
     };
 
@@ -1213,14 +1333,14 @@ fn ExerciseCard(
 
             <div class="last-row">
                 {move || match last.get() {
-                    None => view! { <span class="muted" data-testid="last-log">"前回 —"</span> }.into_any(),
+                    None => view! { <span class="muted" data-testid="last-log">{t().day.no_last_log}</span> }.into_any(),
                     Some((date, log)) => {
                         let days = (dates.selected.get() - date).num_days();
-                        let when = core::humanize_days(days);
+                        let when = core::humanize_days(days, cur_lang());
                         let sets = log.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  ");
                         let metric = fmt_metric(core::log_value(Metric::Volume, &log));
                         view! {
-                            <span class="when" data-testid="last-log">{format!("前回 {when}")}</span>
+                            <span class="when" data-testid="last-log">{cur_lang().last_log(&when)}</span>
                             <span class="sets">{sets}</span>
                             <span class="metric">{metric}</span>
                         }
@@ -1239,7 +1359,7 @@ fn ExerciseCard(
                                 data-testid="copy-last"
                                 on:click=copy_last
                             >
-                                "前回をコピー"
+                                {t().day.copy_last}
                             </button>
                         }
                     })
@@ -1426,7 +1546,7 @@ fn ExerciseCard(
                                     inputmode="decimal"
                                     pattern="[0-9]*([.,][0-9]*)?"
                                     value=row.weight.clone()
-                                    aria-label="重量"
+                                    aria-label=t().day.weight
                                     data-testid="set-weight"
                                     on:keydown=nudge_row
                                     on:focusin=move |_| kb_focus(kb)
@@ -1448,7 +1568,7 @@ fn ExerciseCard(
                                     type="text"
                                     inputmode="numeric"
                                     value=row.reps.clone()
-                                    aria-label="回数"
+                                    aria-label=t().day.reps
                                     data-testid="set-reps"
                                     node_ref=reps_ref
                                     on:keydown=nudge_row
@@ -1473,7 +1593,7 @@ fn ExerciseCard(
                                 //   今より押しやすくなる）
                                 <button
                                     class="icon-btn"
-                                    aria-label="このセットを削除"
+                                    aria-label=t().day.delete_set
                                     data-testid="remove-set"
                                     on:click=move |_| remove_row(key)
                                 >
@@ -1484,7 +1604,7 @@ fn ExerciseCard(
                                         .then(|| {
                                             view! {
                                                 <span class="warn" data-testid="weight-missing">
-                                                    "重量未入力"
+                                                    {t().day.weight_missing}
                                                 </span>
                                             }
                                         })
@@ -1497,7 +1617,7 @@ fn ExerciseCard(
                                         .then(|| {
                                             view! {
                                                 <span class="warn" data-testid="note-orphan">
-                                                    "回数を入れると保存されます"
+                                                    {t().day.reps_missing}
                                                 </span>
                                             }
                                         })
@@ -1513,7 +1633,7 @@ fn ExerciseCard(
                                                 type="text"
                                                 value=note_of()
                                                 aria-label=move || {
-                                                    format!("{} セット目のメモ", index())
+                                                    cur_lang().set_note_label(index())
                                                 }
                                                 data-testid="set-note"
                                                 // ★ 行の入力欄には**全部**付ける。
@@ -1561,10 +1681,108 @@ fn ExerciseCard(
                 />
                 <div class="add-set-wrap">
                     <button class="secondary" data-testid="add-set" on:click=add_row>
-                        "+ セット"
+                        {t().day.add_set}
                     </button>
                 </div>
             </div>
+
+            // ── マシンのピン ──────────────────────────────────────────────────
+            //
+            // ★ セット行群の下・種目メモの**上**に置く。読み順が「準備（ピン）→
+            //   観測（メモ）」になる。`.last-row` の直下に置くと 12px --muted の行が
+            //   前回の記録の続きに読める（adr/ux/exercise-and-set-notes-behind-one-toggle.md
+            //   決定 4）。すぐ下の種目メモとは**先頭の「ピン」ラベルの有無**で読み分ける
+            //   （種目メモにラベル文字は無い）。
+            //
+            // ★ 入口を増やさない。開閉は種目メモと同じ `note_open` に相乗りする。
+            //   カード内に 44px のタップ標的を新設できる場所は無く（同 ADR）、ヘッダは
+            //   `e2e/smoke.spec.mjs` が `.card-head button` を 0 件で固定している。
+            //   adr/ux/machine-pins-on-the-exercise.md
+            {move || {
+                if note_open.get() {
+                    view! {
+                        <div class="pin-box" data-testid="pin-box">
+                            <span class="pin-label">"ピン"</span>
+                            <For
+                                each=move || pin_rows.get()
+                                key=|r| r.key
+                                children=move |row| {
+                                    let key = row.key;
+                                    view! {
+                                        <span class="pin-chip">
+                                            <input
+                                                class="pin-num"
+                                                type="text"
+                                                // ★ 数字キーパッドを出すためのヒント。保存は
+                                                //   文字列なので、取り込んだ `A` / `赤` は
+                                                //   ここを通らずそのまま残る
+                                                inputmode="decimal"
+                                                pattern="[0-9]*([.,][0-9]*)?"
+                                                maxlength=MAX_PIN_LEN.to_string()
+                                                value=row.value.clone()
+                                                aria-label="ピンの番号"
+                                                data-testid="pin-value"
+                                                on:focusin=move |_| kb_focus(kb)
+                                                on:focusout=move |_| kb_blur(kb)
+                                                on:input=move |ev| {
+                                                    let v = event_target_value(&ev);
+                                                    pin_rows
+                                                        .update(|rs| {
+                                                            if let Some(r) = rs
+                                                                .iter_mut()
+                                                                .find(|r| r.key == key)
+                                                            {
+                                                                r.value = v;
+                                                            }
+                                                        });
+                                                    commit_pins();
+                                                }
+                                            />
+                                            <button
+                                                class="icon-btn pin-remove"
+                                                aria-label="このピンを削除"
+                                                data-testid="pin-remove"
+                                                on:click=move |_| remove_pin(key)
+                                            >
+                                                {icon(icon::X)}
+                                            </button>
+                                        </span>
+                                    }
+                                }
+                            />
+                            // ★ 上限に達したら出さない（押しても何も起きないボタンを作らない）
+                            {move || {
+                                (pin_rows.with(Vec::len) < MAX_PINS)
+                                    .then(|| {
+                                        view! {
+                                            <button
+                                                class="link-btn pin-add"
+                                                aria-label="ピンを追加"
+                                                data-testid="pin-add"
+                                                on:click=add_pin
+                                            >
+                                                "＋"
+                                            </button>
+                                        }
+                                    })
+                            }}
+                        </div>
+                    }
+                        .into_any()
+                } else {
+                    // 閉じていても保存済みのピンは読める。マシンをセットするとき
+                    // タップが要らない（種目メモの `.ex-note-read` と同じ作法）
+                    (!pins.with(Vec::is_empty))
+                        .then(|| {
+                            view! {
+                                <p class="pin-read" data-testid="pin-read">
+                                    {move || format!("ピン {}", pins.with(|p| p.join("・")))}
+                                </p>
+                            }
+                        })
+                        .into_any()
+                }
+            }}
 
             // ── 種目メモ ──────────────────────────────────────────────────────
             //
@@ -1577,11 +1795,12 @@ fn ExerciseCard(
                 if note_open.get() {
                     view! {
                         <label class="ex-note">
-                            "メモ"
+                            {t().day.note}
                             <input
                                 type="text"
                                 value=ex_note.get_untracked()
-                                aria-label="この種目のメモ"
+                                node_ref=ex_note_ref
+                                aria-label=t().day.exercise_note
                                 data-testid="exercise-note"
                                 on:focusin=move |_| kb_focus(kb)
                                 on:focusout=move |_| kb_blur(kb)
@@ -1628,21 +1847,21 @@ fn ExerciseCard(
                     data-testid="close-card"
                     on:click=request_close
                 >
-                    "この日から外す"
+                    {t().day.remove_from_day}
                 </button>
                 <button
                     class="link-btn note-toggle"
-                    aria-label="メモ"
+                    aria-label=t().day.note
                     // ★ bool を渡さない。aria-expanded は列挙属性なので、真偽属性として
                     //   扱われると false のとき属性ごと消える（＝折りたためることが消える）
                     aria-expanded=move || if note_open.get() { "true" } else { "false" }
                     data-testid="note-toggle"
                     on:click=move |_| note_open.update(|o| *o = !*o)
                 >
-                    {move || if note_open.get() { "－ メモ" } else { "＋ メモ" }}
+                    {move || if note_open.get() { t().day.note_close } else { t().day.note_open }}
                 </button>
                 <span class="foot-total">
-                    <span>"今日"</span>
+                    <span>{t().day.today_badge}</span>
                     <strong data-testid="today-metric">{move || fmt_metric(today_metric())}</strong>
                 </span>
             </footer>
@@ -1654,7 +1873,7 @@ fn ExerciseCard(
                         view! {
                             <div class="warn-box" id=confirm_dom_id(ex)>
                                 <p data-testid="close-card-warning">
-                                    "この日の記録が消えます"
+                                    {t().day.remove_confirm}
                                 </p>
                                 <div class="sheet-actions">
                                     <button
@@ -1662,14 +1881,14 @@ fn ExerciseCard(
                                         data-testid="close-card-yes"
                                         on:click=move |_| close_card()
                                     >
-                                        "外す"
+                                        {t().day.remove_yes}
                                     </button>
                                     <button
                                         class="link-btn"
                                         data-testid="close-card-no"
                                         on:click=move |_| confirm_close.set(false)
                                     >
-                                        "やめる"
+                                        {t().day.remove_no}
                                     </button>
                                 </div>
                             </div>

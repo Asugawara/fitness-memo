@@ -24,10 +24,7 @@ use super::day::DayEditor;
 use super::help::InstallBanner;
 use super::icon::{self, icon};
 use super::routine::SaveDayAsRoutine;
-use super::{fmt_metric, use_dates, use_db};
-
-/// 日曜始まり。`Weekday::num_days_from_sunday()` の 0..=6 とインデックスが一致する。
-const WEEKDAYS: [&str; 7] = ["日", "月", "火", "水", "木", "金", "土"];
+use super::{cur_lang, fmt_metric, t, use_dates, use_db};
 
 /// ドットの最大色数。これ以上は部位の並び順で切り捨てる。
 const MAX_DOTS: usize = 3;
@@ -53,7 +50,7 @@ fn shift_month(first: NaiveDate, delta: i32) -> NaiveDate {
 }
 
 fn fmt_month(first: NaiveDate) -> String {
-    format!("{}年{}月", first.year(), first.month())
+    cur_lang().month_heading(first.year(), first.month0() as usize)
 }
 
 // ── 月データ ────────────────────────────────────────────────────────────────
@@ -164,7 +161,7 @@ pub fn Calendar() -> impl IntoView {
             <header class="cal-nav">
                 <button
                     class="icon-btn"
-                    aria-label="前の月"
+                    aria-label=t().cal.prev_month
                     data-testid="cal-prev"
                     on:click=move |_| month.update(|m| *m = shift_month(*m, -1))
                 >
@@ -175,7 +172,7 @@ pub fn Calendar() -> impl IntoView {
                 </h1>
                 <button
                     class="icon-btn"
-                    aria-label="次の月"
+                    aria-label=t().cal.next_month
                     data-testid="cal-next"
                     on:click=move |_| month.update(|m| *m = shift_month(*m, 1))
                 >
@@ -184,7 +181,7 @@ pub fn Calendar() -> impl IntoView {
             </header>
 
             <div class="cal-week">
-                {WEEKDAYS
+                {t().cal.weekdays
                     .iter()
                     .map(|w| view! { <span class="muted cal-wd">{*w}</span> })
                     .collect::<Vec<_>>()}
@@ -245,19 +242,19 @@ pub fn Calendar() -> impl IntoView {
             // 重量の大小に引きずられないセット数も並べる
             <dl class="stats" data-testid="cal-stats">
                 <div>
-                    <dt>"実施"</dt>
+                    <dt>{t().cal.stat_trained}</dt>
                     <dd data-testid="cal-trained-days">
-                        {move || format!("{} 日", data.with(|m| m.trained_days))}
+                        {move || cur_lang().n_days(data.with(|m| m.trained_days))}
                     </dd>
                 </div>
                 <div>
-                    <dt>"合計"</dt>
+                    <dt>{t().cal.stat_volume}</dt>
                     <dd data-testid="cal-volume">
                         {move || fmt_metric(data.with(|m| m.volume))}
                     </dd>
                 </div>
                 <div>
-                    <dt>"セット"</dt>
+                    <dt>{t().cal.stat_sets}</dt>
                     <dd data-testid="cal-sets">{move || data.with(|m| m.sets).to_string()}</dd>
                 </div>
             </dl>

@@ -8,7 +8,8 @@ use crate::core::Metric;
 use crate::model::{Db, ExerciseId, GroupId};
 
 use super::chart::Chart;
-use super::{fmt_date, fmt_metric, fmt_set, use_dates, use_db};
+use super::{cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, grp_name, t, use_dates, use_db};
+use crate::i18n::Lang;
 
 /// 記録テーブルの表示上限。超えた分は件数を明示して省く（黙って切らない）。
 const MAX_ROWS: usize = 100;
@@ -29,13 +30,20 @@ enum Period {
 }
 
 impl Period {
-    const CHOICES: [(Period, &'static str); 5] = [
-        (Period::M1, "1M"),
-        (Period::M3, "3M"),
-        (Period::M6, "6M"),
-        (Period::Y1, "1Y"),
-        (Period::All, "全期間"),
-    ];
+    /// 期間セレクタの 5 択。
+    ///
+    /// ★ 1M / 3M / 6M / 1Y は**両言語で同じ**。記号に近い短縮なので、
+    ///   日本語だけ「1ヶ月」に広げるとセグメントの幅が揃わなくなる。
+    ///   最後の 1 つだけが語なので表から引く
+    fn choices(lang: Lang) -> [(Period, &'static str); 5] {
+        [
+            (Period::M1, "1M"),
+            (Period::M3, "3M"),
+            (Period::M6, "6M"),
+            (Period::Y1, "1Y"),
+            (Period::All, lang.strings().progress.period_all),
+        ]
+    }
 
     fn months(self) -> Option<u32> {
         match self {
@@ -134,17 +142,17 @@ fn options(d: &Db) -> Options {
         groups: groups
             .iter()
             .filter(|g| sorted.iter().any(|e| e.group_id == g.id))
-            .map(|g| (g.id, g.name.clone()))
+            .map(|g| (g.id, grp_name(g).to_string()))
             .collect(),
         active: sorted
             .iter()
             .filter(|e| !e.archived)
-            .map(|e| (e.id, e.name.clone()))
+            .map(|e| (e.id, ex_name(e).to_string()))
             .collect(),
         archived: sorted
             .iter()
             .filter(|e| e.archived)
-            .map(|e| (e.id, e.name.clone()))
+            .map(|e| (e.id, ex_name(e).to_string()))
             .collect(),
     }
 }
@@ -181,6 +189,8 @@ fn fmt_delta(last: Option<f64>, prev: Option<f64>) -> String {
 
 #[component]
 pub fn Progress() -> impl IntoView {
+    // 文言は本体の先頭で 1 回だけ引く（`views::t` の doc を参照）
+    let t = t();
     let db = use_db();
     let dates = use_dates();
 
@@ -204,7 +214,7 @@ pub fn Progress() -> impl IntoView {
 
     // ★ 単位は選んだ指標だけで決まる（対象種目では決まらない）。
     //   対象を切り替えても軸の意味が変わらないのが、旧 Kind 方式との違い
-    let unit = Memo::new(move |_| metric.get().unit().to_string());
+    let unit = Memo::new(move |_| metric.get().unit(cur_lang()).to_string());
 
     let series = Memo::new(move |_| {
         let Some(t) = target.get() else {
@@ -273,7 +283,7 @@ pub fn Progress() -> impl IntoView {
         let m = metric.get();
         db.with(|d| {
             let (from, to) = bounds(period, today, earliest_session(d));
-            let unit = m.unit();
+            let unit = m.unit(cur_lang());
             let show = |v: f64| {
                 let n = fmt_metric(v);
                 if unit.is_empty() {
@@ -308,7 +318,7 @@ pub fn Progress() -> impl IntoView {
                                 hit = true;
                                 total += core::log_value(m, log);
                                 if let Some(e) = d.exercise(log.exercise_id) {
-                                    names.push(e.name.clone());
+                                    names.push(ex_name(e).to_string());
                                 }
                             }
                         }
@@ -352,7 +362,7 @@ pub fn Progress() -> impl IntoView {
 
     view! {
         <section class="progress" data-testid="screen-progress">
-            <h1 class="screen-title">"推移"</h1>
+            <h1 class="screen-title">{t.progress.title}</h1>
 
             // 記録が 1 件も無いうちはセレクタも空になる。無言の空画面にしない
             {move || {
@@ -361,7 +371,7 @@ pub fn Progress() -> impl IntoView {
                     .then(|| {
                         view! {
                             <p class="muted" data-testid="progress-empty">
-                                "まだ記録がありません。記録タブで種目を追加すると、ここに推移が出ます"
+                                {t.progress.empty_all}
                             </p>
                         }
                     })
@@ -371,7 +381,7 @@ pub fn Progress() -> impl IntoView {
                 <select
                     class="target-select"
                     data-testid="target-select"
-                    aria-label="対象"
+                    aria-label=t.progress.pick_target
                     on:change=move |ev| target.set(parse_target(&event_target_value(&ev)))
                 >
                     {move || {
@@ -386,7 +396,7 @@ pub fn Progress() -> impl IntoView {
                             }
                         };
                         view! {
-                            <optgroup label="部位">
+                            <optgroup label=t.progress.optgroup_groups>
                                 {opts
                                     .groups
                                     .iter()
@@ -396,7 +406,7 @@ pub fn Progress() -> impl IntoView {
                                     })
                                     .collect::<Vec<_>>()}
                             </optgroup>
-                            <optgroup label="種目">
+                            <optgroup label=t.progress.optgroup_exercises>
                                 {opts
                                     .active
                                     .iter()
@@ -410,7 +420,7 @@ pub fn Progress() -> impl IntoView {
                             {(!opts.archived.is_empty())
                                 .then(|| {
                                     view! {
-                                        <optgroup label="アーカイブ済み">
+                                        <optgroup label=t.progress.optgroup_archived>
                                             {opts
                                                 .archived
                                                 .iter()
@@ -428,15 +438,15 @@ pub fn Progress() -> impl IntoView {
 
                 // ★ 指標は種目の属性ではなく画面の表示設定なので、対象と並べてここに置く。
                 //   単位もこの選択だけで決まる（種目を切り替えても軸の意味が変わらない）
-                <div class="segmented" role="group" aria-label="指標" data-testid="metric-select">
-                    {Metric::CHOICES
+                <div class="segmented" role="group" aria-label=t.progress.pick_metric data-testid="metric-select">
+                    {Metric::choices(cur_lang())
                         .into_iter()
                         .map(|(m, label)| metric_button(m, label))
                         .collect::<Vec<_>>()}
                 </div>
 
-                <div class="segmented" role="group" aria-label="期間" data-testid="period-select">
-                    {Period::CHOICES
+                <div class="segmented" role="group" aria-label=t.progress.pick_period data-testid="period-select">
+                    {Period::choices(cur_lang())
                         .into_iter()
                         .map(|(p, label)| period_button(p, label))
                         .collect::<Vec<_>>()}
@@ -450,9 +460,9 @@ pub fn Progress() -> impl IntoView {
                     .then(|| {
                         // 体重が 1 件も無い人に「体重は週平均」と言わない
                         let note = if weight.get().is_empty() {
-                            "全期間は週単位で集計しています"
+                            {t.progress.weekly_note}
                         } else {
-                            "全期間は週単位で集計しています（体重は週平均）"
+                            {t.progress.weekly_note_with_weight}
                         };
                         view! {
                             <p class="muted note" data-testid="weekly-note">
@@ -469,7 +479,7 @@ pub fn Progress() -> impl IntoView {
                     .then(|| {
                         view! {
                             <p class="muted note" data-testid="chart-metric-empty">
-                                "この期間、この種目の記録はありません"
+                                {t.progress.empty_period_exercise}
                             </p>
                         }
                     })
@@ -477,7 +487,7 @@ pub fn Progress() -> impl IntoView {
 
             <dl class="stats" data-testid="stats">
                 <div>
-                    <dt>"前回比"</dt>
+                    <dt>{t.progress.stat_delta}</dt>
                     <dd data-testid="stat-delta">
                         {move || {
                             let (last, prev, _, _) = stats.get();
@@ -486,7 +496,7 @@ pub fn Progress() -> impl IntoView {
                     </dd>
                 </div>
                 <div>
-                    <dt>"期間内ベスト"</dt>
+                    <dt>{t.progress.stat_best}</dt>
                     <dd data-testid="stat-best">
                         {move || {
                             let (_, _, best, _) = stats.get();
@@ -498,7 +508,7 @@ pub fn Progress() -> impl IntoView {
                     </dd>
                 </div>
                 <div>
-                    <dt>"期間内平均"</dt>
+                    <dt>{t.progress.stat_average}</dt>
                     <dd data-testid="stat-avg">
                         {move || {
                             let (_, _, _, avg) = stats.get();
@@ -515,7 +525,7 @@ pub fn Progress() -> impl IntoView {
                 let rows = records.get();
                 if rows.is_empty() {
                     return view! {
-                        <p class="muted" data-testid="records-empty">"この期間の記録はありません"</p>
+                        <p class="muted" data-testid="records-empty">{t.progress.empty_period}</p>
                     }
                         .into_any();
                 }
@@ -526,9 +536,9 @@ pub fn Progress() -> impl IntoView {
                     <table class="records" data-testid="records">
                         <thead>
                             <tr>
-                                <th>"日付"</th>
-                                <th>"内容"</th>
-                                <th>"指標"</th>
+                                <th>{t.progress.col_date}</th>
+                                <th>{t.progress.col_content}</th>
+                                <th>{t.progress.col_metric}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -537,7 +547,7 @@ pub fn Progress() -> impl IntoView {
                                 .map(|(date, detail, metric)| {
                                     view! {
                                         <tr data-testid="record-row">
-                                            <td class="rec-date">{fmt_date(date)}</td>
+                                            <td class="rec-date">{fmt_date(date, cur_lang())}</td>
                                             <td class="rec-detail">{detail}</td>
                                             <td class="rec-metric">{metric}</td>
                                         </tr>
@@ -551,7 +561,7 @@ pub fn Progress() -> impl IntoView {
                                     <tfoot>
                                         <tr>
                                             <td colspan="3" class="muted">
-                                                {format!("他 {hidden} 件は表示していません")}
+                                                {cur_lang().n_more_hidden(hidden)}
                                             </td>
                                         </tr>
                                     </tfoot>

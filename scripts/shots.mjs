@@ -116,7 +116,13 @@ let browser;
 try {
   await waitForServer(BASE);
   browser = await chromium.launch();
-  const context = await browser.newContext({ ...devices['iPhone 15 Pro'] });
+  // ★ locale を固定する。既定の en-US だとアプリが英語 UI + 英語プリセットで起動し、
+  //   下の SEED が日本語の種目名で引いているので**撮影自体が落ちる**
+  //   （落ちなくても README のスクショが日本語版と食い違う）
+  const context = await browser.newContext({
+    ...devices['iPhone 15 Pro'],
+    locale: 'ja-JP',
+  });
 
   // ★ CDP の Emulation.setEmulatedMedia に display-mode を渡しても
   //   matchMedia('(display-mode: standalone)') は false のままだった。

@@ -33,7 +33,7 @@ use crate::model::Db;
 use crate::{storage, transfer};
 
 use super::icon::{self, icon};
-use super::{Sheet, use_db};
+use super::{Sheet, cur_lang, t, use_db};
 
 /// 確認待ちの取り込み。**マージ済みの結果**を持つ。
 #[derive(Clone)]
@@ -49,36 +49,35 @@ struct Pending {
 }
 
 fn summary_text(s: &DbSummary) -> String {
-    let range = match (s.first, s.last) {
-        (Some(a), Some(b)) if a == b => format!(" ・ {a}"),
-        (Some(a), Some(b)) => format!(" ・ {a} 〜 {b}"),
-        _ => String::new(),
-    };
-    format!(
-        "種目 {} ・ 記録 {} 日 ・ {} セット{range}",
-        s.exercises, s.days, s.sets
+    // ★ 中黒と助詞で繋いでいた組み立ては `Lang::db_summary` に畳んである
+    //   （語順も区切りも言語で変わるので、部品を渡して向こうで組む）
+    // ★ 日付は ISO のまま（`NaiveDate` の Display）。ここは控えの範囲を示す数値で、
+    //   読み上げる文ではないので `fmt_date` のロケール整形には通さない
+    let range = s
+        .first
+        .zip(s.last)
+        .map(|(a, b)| (a.to_string(), b.to_string()));
+    cur_lang().db_summary(
+        s.exercises,
+        s.days,
+        s.sets,
+        range.as_ref().map(|(a, b)| (a.as_str(), b.as_str())),
     )
 }
 
 fn conflict_text(c: &Conflict) -> String {
     match c {
-        Conflict::Renamed { kept, incoming } => {
-            format!("「{incoming}」は「{kept}」として扱いました")
-        }
-        Conflict::NameMatched { name } => format!("「{name}」は同じ種目とみなしました"),
-        Conflict::SetsDiverged { date, name } => {
-            format!("{date} の「{name}」は取り込んだ側のセットを採りました")
-        }
-        Conflict::BodyWeight { date } => format!("{date} の体重は元の値を残しました"),
+        Conflict::Renamed { kept, incoming } => cur_lang().conflict_renamed(incoming, kept),
+        Conflict::NameMatched { name } => cur_lang().conflict_name_matched(name),
+        Conflict::SetsDiverged { date, name } => cur_lang().conflict_sets_diverged(date, name),
+        Conflict::BodyWeight { date } => cur_lang().conflict_body_weight(date),
         // ★ 無名のメニューは他の画面と同じ「（名前なし）」にする。生のまま入れると
         //   「メニュー「」は…」になり、何を指しているのか読めない文が出る。
         //   無名は UI からは作れないが、旧版や他端末のファイルには入りうる
         Conflict::RoutineDiverged { name } if name.trim().is_empty() => {
-            "無名のメニューは元の内容を残しました".to_string()
+            t().backup.unnamed_routine.to_string()
         }
-        Conflict::RoutineDiverged { name } => {
-            format!("メニュー「{name}」は元の内容を残しました")
-        }
+        Conflict::RoutineDiverged { name } => cur_lang().conflict_routine_diverged(name),
     }
 }
 
@@ -90,27 +89,27 @@ fn added_text(r: &MergeReport) -> Option<String> {
     }
     let mut parts = Vec::new();
     if r.sessions_added > 0 {
-        parts.push(format!("{} 日分", r.sessions_added));
+        parts.push(cur_lang().added_days(r.sessions_added));
     }
     if r.logs_added > 0 {
-        parts.push(format!("{} 件の記録", r.logs_added));
+        parts.push(cur_lang().added_logs(r.logs_added));
     }
     // ★ メモだけが増えることがある（セットが同じでメモだけ違う日）。ここを出さないと
     //   `is_noop` が偽なのに parts が空になり「 を追加します」だけが出る
     if r.notes_added > 0 {
-        parts.push(format!("{} 件のメモ", r.notes_added));
+        parts.push(cur_lang().added_notes(r.notes_added));
     }
     if r.exercises_added > 0 {
-        parts.push(format!("{} 種目", r.exercises_added));
+        parts.push(cur_lang().n_exercises(r.exercises_added));
     }
     if r.groups_added > 0 {
-        parts.push(format!("{} 部位", r.groups_added));
+        parts.push(cur_lang().added_groups(r.groups_added));
     }
     // ★ メニューだけが増えることもある（`is_noop` に数えたものは必ずここにも出す）
     if r.routines_added > 0 {
-        parts.push(format!("{} 件のメニュー", r.routines_added));
+        parts.push(cur_lang().added_routines(r.routines_added));
     }
-    Some(parts.join(" ・ "))
+    Some(parts.join(t().backup.join))
 }
 
 /// 確認画面の 1 行目。**「何も起きません」と言ってよい条件を 1 箇所に閉じる。**
@@ -122,9 +121,9 @@ fn added_text(r: &MergeReport) -> Option<String> {
 /// 「何も起きない」と言って実行させる**ことになる。確認画面が嘘をつくのが最悪。
 fn change_text(p: &Pending) -> String {
     match (&p.added, p.conflicts.is_empty()) {
-        (Some(added), _) => format!("{added} を追加します"),
-        (None, false) => "入れ替わる記録があります".to_string(),
-        (None, true) => "新しく取り込むものはありません".to_string(),
+        (Some(added), _) => cur_lang().will_add(added),
+        (None, false) => t().backup.replaces_records.to_string(),
+        (None, true) => t().backup.nothing_new.to_string(),
     }
 }
 
@@ -139,7 +138,7 @@ fn snapshot_time(key: &str) -> String {
                 .format("%Y-%m-%d %H:%M")
                 .to_string()
         })
-        .unwrap_or_else(|| "日時不明".to_string())
+        .unwrap_or_else(|| t().backup.unknown_time.to_string())
 }
 
 #[component]
@@ -175,7 +174,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         //   `chrono::Local` を触るのはこの層の仕事で、`core::export_tsv` は
         //   オフセットを引数で受けて実行環境非依存を保っている
         let now = chrono::Local::now();
-        let tsv = db.with_untracked(|d| core::export_tsv(d, *now.offset()));
+        let tsv = db.with_untracked(|d| core::export_tsv(d, *now.offset(), cur_lang()));
         let name = core::export_filename(now.naive_local());
         copy_rescue.set(false);
         // ★ 「もう一度押すと実行します」の警告文をこの後 note が上書きするので、
@@ -185,37 +184,33 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
             transfer::Route::Share => {
                 transfer::share_file(&name, &tsv, core::TSV_MIME, move |outcome| {
                     match outcome {
-                        transfer::ShareOutcome::Shared => note.set(Some(
-                            "エクスポートしました。「ファイルに保存」を選ぶと、機種を替えても残ります"
-                                .into(),
-                        )),
+                        transfer::ShareOutcome::Shared => {
+                            note.set(Some({ t().backup.exported_share }.into()))
+                        }
                         // ★ キャンセルを成功にしない。「保存した」と思わせるのが一番危ない
-                        transfer::ShareOutcome::Cancelled => note.set(Some(
-                            "保存を中止しました（データは変わっていません）".into(),
-                        )),
+                        transfer::ShareOutcome::Cancelled => {
+                            note.set(Some(t().backup.export_cancelled.into()))
+                        }
                         transfer::ShareOutcome::Failed => {
                             // 失敗した人にだけ最後の逃げ道を出す
                             copy_rescue.set(true);
-                            note.set(Some(
-                            "共有できませんでした。「文字でコピー」でメモや自分宛メールに貼り付けてください".into(),
-                        ));
+                            note.set(Some(t().backup.share_failed.into()));
                         }
                     }
                 });
             }
             transfer::Route::Download => {
                 transfer::download_file(&name, &tsv, core::TSV_MIME);
-                note.set(Some(format!("{name} にエクスポートしました")));
+                note.set(Some(cur_lang().exported_to(&name)));
             }
             transfer::Route::Clipboard => {
                 // ★ 成否を待ってから文言を決める。失敗を「コピーしました」と出すと、
                 //   書けたつもりで端末を初期化されかねない
                 transfer::copy_text(&tsv, move |ok| {
                     note.set(Some(if ok {
-                        "コピーしました。メモや自分宛メールに貼り付けて保存してください".into()
+                        t().backup.copied.into()
                     } else {
-                        "コピーできませんでした（この端末ではエクスポートする手段がありません）"
-                            .to_string()
+                        t().backup.copy_failed.to_string()
                     }));
                 });
             }
@@ -225,12 +220,12 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
     let do_copy = move |_| {
         confirm_undo.set(false);
         let now = chrono::Local::now();
-        let tsv = db.with_untracked(|d| core::export_tsv(d, *now.offset()));
+        let tsv = db.with_untracked(|d| core::export_tsv(d, *now.offset(), cur_lang()));
         transfer::copy_text(&tsv, move |ok| {
             note.set(Some(if ok {
-                "コピーしました。メモや自分宛メールに貼り付けて保存してください".into()
+                t().backup.copied.into()
             } else {
-                "コピーできませんでした（この端末ではエクスポートする手段がありません）".to_string()
+                t().backup.copy_failed.to_string()
             }));
         });
     };
@@ -266,7 +261,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
             }
             Err(e) => {
                 pending.set(None);
-                note.set(Some(e.message()));
+                note.set(Some(e.message(cur_lang())));
                 confirm_undo.set(false);
             }
         }
@@ -282,7 +277,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         };
         transfer::read_file_text(&input, move |text| match text {
             Some(raw) => stage(raw),
-            None => note.set(Some("ファイルを読めませんでした".into())),
+            None => note.set(Some(t().backup.file_unreadable.into())),
         });
     };
 
@@ -302,16 +297,16 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         //   「入れ替わる記録があります」と言ったのに結果は「増えたものはありません」
         //   になって、どちらが本当か分からなくなる
         let mut message = match (&p.added, p.conflicts.is_empty()) {
-            (Some(added), _) => format!("取り込みました（{added} を追加）"),
-            (None, false) => "取り込みました".to_string(),
-            (None, true) => "取り込みましたが、新しく増えたものはありませんでした".to_string(),
+            (Some(added), _) => cur_lang().imported_with(added),
+            (None, false) => t().backup.imported.to_string(),
+            (None, true) => t().backup.imported_nothing_new.to_string(),
         };
         if !p.conflicts.is_empty() {
             message.push('\n');
             message.push_str(&p.conflicts.join("\n"));
         }
         if snapshot.is_none() {
-            message.push_str("\n（控えを保存できなかったので、元に戻せません）");
+            message.push_str(t().backup.no_undo_available);
         }
 
         undo.set(snapshot);
@@ -328,14 +323,11 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         //   一度確認を挟む
         if !confirm_undo.get_untracked() {
             confirm_undo.set(true);
-            note.set(Some(format!(
-                "{} の状態に戻します。それ以降に付けた記録は消えます。もう一度押すと実行します",
-                snapshot_time(&key)
-            )));
+            note.set(Some(cur_lang().undo_arm(&snapshot_time(&key))));
             return;
         }
         let Some(raw) = storage::read_backup(&key) else {
-            note.set(Some("控えを読み出せませんでした".into()));
+            note.set(Some(t().backup.undo_unreadable.into()));
             return;
         };
         // ★ 控えは**保存形式**（JSON）なので `migrate` で読む。`parse_import` は
@@ -356,12 +348,12 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                 note.set(Some(if saved {
                     // 退避の一覧 UI は無いので「保管しています」とだけ言い、
                     // 取り出せるかのように書かない（adr/ux/one-screen-export-import.md）
-                    "元に戻しました".to_string()
+                    t().backup.undone.to_string()
                 } else {
-                    "元に戻しました（戻す前の状態は保管できませんでした）".to_string()
+                    t().backup.undone_no_redo.to_string()
                 }));
             }
-            Err(_) => note.set(Some("控えを読み出せませんでした".into())),
+            Err(_) => note.set(Some(t().backup.undo_unreadable.into())),
         }
     };
 
@@ -369,7 +361,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         <Sheet
             open=open
             on_close=Callback::new(move |_| close())
-            title="エクスポート / インポート".to_string()
+            title=t().backup.sheet_title.to_string()
             testid="backup-sheet"
             close_testid="backup-sheet-close"
         >
@@ -386,7 +378,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
             <Show when=move || undo.get().is_some() && pending.with(Option::is_none)>
                 <div class="sheet-actions">
                     <button class="link-btn" data-testid="backup-undo" on:click=do_undo>
-                        "元に戻す"
+                        {t().backup.undo}
                     </button>
                 </div>
             </Show>
@@ -401,14 +393,14 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                             //   名前はボタンの文字が持つので、読み上げは「エクスポート」だけになる
                             <button class="primary wide" data-testid="backup-export" on:click=do_export>
                                 {icon(icon::UPLOAD)}
-                                "エクスポート"
+                                {t().backup.export}
                             </button>
                         </div>
                         // ★ 共有に失敗した人にだけ出す。静止時は 1 要素も増やさない
                         <Show when=move || copy_rescue.get()>
                             <div class="sheet-actions">
                                 <button class="secondary" data-testid="backup-copy" on:click=do_copy>
-                                    "文字でコピー"
+                                    {t().backup.copy_text}
                                 </button>
                             </div>
                         </Show>
@@ -425,7 +417,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                                     on:click=open_picker
                                 >
                                     {icon(icon::DOWNLOAD)}
-                                    "インポート"
+                                    {t().backup.import}
                                 </button>
                             </div>
                         </div>
@@ -437,12 +429,12 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                 //   `merged: Db` が再描画のたびに丸ごと複製される）
                 <div class="warn-box" data-testid="backup-confirm">
                     <p>
-                        <strong>"現在"</strong>
+                        <strong>{t().backup.before}</strong>
                         " "
                         {move || summary_text(&current.get())}
                     </p>
                     <p>
-                        <strong>"取り込み後"</strong>
+                        <strong>{t().backup.after}</strong>
                         " "
                         {move || {
                             pending.with(|p| p.as_ref().map(|p| summary_text(&p.after)))
@@ -468,10 +460,10 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                         </p>
                     </Show>
                 </div>
-                <p class="muted">"今ある記録は消えません。無い日と無い種目だけを足します"</p>
+                <p class="muted">{t().backup.merge_only}</p>
                 <div class="sheet-actions">
                     <button class="primary wide" data-testid="backup-apply" on:click=apply>
-                        "取り込む"
+                        {t().backup.apply}
                     </button>
                 </div>
                 <div class="sheet-actions">
@@ -480,7 +472,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                         data-testid="backup-cancel"
                         on:click=move |_| pending.set(None)
                     >
-                        "やめる"
+                        {t().backup.cancel}
                     </button>
                 </div>
             </Show>

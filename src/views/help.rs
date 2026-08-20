@@ -31,7 +31,7 @@ use leptos::prelude::*;
 use crate::storage;
 
 use super::icon::{self, icon};
-use super::{Sheet, is_standalone, storage_may_split};
+use super::{Sheet, is_standalone, storage_may_split, t};
 
 const STEP1_SVG: &str = include_str!("../../assets/help/step1-share.svg");
 const STEP2_SVG: &str = include_str!("../../assets/help/step2-add.svg");
@@ -71,19 +71,19 @@ pub fn InstallBanner() -> impl IntoView {
                                 on:click=move |_| open.set(true)
                             >
                                 <span class="install-hint-text">
-                                    <strong>"記録を付ける前にホーム画面に追加してください"</strong>
-                                    "Safari のタブで付けた記録は引き継がれません"
+                                    <strong>{t().help.banner_title}</strong>
+                                    {t().help.banner_body}
                                 </span>
                                 // ★ aria-hidden を付けないこと。付けるとアクセシブル名から
                                 //   落ち、支援技術には「押すと何が起きるか」を示す唯一の
                                 //   語が届かなくなる（残るのは警告文だけになる）
-                                <span class="install-hint-cta">"追加のしかた ›"</span>
+                                <span class="install-hint-cta">{t().help.banner_cta}</span>
                             </button>
                             // aria-label は残す。見た目は ✕ でも支援技術と E2E の
                             // role+name には言葉で届く必要がある
                             <button
                                 class="icon-btn"
-                                aria-label="この案内を今後表示しない"
+                                aria-label=t().help.banner_dismiss
                                 data-testid="install-hint-dismiss"
                                 on:click=move |_| {
                                     storage::dismiss_install_hint();
@@ -118,7 +118,7 @@ pub fn InstallHelpLink() -> impl IntoView {
     view! {
         // 見た目は他の節と同じ `.row`。中身が節ではなくシートというだけ
         <button class="row" data-testid="install-help-link" on:click=move |_| open.set(true)>
-            <span class="row-label">"ホーム画面への追加のしかた"</span>
+            <span class="row-label">{t().help.row_label}</span>
             {icon(icon::CHEVRON_RIGHT)}
         </button>
         <InstallHelpSheet open=open />
@@ -132,65 +132,65 @@ fn InstallHelpSheet(open: RwSignal<bool>) -> impl IntoView {
         <Sheet
             open=open
             on_close=Callback::new(move |_| open.set(false))
-            title="ホーム画面に追加".to_string()
+            title=t().help.sheet_title.to_string()
             testid="install-sheet"
             close_testid="install-sheet-close"
         >
             <div class="warn-box">
                                     <p>
-                                        "iPhone では、Safari のタブとホーム画面のアプリで記録の保存場所が分かれています。"
+                                        {t().help.why_split}
                                     </p>
                                     <p>
-                                        "Safari のタブで付けた記録は、ホーム画面に追加したあとでは見えません。まだ記録していないなら、先に追加してください。"
+                                        {t().help.why_invisible}
                                     </p>
                                 </div>
 
                                 <p class="hlp-why muted">
-                                    "追加すると、電波の届かないジムでも開けて、ホーム画面のアイコンから 1 タップで起動します。"
+                                    {t().help.why_offline}
                                 </p>
 
                                 <section class="hlp-step">
-                                    <h3>"1. 画面の下のまん中にある共有ボタンを押す"</h3>
+                                    <h3>{t().help.step1}</h3>
                                     <div class="hlp-fig" inner_html=STEP1_SVG />
                                     <p class="hlp-note">
-                                        <strong>"Safari で開いてください。"</strong>
-                                        "他のブラウザだとこの手順は使えません。"
+                                        <strong>{t().help.step1_safari}</strong>
+                                        {t().help.step1_other}
                                     </p>
                                 </section>
 
                                 <section class="hlp-step">
-                                    <h3>"2. 「ホーム画面に追加」を選ぶ"</h3>
+                                    <h3>{t().help.step2}</h3>
                                     <div class="hlp-fig" inner_html=STEP2_SVG />
-                                    <p class="hlp-note">"リストを下にスクロールすると出てきます。"</p>
+                                    <p class="hlp-note">{t().help.step2_note}</p>
                                 </section>
 
                                 <section class="hlp-step">
-                                    <h3>"3. 右上の「追加」を押す"</h3>
+                                    <h3>{t().help.step3}</h3>
                                     <div class="hlp-fig" inner_html=STEP3_SVG />
                                 </section>
 
                                 <p class="hlp-cap muted">
-                                    "図は iPhone を縦向きで使っているときの画面です。iPad では共有ボタンは画面の上のほうにあります。"
+                                    {t().help.ipad_note}
                                 </p>
 
                                 <section class="hlp-step">
-                                    <h3>"追加できたかの確かめ方"</h3>
+                                    <h3>{t().help.verify_title}</h3>
                                     <p class="hlp-note">
-                                        "ホーム画面のアイコンから開くと、この注意書きが出なくなります。まだ出ているならブラウザのタブのままです。"
+                                        {t().help.verify_body}
                                     </p>
                                 </section>
 
                                 // ★ 文言は設定タブの「エクスポート / インポート」に合わせる。
                                 //   ここだけ別の呼び方をすると、探す場所が分からなくなる
                                 <section class="hlp-step">
-                                    <h3>"すでに Safari で記録してしまった場合"</h3>
+                                    <h3>{t().help.already_title}</h3>
                                     <p class="hlp-note">
-                                        "移せます。"
-                                        <strong>"Safari のタブのまま"</strong>
-                                        "設定タブを開いて「エクスポート」でファイルに保存し、ホーム画面のアプリ側の「インポート」で取り込んでください。"
+                                        {t().help.already_lead}
+                                        <strong>{t().help.already_where}</strong>
+                                        {t().help.already_body}
                                     </p>
                                     <p class="hlp-note">
-                                        "ホーム画面に追加してから書き出そうとしても、そちらは空なので意味がありません。順番に注意してください。"
+                                        {t().help.already_order}
                                     </p>
                                 </section>
         </Sheet>

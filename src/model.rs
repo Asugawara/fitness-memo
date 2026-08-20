@@ -237,7 +237,37 @@ pub struct Exercise {
     pub order: u32,
     #[serde(default)]
     pub archived: bool,
+    /// マシンのピン位置。シート高・バー位置・背もたれ角度など、次に同じマシンへ
+    /// 座るときに再現したい番号を、**上から触る順**に並べる。
+    ///
+    /// ★ 日ごとのメモ（[`SetEntry::note`] / [`ExerciseLog::note`]）とはスコープが
+    /// 違う。あちらは「その日に起きたこと」で、これは「そのマシンの設定」。
+    /// 種目に貼り付いて日をまたぐ。adr/ux/machine-pins-on-the-exercise.md
+    ///
+    /// ★ `Vec<u32>` にしない。`7.5` 刻みのマシンがあり、穴に `A` や `赤` と
+    /// 刻んであるものも実在する。入力欄は数字キーパッドに倒すが、取り込んだ値を
+    /// 型の都合で落とさない。
+    ///
+    /// ★ 1 要素は空白を含まない（[`crate::core::normalize`] が分割する）。TSV の
+    /// `ピン` 列がセル内を空白で区切るので、ここが崩れると往復が一致しなくなる。
+    ///
+    /// ★ `skip_serializing_if` は [`SetEntry::note`] と同じ理由。ピンを使わない
+    /// 利用者の JSON は**今までとバイト単位で同一**のままになる。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pins: Vec<String>,
 }
+
+/// 1 種目が持てるピンの本数。
+///
+/// 393px 幅のカードで内側 369px、チップ 1 個が約 84px なので 4 個 × 2 行が現実的な
+/// 上限。UI からはここまでしか入らないが、**取り込んだ JSON には何個でも入りうる**
+/// ので [`crate::core::normalize`] が門番になる（`drop_unrepresentable_weights` と
+/// 同じ立場）。
+pub const MAX_PINS: usize = 8;
+
+/// ピン 1 つの長さ。**バイトではなく char で数える**（バイトで切ると UTF-8 の
+/// 途中で割れて panic する）。
+pub const MAX_PIN_LEN: usize = 6;
 
 /// 名前付きの種目リスト。**UI では「トレーニングメニュー」**。
 ///
@@ -600,6 +630,47 @@ mod tests {
         for blank in [" ", "\n", "\t", "　", "  \n "] {
             assert!(log_of(Vec::new(), blank).is_empty(), "{blank:?}");
         }
+    }
+
+    // ── マシンのピン（adr/ux/machine-pins-on-the-exercise.md）──────────────────
+
+    fn ex_of(pins: Vec<String>) -> Exercise {
+        Exercise {
+            id: E::from_bits(1),
+            name: "ベンチプレス".into(),
+            group_id: G::from_bits(2),
+            order: 0,
+            archived: false,
+            pins,
+        }
+    }
+
+    #[test]
+    fn exercise_omits_empty_pins_from_its_json() {
+        // ★ バイト一致で見る。ここが崩れるとピンを使っていない利用者の保存データが
+        //   変わり、`e2e/pwa.spec.mjs` が組み立てている生 JSON と食い違う
+        assert_eq!(
+            serde_json::to_string(&ex_of(Vec::new())).expect("直列化できる"),
+            r#"{"id":"000000000001","name":"ベンチプレス","group_id":"000000000002","order":0,"archived":false}"#
+        );
+    }
+
+    #[test]
+    fn exercise_writes_pins_when_there_are_any() {
+        let json =
+            serde_json::to_string(&ex_of(vec!["3".into(), "5".into()])).expect("直列化できる");
+        assert!(json.ends_with(r#","pins":["3","5"]}"#), "{json}");
+    }
+
+    #[test]
+    fn exercise_reads_json_written_before_pins_existed() {
+        // ★ schema を上げずにフィールドを足せる根拠（SCHEMA の doc）。旧版が書いた
+        //   JSON がそのまま読めるので、`migrate` は Err を返さず退避パスにも落ちない
+        let ex: Exercise = serde_json::from_str(
+            r#"{"id":"000000000001","name":"ベンチプレス","group_id":"000000000002","order":0,"archived":false}"#,
+        )
+        .expect("ピン以前の形も読める");
+        assert!(ex.pins.is_empty());
     }
 
     // ── トレーニングメニュー（adr/data-model/routines-as-named-exercise-lists.md）──

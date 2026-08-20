@@ -109,7 +109,7 @@ test('書き出しは共有シートに files だけを .tsv で渡す', async (
   expect(shared.type).toBe(TSV_MIME);
   // 見出しは外部仕様（cargo test がバイト一致で固定しているのと同じ並び）
   expect(shared.text.split('\n')[0]).toBe(
-    '日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー',
+    '日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン',
   );
   // 保存形式は JSON のまま（書き出し形式とは別。adr/storage/tsv-export-for-spreadsheets.md）
   const stored = await page.evaluate((k) => localStorage.getItem(k), KEY);
@@ -151,6 +151,41 @@ test('書き出した TSV はそのまま読み戻せる', async ({ page }) => {
   expect(Object.keys(saved.sessions)).toEqual(
     expect.arrayContaining(['2026-08-01', '2026-09-01']),
   );
+});
+
+// ★ マシンのピン（adr/ux/machine-pins-on-the-exercise.md）が TSV を往復すること。
+//   書かないと機種変更でピンだけ消える（メニュー列を足したときと同じ理由）。
+//   ついでに **「ピン列より前しか無い TSV も読める」** ＝ 形式の進化規則 3 も見ている
+//   （ここで渡すファイルは 7 列しか無く、体重も時刻もメニューも欠けている）。
+test('ピンは TSV に載り、読み戻すと復活する', async ({ page }) => {
+  await stubShare(page);
+  await openSheet(page);
+
+  await importFile(
+    page,
+    '日付\t部位\t種目\tセット\t重量kg\t回数\tピン\n' +
+      '2026-08-01\t胸\tベンチプレス\t1\t60\t10\t3 5 2\n',
+  );
+  await page.getByTestId('backup-apply').click();
+  await expect(page.getByTestId('backup-note')).toContainText('取り込みました');
+
+  const saved = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
+  // ★ セル内は空白区切り。1 要素が空白を含まないことは core::normalize が保証する
+  expect(saved.exercises.find((e) => e.name === 'ベンチプレス').pins).toEqual(['3', '5', '2']);
+
+  await page.getByTestId('backup-export').click();
+  await page.waitForFunction(() => !!window.__shared);
+  const tsv = await page.evaluate(() => window.__shared.text);
+
+  const [header, ...rows] = tsv.split('\n');
+  const col = header.split('\t').indexOf('ピン');
+  expect(col, '見出しにピン列が無い').toBeGreaterThan(-1);
+  // その種目が最初に現れた行にだけ書く（毎行書くとシートで縦に伸びる）
+  const cells = rows
+    .filter((r) => r.split('\t')[2] === 'ベンチプレス')
+    .map((r) => r.split('\t')[col]);
+  expect(cells[0]).toBe('3 5 2');
+  expect(cells.slice(1).every((c) => c === '')).toBe(true);
 });
 
 // ── 取り込み ────────────────────────────────────────────────────────────────

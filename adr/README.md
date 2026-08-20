@@ -25,9 +25,10 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [ヘルプの図を `assets/` の SVG に置き `include_str!` + `inner_html` で挿す](architecture/help-figures-as-included-svg.md) | 採用 |
 | [グラフの座標計算を `chart_layout` に切り出してテスト可能にする](architecture/chart-layout-as-a-testable-module.md) | 採用 |
 | [ブラウザサポートは Safari を基準にし、polyfill を入れない](architecture/browser-support-policy.md) | 採用 |
-| [読み込みと操作は実測して、何も入れないと決めた](architecture/measure-before-optimizing-and-do-nothing.md) | 採用 |
+| [読み込みと操作は実測して、何も入れないと決めた](architecture/measure-before-optimizing-and-do-nothing.md) | 採用（LCP が wasm の到着に縛られている構造は [許諾文をコメントの外へ出して trunk の minify を解禁する](architecture/minify-with-licenses-outside-comments.md) で追記） |
 | [アイコンに lucide を採り、`assets/icons/*.svg` を `include_str!` で埋め込む](architecture/lucide-icons-as-included-svg.md) | 採用 |
 | [i18n crate を入れず、`src/i18n.rs` の struct + `const` 2 枚で文言を持つ](architecture/i18n-hand-rolled-string-table.md) | 採用 |
+| [許諾文をコメントの外へ出して trunk の minify を解禁する](architecture/minify-with-licenses-outside-comments.md) | 採用 |
 
 ### data-model — データ構造と不変条件
 

@@ -25,8 +25,8 @@ use super::drag::{
 };
 use super::icon::{self, icon};
 use super::{
-    Sheet, fmt_date, fmt_metric, fmt_set, fmt_weight, kb_blur, kb_focus, now_ms, parse_reps,
-    parse_weight, scroll_to_id, use_dates, use_db, use_kb,
+    Sheet, cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, fmt_weight, grp_name, kb_blur,
+    kb_focus, now_ms, parse_reps, parse_weight, scroll_to_id, t, use_dates, use_db, use_kb,
 };
 
 /// 選択日に並べているカード 1 枚。
@@ -140,13 +140,13 @@ impl MenuRow {
         for id in exercises {
             // core 側で存在を確認済みだが、ここでも落とさず素通しできるようにしておく
             let Some(e) = db.exercise(*id) else { continue };
-            names.push(e.name.clone());
+            names.push(ex_name(e).to_string());
             if seen.contains(&e.group_id) {
                 continue;
             }
             seen.push(e.group_id);
             if let Some(g) = db.group(e.group_id) {
-                ordered.push((g.order, g.name.clone()));
+                ordered.push((g.order, grp_name(g).to_string()));
             }
         }
         // 部位は Group::order 順に直す。種目の入力順で並べると、同じ部位構成の日でも
@@ -158,14 +158,14 @@ impl MenuRow {
             ordered.len(),
             MENU_GROUP_CAP,
             "・",
-            |_| " 他".to_string(),
+            |_| cur_lang().and_more(),
         );
         let names = join_capped(
             names.iter().map(String::as_str),
             names.len(),
             MENU_NAME_CAP,
             ", ",
-            |rest| format!(" 他{rest}種目"),
+            |rest| cur_lang().and_n_more_exercises(rest),
         );
         Self {
             title,
@@ -353,7 +353,7 @@ pub fn DayEditor() -> impl IntoView {
                 .into_iter()
                 .map(|g| {
                     let e = by_group.get(&g.id).copied();
-                    (g.name, e) as Chip
+                    (grp_name(&g).to_string(), e) as Chip
                 })
                 .collect::<Vec<_>>()
         })
@@ -394,7 +394,7 @@ pub fn DayEditor() -> impl IntoView {
                 .into_iter()
                 .map(|c| {
                     let title = if c.name.trim().is_empty() {
-                        "（名前なし）".to_string()
+                        t().day.unnamed.to_string()
                     } else {
                         c.name
                     };
@@ -403,7 +403,12 @@ pub fn DayEditor() -> impl IntoView {
                 .collect(),
             days: core::recent_menus(d, before, MENU_CANDIDATES)
                 .into_iter()
-                .map(|c| (c.date, MenuRow::build(d, fmt_date(c.date), &c.exercises)))
+                .map(|c| {
+                    (
+                        c.date,
+                        MenuRow::build(d, fmt_date(c.date, cur_lang()), &c.exercises),
+                    )
+                })
                 .collect(),
         })
     });
@@ -459,10 +464,10 @@ pub fn DayEditor() -> impl IntoView {
                 <div class="hero" data-testid="hero">
                     // ラベルと値を分けて持つ（値だけを読めるようにしておく）
                     <span class="hero-elapsed">
-                        "最後から "
+                        {t().day.since_last}
                         <b data-testid="elapsed">
                             {move || {
-                                elapsed.get().map_or_else(|| "—".to_string(), core::humanize)
+                                elapsed.get().map_or_else(|| "—".to_string(), |e| core::humanize(e, cur_lang()))
                             }}
                         </b>
                     </span>
@@ -473,7 +478,7 @@ pub fn DayEditor() -> impl IntoView {
                                 .into_iter()
                                 .map(|(name, e)| {
                                     let label = e
-                                        .map_or_else(|| "—".to_string(), core::short_elapsed);
+                                        .map_or_else(|| "—".to_string(), |e| core::short_elapsed(e, cur_lang()));
                                     view! {
                                         <span
                                             class="chip"
@@ -494,7 +499,7 @@ pub fn DayEditor() -> impl IntoView {
     // ★ h1 ではなく h2。記録タブは 1 画面にカレンダーと選択日の入力欄が縦に並ぶので
     // （adr/ux/record-tab-calendar-with-day-editor.md）、h1 は上のカレンダーの月見出しが持つ。両方を h1 にすると
     // 見出しの階層が 1 画面に 2 本立ち、支援技術のアウトラインで前後関係が読めなくなる
-    <h2 data-testid="today-date">{move || fmt_date(dates.selected.get())}</h2>
+    <h2 data-testid="today-date">{move || fmt_date(dates.selected.get(), cur_lang())}</h2>
                     {move || {
                         if dates.is_past_edit() {
                             view! {
@@ -503,12 +508,12 @@ pub fn DayEditor() -> impl IntoView {
                                     data-testid="back-to-today"
                                     on:click=move |_| dates.back_to_today()
                                 >
-                                    "今日へ戻る"
+                                    {t().day.back_to_today}
                                 </button>
                             }
                                 .into_any()
                         } else {
-                            view! { <span class="badge">"今日"</span> }.into_any()
+                            view! { <span class="badge">{t().day.today_badge}</span> }.into_any()
                         }
                     }}
                 </header>
@@ -519,7 +524,7 @@ pub fn DayEditor() -> impl IntoView {
                         .then(|| {
                             view! {
                                 <p class="past-banner" data-testid="past-banner">
-                                    {move || format!("{} を編集中", fmt_date(dates.selected.get()))}
+                                    {move || cur_lang().editing_day(&fmt_date(dates.selected.get(), cur_lang()))}
                                 </p>
                             }
                         })
@@ -563,7 +568,7 @@ pub fn DayEditor() -> impl IntoView {
                                 {split
                                     .then(|| {
                                         view! {
-                                            <h3 class="menu-copy-label">"トレーニングメニュー"</h3>
+                                            <h3 class="menu-copy-label">{t().day.menu_heading}</h3>
                                         }
                                     })}
                                 {c
@@ -589,7 +594,7 @@ pub fn DayEditor() -> impl IntoView {
                                     .then(|| {
                                         view! {
                                             <h3 class="menu-copy-label">
-                                                {if split { "最近の記録から" } else { "前回のメニューから始める" }}
+                                                {if split { t().day.from_recent } else { t().day.from_last_menu }}
                                             </h3>
                                         }
                                     })}
@@ -623,14 +628,14 @@ pub fn DayEditor() -> impl IntoView {
                         data-testid="add-exercise"
                         on:click=move |_| sheet.set(true)
                     >
-                        "種目を追加"
+                        {t().day.add_exercise}
                     </button>
                 </div>
 
                 <Sheet
                     open=sheet
                     on_close=Callback::new(move |_| sheet.set(false))
-                    title="種目を追加".to_string()
+                    title=t().day.add_exercise.to_string()
                     testid="add-sheet"
                     close_testid="add-sheet-close"
                 >
@@ -650,7 +655,7 @@ pub fn DayEditor() -> impl IntoView {
                                     exercises.sort_by_key(|e| e.order);
                                     view! {
                                         <section class="sheet-group">
-                                            <h3 style=format!("--dot:{}", g.color)>{g.name}</h3>
+                                            <h3 style=format!("--dot:{}", g.color)>{grp_name(&g).to_string()}</h3>
                                             <div class="pick-list">
                                                 {exercises
                                                     .into_iter()
@@ -668,7 +673,7 @@ pub fn DayEditor() -> impl IntoView {
                                                                 data-testid="pick-exercise"
                                                                 on:click=move |_| pick(id)
                                                             >
-                                                                {e.name}
+                                                                {ex_name(&e).to_string()}
                                                             </button>
                                                         }
                                                     })
@@ -740,7 +745,7 @@ fn ConditionRow() -> impl IntoView {
                 data-testid="condition-toggle"
                 on:click=move |_| open.update(|o| *o = !*o)
             >
-                {move || if open.get() { "－ コンディション" } else { "＋ コンディション" }}
+                {move || if open.get() { t().day.condition_close } else { t().day.condition_open }}
             </button>
             {move || {
                 open
@@ -749,7 +754,7 @@ fn ConditionRow() -> impl IntoView {
                         view! {
                             <div class="cond-fields">
                                 <label>
-                                    "体重"
+                                    {t().day.body_weight}
                                     <input
                                         type="text"
                                         inputmode="decimal"
@@ -766,7 +771,7 @@ fn ConditionRow() -> impl IntoView {
                                     <span class="unit">"kg"</span>
                                 </label>
                                 <label class="note">
-                                    "メモ"
+                                    {t().day.note}
                                     <input
                                         type="text"
                                         value=note0.clone()
@@ -800,14 +805,15 @@ fn ExerciseCard(
     // Memo にするのは「値が変わったときだけ」下流を再描画させるため。
     // 素の closure だと db が動くたびに構造ごと作り直され、入力中の文字列が消える
     let name = Memo::new(move |_| {
-        db.with(|d| d.exercise(ex).map(|e| e.name.clone()))
-            .unwrap_or_else(|| "(削除された種目)".to_string())
+        db.with(|d| d.exercise(ex).map(|e| ex_name(e).to_string()))
+            .unwrap_or_else(|| t().day.deleted_exercise.to_string())
     });
     let group_name = Memo::new(move |_| {
         db.with(|d| {
             d.exercise(ex)
                 .and_then(|e| d.group(e.group_id))
-                .map(|g| g.name.clone())
+                .map(grp_name)
+                .map(str::to_string)
         })
         .unwrap_or_default()
     });
@@ -1327,14 +1333,14 @@ fn ExerciseCard(
 
             <div class="last-row">
                 {move || match last.get() {
-                    None => view! { <span class="muted" data-testid="last-log">"前回 —"</span> }.into_any(),
+                    None => view! { <span class="muted" data-testid="last-log">{t().day.no_last_log}</span> }.into_any(),
                     Some((date, log)) => {
                         let days = (dates.selected.get() - date).num_days();
-                        let when = core::humanize_days(days);
+                        let when = core::humanize_days(days, cur_lang());
                         let sets = log.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  ");
                         let metric = fmt_metric(core::log_value(Metric::Volume, &log));
                         view! {
-                            <span class="when" data-testid="last-log">{format!("前回 {when}")}</span>
+                            <span class="when" data-testid="last-log">{cur_lang().last_log(&when)}</span>
                             <span class="sets">{sets}</span>
                             <span class="metric">{metric}</span>
                         }
@@ -1353,7 +1359,7 @@ fn ExerciseCard(
                                 data-testid="copy-last"
                                 on:click=copy_last
                             >
-                                "前回をコピー"
+                                {t().day.copy_last}
                             </button>
                         }
                     })
@@ -1540,7 +1546,7 @@ fn ExerciseCard(
                                     inputmode="decimal"
                                     pattern="[0-9]*([.,][0-9]*)?"
                                     value=row.weight.clone()
-                                    aria-label="重量"
+                                    aria-label=t().day.weight
                                     data-testid="set-weight"
                                     on:keydown=nudge_row
                                     on:focusin=move |_| kb_focus(kb)
@@ -1562,7 +1568,7 @@ fn ExerciseCard(
                                     type="text"
                                     inputmode="numeric"
                                     value=row.reps.clone()
-                                    aria-label="回数"
+                                    aria-label=t().day.reps
                                     data-testid="set-reps"
                                     node_ref=reps_ref
                                     on:keydown=nudge_row
@@ -1587,7 +1593,7 @@ fn ExerciseCard(
                                 //   今より押しやすくなる）
                                 <button
                                     class="icon-btn"
-                                    aria-label="このセットを削除"
+                                    aria-label=t().day.delete_set
                                     data-testid="remove-set"
                                     on:click=move |_| remove_row(key)
                                 >
@@ -1598,7 +1604,7 @@ fn ExerciseCard(
                                         .then(|| {
                                             view! {
                                                 <span class="warn" data-testid="weight-missing">
-                                                    "重量未入力"
+                                                    {t().day.weight_missing}
                                                 </span>
                                             }
                                         })
@@ -1611,7 +1617,7 @@ fn ExerciseCard(
                                         .then(|| {
                                             view! {
                                                 <span class="warn" data-testid="note-orphan">
-                                                    "回数を入れると保存されます"
+                                                    {t().day.reps_missing}
                                                 </span>
                                             }
                                         })
@@ -1627,7 +1633,7 @@ fn ExerciseCard(
                                                 type="text"
                                                 value=note_of()
                                                 aria-label=move || {
-                                                    format!("{} セット目のメモ", index())
+                                                    cur_lang().set_note_label(index())
                                                 }
                                                 data-testid="set-note"
                                                 // ★ 行の入力欄には**全部**付ける。
@@ -1675,7 +1681,7 @@ fn ExerciseCard(
                 />
                 <div class="add-set-wrap">
                     <button class="secondary" data-testid="add-set" on:click=add_row>
-                        "+ セット"
+                        {t().day.add_set}
                     </button>
                 </div>
             </div>
@@ -1789,12 +1795,12 @@ fn ExerciseCard(
                 if note_open.get() {
                     view! {
                         <label class="ex-note">
-                            "メモ"
+                            {t().day.note}
                             <input
                                 type="text"
                                 value=ex_note.get_untracked()
                                 node_ref=ex_note_ref
-                                aria-label="この種目のメモ"
+                                aria-label=t().day.exercise_note
                                 data-testid="exercise-note"
                                 on:focusin=move |_| kb_focus(kb)
                                 on:focusout=move |_| kb_blur(kb)
@@ -1841,21 +1847,21 @@ fn ExerciseCard(
                     data-testid="close-card"
                     on:click=request_close
                 >
-                    "この日から外す"
+                    {t().day.remove_from_day}
                 </button>
                 <button
                     class="link-btn note-toggle"
-                    aria-label="メモ"
+                    aria-label=t().day.note
                     // ★ bool を渡さない。aria-expanded は列挙属性なので、真偽属性として
                     //   扱われると false のとき属性ごと消える（＝折りたためることが消える）
                     aria-expanded=move || if note_open.get() { "true" } else { "false" }
                     data-testid="note-toggle"
                     on:click=move |_| note_open.update(|o| *o = !*o)
                 >
-                    {move || if note_open.get() { "－ メモ" } else { "＋ メモ" }}
+                    {move || if note_open.get() { t().day.note_close } else { t().day.note_open }}
                 </button>
                 <span class="foot-total">
-                    <span>"今日"</span>
+                    <span>{t().day.today_badge}</span>
                     <strong data-testid="today-metric">{move || fmt_metric(today_metric())}</strong>
                 </span>
             </footer>
@@ -1867,7 +1873,7 @@ fn ExerciseCard(
                         view! {
                             <div class="warn-box" id=confirm_dom_id(ex)>
                                 <p data-testid="close-card-warning">
-                                    "この日の記録が消えます"
+                                    {t().day.remove_confirm}
                                 </p>
                                 <div class="sheet-actions">
                                     <button
@@ -1875,14 +1881,14 @@ fn ExerciseCard(
                                         data-testid="close-card-yes"
                                         on:click=move |_| close_card()
                                     >
-                                        "外す"
+                                        {t().day.remove_yes}
                                     </button>
                                     <button
                                         class="link-btn"
                                         data-testid="close-card-no"
                                         on:click=move |_| confirm_close.set(false)
                                     >
-                                        "やめる"
+                                        {t().day.remove_no}
                                     </button>
                                 </div>
                             </div>

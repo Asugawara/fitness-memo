@@ -26,7 +26,7 @@ use super::drag::{
     end_press, holds, measure_slots, release, start_edge_scroll,
 };
 use super::icon::{self, icon};
-use super::{Sheet, kb_blur, kb_focus, use_dates, use_db, use_kb};
+use super::{Sheet, cur_lang, kb_blur, kb_focus, t, use_dates, use_db, use_kb};
 
 // ── Db の更新（純粋な操作だけをここに集める） ───────────────────────────────
 
@@ -125,7 +125,7 @@ pub fn SaveDayAsRoutine() -> impl IntoView {
                                 data-testid="day-to-routine"
                                 on:click=move |_| open.set(Some(picked.clone()))
                             >
-                                "＋ この日をメニューにする"
+                                {t().routine.save_day_button}
                             </button>
                         </div>
                     }
@@ -135,7 +135,7 @@ pub fn SaveDayAsRoutine() -> impl IntoView {
         <Sheet
             open=Signal::derive(move || open.get().is_some())
             on_close=Callback::new(move |_| open.set(None))
-            title="この日をメニューにする".to_string()
+            title=t().routine.save_day_title.to_string()
             testid="day-routine-sheet"
             close_testid="day-routine-sheet-close"
         >
@@ -268,14 +268,14 @@ pub fn RoutineEditor(
         //   「行を見て選び分けられること」が種目名の 1 行だけに痩せる。
         //   種目・部位の追加も同じく名前を必須にしている
         if value.is_empty() {
-            invalid.set(Some("メニュー名を入れてください"));
+            invalid.set(Some(t().routine.need_name));
             return;
         }
         // ★ 種目が 0 個のメニューは保存させない。記録タブに出せないので、作れても
         //   「押せない行」が設定タブに残るだけになる（名前だけの状態を `normalize` が
         //   残すのは、既にあるデータを消さないためであって、新しく作るためではない）
         if list.is_empty() {
-            invalid.set(Some("種目を 1 つ以上選んでください"));
+            invalid.set(Some(t().routine.need_exercise));
             return;
         }
         match id {
@@ -293,7 +293,7 @@ pub fn RoutineEditor(
         //   押すまで分からない。この画面は種目ピッカーが縦を占めるので名前欄が埋もれる
         //   （他のエディタは入力欄 1 個なので気づける）
         <label class="field">
-            <span>"メニュー名（必須）"</span>
+            <span>{t().routine.name_label}</span>
             <input
                 class="text-input"
                 type="text"
@@ -335,7 +335,7 @@ pub fn RoutineEditor(
                                 children=move |ex| {
                                     let label = move || {
                                         db.with(|d| d.exercise(ex).map(|e| e.name.clone()))
-                                            .unwrap_or_else(|| "（削除された種目）".to_string())
+                                            .unwrap_or_else(|| t().routine.deleted_exercise.to_string())
                                     };
                                     // 模型上の位置。ドラッグ中も入れ替えないのでこれは動かない
                                     let slot = move || {
@@ -550,7 +550,7 @@ pub fn RoutineEditor(
                                             //   違いが消える）
                                             <button
                                                 class="icon-btn"
-                                                aria-label=move || format!("{} を外す", label())
+                                                aria-label=move || cur_lang().remove_from_routine(&label())
                                                 data-testid="routine-remove"
                                                 on:click=move |_| toggle(ex)
                                             >
@@ -631,7 +631,7 @@ pub fn RoutineEditor(
                                         {g.name}
                                     </span>
                                     <span class="grp-count muted">
-                                        {format!("{count} 種目")}
+                                        {cur_lang().n_exercises(count)}
                                     </span>
                                 </button>
                                 </h3>
@@ -686,7 +686,7 @@ pub fn RoutineEditor(
                             on:click=move |_| confirming.set(true)
                         >
                             {icon(icon::TRASH_2)}
-                            "このメニューを削除"
+                            {t().routine.delete}
                         </button>
                     </div>
                     // ★ 確認を挟む。組んだ種目の並びは元に戻せず、undo も無い
@@ -698,10 +698,10 @@ pub fn RoutineEditor(
                             .then(|| {
                                 view! {
                                     <div class="warn-box">
-                                        <p>"このメニューを削除します"</p>
+                                        <p>{t().routine.delete_confirm}</p>
                                         // 一番怖いのは「記録も消えるのでは」なので先に否定する
                                         <p class="muted">
-                                            "記録は 1 件も消えません（メニューは種目の組み合わせを覚えているだけです）"
+                                            {t().routine.delete_note}
                                         </p>
                                         <div class="sheet-actions">
                                             <button
@@ -712,13 +712,13 @@ pub fn RoutineEditor(
                                                     on_close.run(());
                                                 }
                                             >
-                                                "削除する"
+                                                {t().routine.delete_yes}
                                             </button>
                                             <button
                                                 class="link-btn"
                                                 on:click=move |_| confirming.set(false)
                                             >
-                                                "やめる"
+                                                {t().routine.delete_no}
                                             </button>
                                         </div>
                                     </div>
@@ -748,7 +748,7 @@ pub fn RoutineEditor(
                     })
             }}
             <button class="primary" data-testid="routine-save" on:click=save>
-                "保存"
+                {t().routine.save}
             </button>
         </div>
     }

@@ -22,6 +22,7 @@ use std::time::Duration;
 use chrono::Local;
 use leptos::prelude::*;
 
+use crate::i18n::{self, Lang};
 use crate::model::{Db, Id, IdGen};
 use crate::{core, presets};
 
@@ -101,14 +102,15 @@ fn store() -> Option<web_sys::Storage> {
 }
 
 /// 起動時の読み込み。戻り値の 2 番目は「一度だけ出す通知メッセージ」。
-pub fn load() -> (Db, Option<String>) {
+///
+/// ★ `lang` は**通知の言語**と**初回投入するプリセットの言語**の両方に効く。
+///   `App` が `LangCtx` を provide する前に決めた値をそのまま渡す
+///   （adr/storage/preset-names-are-user-data-seeded-once.md）。
+pub fn load(lang: Lang) -> (Db, Option<String>) {
     let Some(store) = store() else {
         return (
-            presets::seeded_db(),
-            Some(
-                "この端末では記録を保存できません（プライベートブラウズ中かもしれません）"
-                    .to_string(),
-            ),
+            presets::seeded_db(lang),
+            Some(lang.strings().boot.cannot_save.to_string()),
         );
     };
 
@@ -137,15 +139,12 @@ pub fn load() -> (Db, Option<String>) {
             Ok(db) => {
                 let note = if key == KEY {
                     // 採用したのは現行キー。旧世代のほうが新しければ知らせる（下記）
-                    newer_legacy_note(&store, &db)
+                    newer_legacy_note(&store, &db, lang)
                 } else if rescue_failed {
                     // ★ 退避できていない原本が現行キーに残っている。ここで `save` すると
                     //   それを上書きして永久に失う。**書かずに表示だけする。**
                     //   次回起動もこの世代から読み直せばよく、原本は残る
-                    Some(
-                        "空き容量が足りず、読めなかったデータを保管できませんでした。以前のバックアップの内容を表示しています（この画面での変更はまだ保存されません。空き容量を空けてください）"
-                            .to_string(),
-                    )
+                    Some(lang.strings().boot.rescue_failed.to_string())
                 } else {
                     // 旧世代から読んだので現行キーへ写す。App 側の Effect が 400ms 後に
                     // 保存するが、その前にプロセスを kill されると次回も旧キーから
@@ -153,13 +152,9 @@ pub fn load() -> (Db, Option<String>) {
                     save(&db);
                     match newer {
                         // 未来のデータを踏み越えて古い世代を採用した。保管先を伝える
-                        Some(v) => Some(format!(
-                            "新しい版（形式 {v}）で作られた記録は開けないので、そのまま保管しています。以前のバックアップから復元しました"
-                        )),
-                        None => quarantined.then(|| {
-                            "最新のデータを復元できなかったため、以前のバックアップから復元しました"
-                                .to_string()
-                        }),
+                        Some(v) => Some(lang.boot_restored_over_newer(v)),
+                        None => quarantined
+                            .then(|| lang.strings().boot.restored_from_backup.to_string()),
                     }
                 };
                 return (db, note);
@@ -186,23 +181,18 @@ pub fn load() -> (Db, Option<String>) {
     }
 
     if let Some(v) = newer {
-        return (
-            presets::seeded_db(),
-            Some(format!(
-                "新しい版（形式 {v}）で作られた記録が見つかりました。このままでは開けないので、そのまま保管しています（新しい版に戻すと読めます）"
-            )),
-        );
+        return (presets::seeded_db(lang), Some(lang.boot_found_newer(v)));
     }
     if quarantined {
         // どの世代も読めなかった。退避は済んでいる
         return (
-            presets::seeded_db(),
-            Some("以前のデータを復元できませんでした（退避済み）".to_string()),
+            presets::seeded_db(lang),
+            Some(lang.strings().boot.restore_failed.to_string()),
         );
     }
 
     // 初回起動。プリセットを投入する
-    (presets::seeded_db(), None)
+    (presets::seeded_db(lang), None)
 }
 
 /// 現行キーを採用したとき、旧世代のほうに**新しい記録**が残っていれば知らせる。
@@ -211,7 +201,7 @@ pub fn load() -> (Db, Option<String>) {
 /// 非空なのでそのまま採用され、ロールバック期間の記録が黙って画面から消える。
 /// 自動マージはしない（同じ日を両方で編集していると、どちらを正とするか決められない）。
 /// **消えていないことだけは伝える。**
-fn newer_legacy_note(store: &web_sys::Storage, current: &Db) -> Option<String> {
+fn newer_legacy_note(store: &web_sys::Storage, current: &Db, lang: Lang) -> Option<String> {
     // 日付キーはゼロ埋め ISO なので辞書順比較でよい
     let newest = |db: &Db| db.sessions.keys().next_back().cloned();
     let mine = newest(current);
@@ -231,9 +221,7 @@ fn newer_legacy_note(store: &web_sys::Storage, current: &Db) -> Option<String> {
         if let Some(theirs) = newest(&old)
             && mine.as_deref().is_none_or(|m| theirs.as_str() > m)
         {
-            return Some(format!(
-                "以前のバージョンで付けた記録が {theirs} まで残っています（今の表示には含まれていません）"
-            ));
+            return Some(lang.boot_newer_legacy(&theirs));
         }
     }
     None
@@ -387,6 +375,16 @@ const UI_KEY: &str = "fitness-memo/ui/v1";
 struct UiState {
     #[serde(default)]
     install_hint_dismissed: bool,
+    /// 設定画面で**明示的に選ばれた**言語。`None` は「まだ選んでいない」で、
+    /// このときだけブラウザの言語に従う。
+    ///
+    /// ★ `Option<Lang>` ではなく `Option<String>` で持つ。知らない綴り（手で編集された /
+    ///   将来の言語が書いた）が入っていると `Lang` の deserialize が失敗し、
+    ///   **`UiState` 全体のパースが落ちて `install_hint_dismissed` まで巻き添えで消える**。
+    ///   文字列で受けて `i18n::parse_saved` で寛容に解けば、知らない値は「未設定」に
+    ///   落ちるだけで済む
+    #[serde(default)]
+    lang: Option<String>,
 }
 
 fn ui_state() -> UiState {
@@ -399,6 +397,26 @@ fn ui_state() -> UiState {
 /// ホーム画面追加の案内を利用者が閉じたか。
 pub fn install_hint_dismissed() -> bool {
     ui_state().install_hint_dismissed
+}
+
+/// 設定画面で選ばれた言語。**未設定なら `None`**（呼び側がブラウザの言語に倒す）。
+pub fn saved_lang() -> Option<Lang> {
+    ui_state().lang.as_deref().and_then(i18n::parse_saved)
+}
+
+/// 言語の選択を保存する。
+///
+/// クリックのたびに 1 回きりなので debounce しない（`dismiss_install_hint` と同じ）。
+pub fn save_lang(lang: Lang) {
+    let Some(store) = store() else {
+        return;
+    };
+    // ★ 読んでから 1 フィールドだけ差し替える（`dismiss_install_hint` と同じ理由）
+    let mut next = ui_state();
+    next.lang = Some(lang.tag().to_string());
+    if let Ok(json) = serde_json::to_string(&next) {
+        let _ = store.set_item(UI_KEY, &json);
+    }
 }
 
 /// ホーム画面追加の案内を今後出さない。

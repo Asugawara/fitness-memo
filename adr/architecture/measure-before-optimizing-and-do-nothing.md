@@ -62,6 +62,49 @@ Web パフォーマンスの一般的なガイドから、このアプリに当�
 
 **localhost の計測なので、ネットワーク遅延は入っていない。** 実回線では 886KB の wasm 転送が支配的になり、LCP は 56ms より大きくなる。ただし**それは優先度の問題ではなくサイズの問題**で、`fetchpriority` では動かない。効くとすれば wasm 自体を小さくする話になり、それは既に `opt-level = "z"` / `lto` / `codegen-units = 1` / `wasm-opt=z` でやっている（[Rust + Leptos (CSR) + trunk を採用する](rust-leptos-csr-trunk.md)）。
 
+> **追記（2026-08-20）**: **この段落は半分しか当たっていなかった。** Lighthouse 12.6.1（mobile / `simulate`）で本番を
+> 5 回測ると **92**（中央値 / FCP 1057ms・1.00 / **LCP 3306ms・0.69** / TBT・CLS・SI 満点）で、落ちているのは LCP だけ。
+> Lantern の実装（`@paulirish/trace_engine` の
+> `models/trace/lantern/metrics/{FirstContentfulPaint,LargestContentfulPaint}.ts`）を読むと理由が構造にある。
+>
+> 1. 依存グラフのネットワークノードは**終了時刻**で切られる — `node.endTime > cutoffTimestamp` なら除外。
+>    LCP の `cutoffTimestamp` は**観測**した LCP の時刻。
+> 2. LCP の optimistic / pessimistic は**どちらも wasm を含む**（optimistic が除くのは Low/VeryLow priority の画像だけ）。
+> 3. LCP の見積りは**グラフ内ノード終了時刻の最大値**（`getEstimateFromSimulation` の `Math.max(...)`）。
+>
+> body が空で wasm が mount するまで 1px も描かないので、**観測 LCP は必ず wasm の受信完了より後になり、
+> 1MB 超の wasm がまるごと LCP の見積りに載る**。実測で
+> `LCP_sim ≒ TTFB(783ms) + グラフ内バイト(499,571B) × 8 ÷ 1,638,400bps` が 84ms の誤差で成立した。
+> **「サイズの問題」ではあるが、それ以上に「wasm を待たないと何も描かない」構造の問題である。**
+> localhost の上の表（LCP = FCP = 56ms）は、wasm が数 ms で届くためにこの構造をまるごと隠していた。
+>
+> **wasm を小さくする道は既に閉じている。** 4 つ測って全部落とした（release / `gzip -9` / 現状は raw 1,124,677・転送 447,526）:
+>
+> | 候補 | raw | 転送 | 判定 |
+> |---|---|---|---|
+> | `data-wasm-opt-params="--converge"` | 1,123,551 (−1,126) | 447,714 (**+188**) | 却下。raw は減るが圧縮後に増える |
+> | `data-reference-types` | 1,124,677 (±0) | 447,526 (±0) | 却下。wasm は 1 バイトも動かない |
+> | `opt-level = "s"` | 1,354,575 (+229,898) | 509,278 (**+61,752**) | 却下 |
+> | `data-no-demangle` | — | — | 却下。配信 wasm に `_ZN` は 0 件で name section も無い（削る対象が無い） |
+> | `console_error_panic_hook` の cfg gate | 未実施 | | 却下。`src/views/day.rs` の keyed diff が壊れる縁があり、サーバもテレメトリも無いこのアプリでは console のスタックトレースが唯一の手掛かり |
+>
+> **代わりに配信バイトを 22,803B 削った** — [許諾文をコメントの外へ出して trunk の minify を解禁する](minify-with-licenses-outside-comments.md)。
+> LCP の見積りは約 111ms 縮み、カテゴリは 92 → 93 になる。**それ以上は構造を変えないと動かない。**
+>
+> **構造を変える道は分かっていて、今回は採らなかった。** 「観測 LCP を wasm の受信完了より前に起こす」＝
+> **wasm を待たずに何かを描く**ことができれば、wasm がグラフから外れて LCP は FCP 相当（約 1,050ms）まで落ち、
+> カテゴリは 100 になる。具体案は `position: fixed; inset: 0` の out-of-flow なブートスケルトンを `index.html` に置き、
+> mount 直後に Rust から外す形。out-of-flow なので追加も削除もレイアウトシフトを生まず CLS は 0 のまま保てる
+> （`index.html` が却下しているのは**フロー内**に置く形なので、その判断自体は今も有効）。
+> 成立には (a) スケルトン側にアプリの最大テキスト候補（`h1.screen-title` ≒ 3,060px²）より大きい**単一 block の**テキストを置く、
+> (b) `<main>` / `<h1>` / `data-testid` / focusable 要素 / `opacity` を置かない、(c) mount と同じタスクで外す、が必要。
+> `page.route` で wasm を遅らせ「**最後の** LCP エントリの `startTime` < wasm の `responseEnd`」を固定する E2E で守れる
+> （ミリ秒の閾値を 1 つも見ないので、この ADR の「環境差で揺れる計測を常設しない」とも衝突しない）。
+> **スコアのために描画の構造を変えるかどうかは、スコアとは別の判断として残してある。**
+>
+> なお同 ADR が却下した「Lighthouse を入れる」は **npm 依存を増やすこと**への却下なので、
+> `npx lighthouse@12.6.1` を手元で 1 回回すのは「必要になったらローカルで測る」の範囲にある（`package.json` は触っていない）。
+
 **Service Worker が入っているので、2 回目以降の起動はそもそもネットワークを踏まない。** ホーム画面から起動する常用形態では、この 886KB はキャッシュから出る。初回だけの話である。
 
 **計測を CI に常設していない。** 数字は上の表に固定してあるだけで、退行したら自動で落ちる仕組みは無い。E2E のパフォーマンス測定は環境差で揺れやすく、`.githooks/pre-commit` が唯一の防波堤である以上、そこに不安定なテストを足すのは割に合わない。**気になったら再計測する**方に倒す。

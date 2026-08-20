@@ -72,10 +72,10 @@ sh scripts/gen-og.sh      # public/og.png (1200x630) + assets/social-preview.png
 | Language / framework | Rust + [leptos](https://leptos.dev/) 0.8 (CSR), built with [trunk](https://trunkrs.dev/) |
 | Routing | None. Tabs are an enum in a signal |
 | Charts | No library — the SVG is drawn by hand |
-| Icons | [lucide](https://lucide.dev/) (ISC, some MIT) SVGs kept in `assets/icons/` and embedded with `include_str!`. No npm dependency, no CDN |
+| Icons | [lucide](https://lucide.dev/) (ISC, some MIT) SVGs kept in `assets/icons/` and embedded with `include_str!`. No npm dependency, no CDN. The licence notices ride in `index.html` inside `<script type="text/plain" id="third-party-licenses">` — **not** in a comment, because the release minifier drops comments |
 | i18n | No crate. `src/i18n.rs` holds one struct and two `const` tables, so a missing string is a compile error ([Hand-roll the string table instead of adding an i18n crate](adr/architecture/i18n-hand-rolled-string-table.md)) |
 | Persistence | The whole JSON under a single `localStorage` key, `fitness-memo/v3` (older `v2` / `v1` are read-only fallbacks) |
-| CSS | One plain CSS file plus custom properties |
+| CSS | One plain CSS file plus custom properties. Release builds are minified by trunk's built-in lightningcss — 79KB of source (mostly Japanese design comments) ships as 20KB ([Move the licence notices out of comments so trunk can minify](adr/architecture/minify-with-licenses-outside-comments.md)) |
 | Deploy | GitHub Pages branch deploy (`/docs` on the `release` branch) |
 | CI | **No GitHub Actions workflow files.** Everything runs locally from `.githooks/pre-commit` |
 

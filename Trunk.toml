@@ -2,7 +2,15 @@
 target = "index.html"
 dist = "dist"
 public_url = "/"     # ローカル/E2E 用。リリース時は --public-url /fitness-memo/ で上書き
-# filehash / no_sri / minify は trunk の既定のまま（filehash=true, SRI 有効, minify=never）
+# filehash / no_sri は trunk の既定のまま（filehash=true, SRI 有効）
+# ★ minify は release ビルドだけで効かせる。HTML / CSS / JS がまとめて縮む
+#   （CSS の minifier は trunk 内蔵の lightningcss。外部ツールを足しても出力は同じ）。
+#   debug（.githooks/pre-commit の trunk build と trunk serve）は読める出力のまま。
+#   ★ minify は HTML コメントを必ず落とすので、lucide / Feather の許諾文は
+#     index.html の <script type="text/plain"> に置いてある。コメントに書き戻すと
+#     配信物からライセンス表記が消える
+#     （adr/architecture/minify-with-licenses-outside-comments.md）
+minify = "on_release"
 
 [serve]
 port = 8080          # ★ SW の dev 判定がこの値に依存するので明示コミットして固定する

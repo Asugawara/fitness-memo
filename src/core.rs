@@ -8340,6 +8340,39 @@ mod tests {
         assert_eq!(row[interval_col(&r)], "0");
     }
 
+    /// ★ メニューにだけ入っている種目（記録が 1 日も無い）の経路。`logged` が
+    /// メニューの種目を先に集めるので**種目マスタ行は書かれず**、メニュー行が
+    /// 唯一の運び手になる。ここで `insert` を忘れると、記録の無い種目の設定だけが
+    /// 機種変更で黙って消える。
+    #[test]
+    fn tsv_round_trips_the_interval_for_an_exercise_only_in_a_routine() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_pins(&mut db, bench, vec!["3".into()]);
+        set_interval(&mut db, bench, Some(90));
+        db.routines.push(Routine {
+            id: RoutineId::from_bits(0xE001),
+            name: "胸の日".into(),
+            exercises: vec![bench],
+        });
+
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+        let r = rows(&tsv);
+        // 種目マスタ行は出ず、メニュー行（メニュー列が埋まる行）だけがある
+        let row = exactly_one(r[1..].iter().filter(|row| row[2] == "ベンチプレス"))
+            .expect("ベンチプレスの行はちょうど 1 本");
+        assert_eq!(row[11], "胸の日", "メニュー行ではない");
+        assert_eq!(row[interval_col(&r)], "90");
+        assert_eq!(row[pin_col(&r)], "3");
+
+        let mut fresh = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let incoming = parse_import(&tsv, &mut ids(), &fresh).expect("読み戻せる");
+        merge_db(&mut fresh, incoming);
+
+        assert_eq!(fresh.exercise(bench).expect("種目").interval_sec, Some(90));
+        assert_eq!(fresh.exercise(bench).expect("種目").pins, ["3"]);
+    }
+
     /// 書き出し → 新品端末へ戻す。**この経路が通らないと機種変更で消える。**
     #[test]
     fn tsv_round_trips_the_interval() {

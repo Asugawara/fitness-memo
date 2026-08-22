@@ -15,7 +15,8 @@ use web_sys::PointerEvent;
 use crate::core;
 use crate::core::Metric;
 use crate::model::{
-    Db, ExerciseId, ExerciseLog, GroupId, MAX_PIN_LEN, MAX_PINS, RoutineId, SetEntry,
+    Db, ExerciseId, ExerciseLog, GroupId, MAX_INTERVAL_LEN, MAX_PIN_LEN, MAX_PINS, RoutineId,
+    SetEntry,
 };
 use crate::reorder;
 
@@ -919,6 +920,21 @@ fn ExerciseCard(
     let pins =
         Memo::new(move |_| db.with(|d| d.exercise(ex).map(|e| e.pins.clone()).unwrap_or_default()));
 
+    // ── インターバル（adr/ux/interval-seconds-on-the-exercise.md）────────────────
+    //
+    // ★ ピンとまったく同じ持ち方。**種目に紐づく永続設定**なので `db.exercises` から
+    //   読み、編集中はローカル signal に文字列で持つ（`u32` では空欄が表現できず、
+    //   `db` を直接読む生クロージャでは 1 文字打つたびに入力中の文字が消える）。
+    let interval0: String = db.with_untracked(|d| {
+        d.exercise(ex)
+            .and_then(|e| e.interval_sec)
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    });
+    let interval_text = RwSignal::new(interval0);
+    // 閉じているときに薄字で出す値。**保存済みのものだけ**なので `db` から引く
+    let interval = Memo::new(move |_| db.with(|d| d.exercise(ex).and_then(|e| e.interval_sec)));
+
     // ★ この種目が普段「重量を使う」種目かを**実データから**判定する。
     //
     // 旧実装は `Kind::Weighted` で判定していたが `Kind` は無くなった。単に
@@ -995,6 +1011,14 @@ fn ExerciseCard(
     let remove_pin = move |key: u32| {
         pin_rows.update(|rs| rs.retain(|r| r.key != key));
         commit_pins();
+    };
+
+    // ★ 正規化（上限の丸め）は `core::set_interval` に委ねる。パースだけは
+    //   `core::parse_interval` を通す（`views/*` に unit test が無いので、規則を
+    //   ここに書くと `normalize_exercises` とずれても気づけない）。
+    let commit_interval = move || {
+        let sec = interval_text.with_untracked(|s| core::parse_interval(s));
+        db.update(|d| core::set_interval(d, ex, sec));
     };
 
     let fresh_key = move || {
@@ -1702,7 +1726,7 @@ fn ExerciseCard(
                 if note_open.get() {
                     view! {
                         <div class="pin-box" data-testid="pin-box">
-                            <span class="pin-label">"ピン"</span>
+                            <span class="pin-label">{t().day.pins}</span>
                             <For
                                 each=move || pin_rows.get()
                                 key=|r| r.key
@@ -1720,7 +1744,7 @@ fn ExerciseCard(
                                                 pattern="[0-9]*([.,][0-9]*)?"
                                                 maxlength=MAX_PIN_LEN.to_string()
                                                 value=row.value.clone()
-                                                aria-label="ピンの番号"
+                                                aria-label=t().day.pin_value
                                                 data-testid="pin-value"
                                                 on:focusin=move |_| kb_focus(kb)
                                                 on:focusout=move |_| kb_blur(kb)
@@ -1740,7 +1764,7 @@ fn ExerciseCard(
                                             />
                                             <button
                                                 class="icon-btn pin-remove"
-                                                aria-label="このピンを削除"
+                                                aria-label=t().day.pin_delete
                                                 data-testid="pin-remove"
                                                 on:click=move |_| remove_pin(key)
                                             >
@@ -1757,7 +1781,7 @@ fn ExerciseCard(
                                         view! {
                                             <button
                                                 class="link-btn pin-add"
-                                                aria-label="ピンを追加"
+                                                aria-label=t().day.pin_add
                                                 data-testid="pin-add"
                                                 on:click=add_pin
                                             >
@@ -1776,7 +1800,70 @@ fn ExerciseCard(
                         .then(|| {
                             view! {
                                 <p class="pin-read" data-testid="pin-read">
-                                    {move || format!("ピン {}", pins.with(|p| p.join("・")))}
+                                    {move || {
+                                        format!(
+                                            "{} {}",
+                                            t().day.pins,
+                                            pins.with(|p| p.join("・")),
+                                        )
+                                    }}
+                                </p>
+                            }
+                        })
+                        .into_any()
+                }
+            }}
+
+            // ── インターバル ──────────────────────────────────────────────────
+            //
+            // ★ ピンの**下**・種目メモの**上**。読み順が「準備（ピン → インターバル）
+            //   → 観測（メモ）」になる。ピンと同じく**種目に貼り付く設定**なので隣に
+            //   置き、その日のメモとはこの 2 段でスコープが分かれる。
+            //
+            // ★ 入口を増やさない。開閉はピン・種目メモと同じ `note_open` に相乗りする
+            //   ので、**新しい 44px のタップ標的は 0 個**でカードの高さも 1px も増えない
+            //   （`e2e/interval.spec.mjs` が `.card-head button` 0 件 /
+            //   `.card-foot button` 2 個で固定している）。
+            //   adr/ux/interval-seconds-on-the-exercise.md
+            {move || {
+                if note_open.get() {
+                    view! {
+                        <label class="interval-box" data-testid="interval-box">
+                            <span class="interval-label">{t().day.interval}</span>
+                            <input
+                                class="interval-num"
+                                type="text"
+                                // ★ 整数秒なので `pattern` は付けない（回数欄と同じ）。
+                                //   `type="number"` は使わない（中間状態が読めない）:
+                                //   adr/ux/text-input-not-number.md
+                                inputmode="numeric"
+                                maxlength=MAX_INTERVAL_LEN.to_string()
+                                value=interval_text.get_untracked()
+                                data-testid="interval-value"
+                                on:focusin=move |_| kb_focus(kb)
+                                on:focusout=move |_| kb_blur(kb)
+                                on:input=move |ev| {
+                                    interval_text.set(event_target_value(&ev));
+                                    commit_interval();
+                                }
+                            />
+                            <span class="interval-unit">{t().day.interval_unit}</span>
+                        </label>
+                    }
+                        .into_any()
+                } else {
+                    // 閉じていても保存済みの秒数は読める（ピンの `.pin-read` と同じ作法）
+                    interval
+                        .get()
+                        .map(|sec| {
+                            view! {
+                                <p class="interval-read" data-testid="interval-read">
+                                    {format!(
+                                        "{} {}{}",
+                                        t().day.interval,
+                                        sec,
+                                        t().day.interval_unit,
+                                    )}
                                 </p>
                             }
                         })

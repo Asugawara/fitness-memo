@@ -107,6 +107,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](ux/copy-carries-the-notes.md) | 採用 |
 | [言語はブラウザに従い、選んだらそれを優先する](ux/language-follows-the-browser-then-the-setting.md) | 採用 |
 | [プリセット名は表示時に言語へ追従させ、改名したものだけ据え置く](ux/preset-names-follow-the-ui-language.md) | 採用 |
+| [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](ux/interval-seconds-on-the-exercise.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

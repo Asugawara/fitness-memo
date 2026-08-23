@@ -265,6 +265,30 @@ fn blank_notes_to_empty(s: &mut Session) {
 
 // ── 参照 ────────────────────────────────────────────────────────────────────
 
+/// 指定日より**厳密に前**の、その種目の記録を**新しい順**に走査する。
+///
+/// 1 日につき高々 1 件なのは「1 日 1 種目 1 ログ」の不変条件（`Vec` になるのは
+/// **日をまたぐ方向**であって、同じ日に 2 本並ぶわけではない）。
+///
+/// ★ セットが空のログは飛ばす。メモだけ書いた日は実施日ではない
+///   （[`crate::model::Session::is_trained`] と同じ式）。
+fn logs_before(
+    db: &Db,
+    ex: ExerciseId,
+    before: NaiveDate,
+) -> impl Iterator<Item = (NaiveDate, &ExerciseLog)> {
+    db.sessions
+        .range(..date_key(before))
+        .rev()
+        .filter_map(move |(key, session)| {
+            let log = session
+                .logs
+                .iter()
+                .find(|l| l.exercise_id == ex && !l.sets.is_empty())?;
+            Some((parse_date_key(key)?, log))
+        })
+}
+
 /// 指定日より**厳密に前**で最も新しい、その種目の記録。
 ///
 /// 単一の `ExerciseLog` を返せるのは「1 日 1 種目 1 ログ」の不変条件に依存する。
@@ -273,16 +297,50 @@ pub fn last_log_before(
     ex: ExerciseId,
     before: NaiveDate,
 ) -> Option<(NaiveDate, &ExerciseLog)> {
-    db.sessions
-        .range(..date_key(before))
-        .rev()
-        .find_map(|(key, session)| {
-            let log = session
-                .logs
-                .iter()
-                .find(|l| l.exercise_id == ex && !l.sets.is_empty())?;
-            Some((parse_date_key(key)?, log))
-        })
+    logs_before(db, ex, before).next()
+}
+
+/// 指定日より**厳密に前**の、その種目の記録を**新しい順に最大 `limit` 件**。
+///
+/// 種目カードの履歴（`views::day`）が引く。件数は利用者の表示設定で、
+/// [`history_count`] が `1..=MAX_HISTORY` に丸めたものが渡ってくる。
+///
+/// ★ **先頭が「前回」**（[`last_log_before`] と必ず一致する）。コピーと重量警告は
+///   この先頭 1 件だけを見るので、降順であることが仕様の一部になっている。
+pub fn last_logs_before(
+    db: &Db,
+    ex: ExerciseId,
+    before: NaiveDate,
+    limit: usize,
+) -> Vec<(NaiveDate, &ExerciseLog)> {
+    logs_before(db, ex, before).take(limit).collect()
+}
+
+/// 種目カードに出す過去の記録の件数の既定値。**現状と同じ「前回 1 件だけ」。**
+pub const DEFAULT_HISTORY: usize = 1;
+
+/// 同上の上限。
+///
+/// ★ **3 で止める。** メモが並ぶと 1 件が複数行になるので、5 件だとカードの上半分が
+///   10 行を超え、「重量を打つ → 回数を打つ → + セット」の動線が画面外へ出る。
+///   それ以上の履歴は推移タブ（グラフ + 記録テーブル）の担当。
+pub const MAX_HISTORY: usize = 3;
+
+/// 保存値 → 実際に使う件数。**必ず `1..=MAX_HISTORY` を返す。**
+///
+/// ★ 範囲外は捨てずに `clamp` する（`clean_pins` の切り詰めと同じ規則）。
+///   `DEFAULT_HISTORY` が下端と一致するので、未設定・0・負がすべて 1 に落ちる。
+///
+/// ★ **0 を返さないことが `views::day` の前提。** 0 になると履歴が消えるだけでなく、
+///   「前回をコピー」と「重量未入力」の警告が黙って出なくなる（どちらも先頭 1 件を見る）。
+///
+/// 引数が `Option<i64>` なのは `storage::UiState` の受け口に合わせたもの。JSON に
+/// どんな整数が入っていてもパースを落とさず、丸めをここ（ホストのテストが届く側）でやる。
+pub fn history_count(saved: Option<i64>) -> usize {
+    let Some(n) = saved else {
+        return DEFAULT_HISTORY;
+    };
+    n.clamp(1, MAX_HISTORY as i64) as usize
 }
 
 // ── 並び替え ────────────────────────────────────────────────────────────────
@@ -3279,6 +3337,156 @@ mod tests {
 
         let (date, _) = last_log_before(&db, e(10), d(2026, 8, 8)).expect("8/1 まで遡る");
         assert_eq!(date, d(2026, 8, 1));
+    }
+
+    // ── last_logs_before / history_count ────────────────────────────────────
+
+    #[test]
+    fn last_logs_before_returns_the_newest_days_first() {
+        let mut db = test_db();
+        put(&mut db, d(2026, 8, 1), vec![log(10, &[(50.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 4), vec![log(10, &[(55.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 8), vec![log(10, &[(60.0, 10)], None)]);
+
+        let got = last_logs_before(&db, e(10), d(2026, 8, 8), 3);
+        assert_eq!(
+            got.iter().map(|(date, _)| *date).collect::<Vec<_>>(),
+            vec![d(2026, 8, 4), d(2026, 8, 1)],
+            "8/8 自身は含まず、新しい順に並ぶ"
+        );
+
+        // 足りなくても panic しない。あるぶんだけ返す
+        assert_eq!(last_logs_before(&db, e(10), d(2026, 8, 2), 3).len(), 1);
+        assert!(last_logs_before(&db, e(10), d(2026, 8, 1), 3).is_empty());
+        assert!(
+            last_logs_before(&db, e(11), d(2026, 8, 8), 3).is_empty(),
+            "別種目の記録は拾わない"
+        );
+    }
+
+    #[test]
+    fn last_logs_before_stops_at_the_limit() {
+        let mut db = test_db();
+        put(&mut db, d(2026, 8, 1), vec![log(10, &[(50.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 4), vec![log(10, &[(55.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 6), vec![log(10, &[(57.5, 10)], None)]);
+
+        let got = last_logs_before(&db, e(10), d(2026, 8, 8), 2);
+        assert_eq!(
+            got.iter().map(|(date, _)| *date).collect::<Vec<_>>(),
+            vec![d(2026, 8, 6), d(2026, 8, 4)],
+            "新しいほうから 2 件で打ち切る"
+        );
+    }
+
+    #[test]
+    fn last_logs_before_skips_days_without_that_exercise_or_with_no_sets() {
+        let mut db = test_db();
+        put(&mut db, d(2026, 8, 1), vec![log(10, &[(50.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 5), vec![log(20, &[(0.0, 60)], None)]);
+        // ★ メモだけの日は履歴に出ない。「実施日ではない」の定義が「前回」と揃っている
+        put(
+            &mut db,
+            d(2026, 8, 7),
+            vec![noted_log(10, "肩が痛いので飛ばす", &[], None)],
+        );
+
+        let got = last_logs_before(&db, e(10), d(2026, 8, 8), 3);
+        assert_eq!(
+            got.iter().map(|(date, _)| *date).collect::<Vec<_>>(),
+            vec![d(2026, 8, 1)],
+            "他種目の日とメモだけの日は飛ばす"
+        );
+    }
+
+    #[test]
+    fn last_logs_before_and_last_log_before_agree_on_the_first_entry() {
+        // ★ 「前回をコピー」と「重量未入力」の警告はどちらも先頭 1 件しか見ない。
+        //   ここがずれると、表示件数という UI 設定がその 2 つの挙動を変えてしまう
+        let mut db = test_db();
+        put(&mut db, d(2026, 8, 1), vec![log(10, &[(50.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 4), vec![log(10, &[(55.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 6), vec![log(10, &[(57.5, 10)], None)]);
+
+        let want = last_log_before(&db, e(10), d(2026, 8, 8));
+        for limit in 1..=MAX_HISTORY {
+            let got = last_logs_before(&db, e(10), d(2026, 8, 8), limit);
+            assert_eq!(
+                got.first().copied(),
+                want,
+                "件数 {limit} でも先頭は last_log_before と同じ"
+            );
+        }
+    }
+
+    #[test]
+    fn last_logs_before_carries_both_note_kinds() {
+        let mut db = test_db();
+        put(
+            &mut db,
+            d(2026, 8, 4),
+            vec![noted_log(
+                10,
+                "フォーム意識",
+                &[(60.0, 10, ""), (60.0, 8, "最後潰れた")],
+                None,
+            )],
+        );
+
+        let got = last_logs_before(&db, e(10), d(2026, 8, 8), 3);
+        let (_, l) = got.first().expect("8/4 がある");
+        assert_eq!(l.note, "フォーム意識", "種目メモが届く");
+        assert_eq!(l.sets[1].note, "最後潰れた", "セットメモも届く");
+    }
+
+    #[test]
+    fn last_logs_before_with_a_zero_limit_yields_nothing() {
+        // `limit` は型で 0 を防げないので挙動を固定しておく。
+        // 実際に 0 が渡らないことは `history_count_never_returns_zero` が担保する
+        let mut db = test_db();
+        put(&mut db, d(2026, 8, 4), vec![log(10, &[(55.0, 10)], None)]);
+        assert!(last_logs_before(&db, e(10), d(2026, 8, 8), 0).is_empty());
+    }
+
+    #[test]
+    fn history_count_clamps_out_of_range_values_into_the_allowed_span() {
+        assert_eq!(history_count(None), DEFAULT_HISTORY, "未設定は既定");
+        assert_eq!(history_count(Some(0)), 1, "0 は下端へ");
+        assert_eq!(history_count(Some(-3)), 1, "負も下端へ");
+        for n in 1..=MAX_HISTORY {
+            assert_eq!(history_count(Some(n as i64)), n, "範囲内はそのまま");
+        }
+        assert_eq!(history_count(Some(4)), MAX_HISTORY, "上限を超えたら上端へ");
+        assert_eq!(history_count(Some(9999)), MAX_HISTORY);
+        assert_eq!(history_count(Some(i64::MAX)), MAX_HISTORY, "桁溢れしない");
+        assert_eq!(history_count(Some(i64::MIN)), 1);
+    }
+
+    #[test]
+    fn history_count_never_returns_zero() {
+        // ★ 0 が返ると履歴が消えるだけでなく、「前回をコピー」と「重量未入力」の
+        //   警告が黙って出なくなる（どちらも先頭 1 件を見る）
+        for saved in [
+            None,
+            Some(i64::MIN),
+            Some(-1),
+            Some(0),
+            Some(1),
+            Some(i64::MAX),
+        ] {
+            let n = history_count(saved);
+            assert!(
+                (1..=MAX_HISTORY).contains(&n),
+                "{saved:?} → {n} が 1..={MAX_HISTORY} の外に出た"
+            );
+        }
+    }
+
+    #[test]
+    fn the_default_history_is_the_low_end_of_the_allowed_span() {
+        // 既定が下端 = 今までどおり「前回 1 件」で、増やすのは明示的な操作だけ
+        assert_eq!(DEFAULT_HISTORY, 1);
+        assert_eq!(MAX_HISTORY, 3, "5 件はカードが破裂するので 3 で止める");
     }
 
     // ── 並び替え ────────────────────────────────────────────────────────────

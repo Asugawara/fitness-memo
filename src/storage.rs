@@ -385,6 +385,15 @@ struct UiState {
     ///   落ちるだけで済む
     #[serde(default)]
     lang: Option<String>,
+    /// 種目カードに出す過去の記録の件数。`None` は「まだ選んでいない」で既定に倒れる。
+    ///
+    /// ★ `Option<u8>` ではなく `Option<i64>` で持つ。`lang` とまったく同じ理由で、
+    ///   範囲外の値（`999` / `-1`。手で編集された / 将来の版が書いた）が入っていると
+    ///   `u8` の deserialize が失敗し、**`UiState` 全体のパースが落ちて `lang` と
+    ///   `install_hint_dismissed` まで巻き添えで消える**。整数なら何でも受けて、
+    ///   丸めは `core::history_count`（ホストのテストが届く側）に任せる
+    #[serde(default)]
+    history: Option<i64>,
 }
 
 fn ui_state() -> UiState {
@@ -414,6 +423,26 @@ pub fn save_lang(lang: Lang) {
     // ★ 読んでから 1 フィールドだけ差し替える（`dismiss_install_hint` と同じ理由）
     let mut next = ui_state();
     next.lang = Some(lang.tag().to_string());
+    if let Ok(json) = serde_json::to_string(&next) {
+        let _ = store.set_item(UI_KEY, &json);
+    }
+}
+
+/// 種目カードに出す過去の記録の件数。**必ず `1..=core::MAX_HISTORY`**（未設定は既定）。
+pub fn history_count() -> usize {
+    core::history_count(ui_state().history)
+}
+
+/// 過去の記録の件数を保存する。
+///
+/// クリックのたびに 1 回きりなので debounce しない（`save_lang` と同じ）。
+pub fn save_history(n: usize) {
+    let Some(store) = store() else {
+        return;
+    };
+    // ★ 読んでから 1 フィールドだけ差し替える（`save_lang` と同じ理由）
+    let mut next = ui_state();
+    next.history = Some(n as i64);
     if let Ok(json) = serde_json::to_string(&next) {
         let _ = store.set_item(UI_KEY, &json);
     }

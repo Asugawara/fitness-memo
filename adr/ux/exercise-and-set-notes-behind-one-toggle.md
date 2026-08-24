@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-09
 - **カテゴリ**: ux
-- **関連**: [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md)（保存側）, [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [セット追加は直前行の重量をコピーして回数欄へフォーカスする](set-entry-prefill-and-focus.md), [セット削除は確認を挟まない（カード削除の確認は残す）](set-delete-without-confirmation.md), [数値入力に `type="number"` を使わない](text-input-not-number.md), [記録タブをカレンダー + 選択日エディタの単一画面にする](record-tab-calendar-with-day-editor.md), [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（決定 5 のコピー規則を改訂）
+- **関連**: [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md)（保存側）, [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [セット追加は直前行の重量をコピーして回数欄へフォーカスする](set-entry-prefill-and-focus.md), [セット削除は確認を挟まない（カード削除の確認は残す）](set-delete-without-confirmation.md), [数値入力に `type="number"` を使わない](text-input-not-number.md), [記録タブをカレンダー + 選択日エディタの単一画面にする](record-tab-calendar-with-day-editor.md), [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（決定 5 のコピー規則を改訂）, [前回までの記録を日付で出し、何回分出すかを表示設定にする](past-records-by-date-with-a-count-setting.md)（決定 4 の「`.last-row` の直下に置かない」を、**前回のメモにも当てた**。あちらは一度実装してから外している）
 
 ## 背景
 

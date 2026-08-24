@@ -127,6 +127,7 @@ pub enum SettingsPage {
     Root,
     Routines,
     Exercises,
+    History,
     Language,
 }
 
@@ -170,6 +171,27 @@ pub struct LangCtx(pub RwSignal<Lang>);
 pub fn use_lang() -> RwSignal<Lang> {
     use_context::<LangCtx>()
         .expect("LangCtx が provide されていない")
+        .0
+}
+
+/// 種目カードに出す過去の記録の件数（adr/ux/past-records-by-date-with-a-count-setting.md）。
+///
+/// ★ **`storage::history_count()` を直接呼ばずシグナルに載せる理由。** これを読む
+///   `views::day` の `history` Memo は `Db` を購読していて**1 打鍵ごとに走る**。
+///   そこで `storage` を叩くと `localStorage.getItem` + `serde_json::from_str` が
+///   打鍵 × カード枚数だけ走ることになる。起動時に 1 回読んでメモリに置くのは
+///   `saved_lang` → [`LangCtx`] と同じ作法。
+///
+/// ★ `OpenGroupCtx` / [`SettingsPageCtx`] と違って**永続化する**。あちらが
+///   プロセス内の寿命に留まるのは `Db` の ID を持つから（種目が消えると宙に浮く）で、
+///   こちらはただの数なので `fitness-memo/ui/v1` に置ける
+///   （adr/storage/ui-state-in-separate-key.md の 3 条件を満たす）。
+#[derive(Clone, Copy)]
+pub struct HistoryCtx(pub RwSignal<usize>);
+
+pub fn use_history_count() -> RwSignal<usize> {
+    use_context::<HistoryCtx>()
+        .expect("HistoryCtx が provide されていない")
         .0
 }
 
@@ -649,6 +671,8 @@ pub fn App() -> impl IntoView {
     //   理由は OpenGroupCtx と SettingsPage を参照
     provide_context(OpenGroupCtx(RwSignal::new(None)));
     provide_context(SettingsPageCtx(RwSignal::new(SettingsPage::default())));
+    // ★ こちらは永続化する（`HistoryCtx` の doc を参照）。起動時に 1 回だけ読む
+    provide_context(HistoryCtx(RwSignal::new(storage::history_count())));
 
     let tab = RwSignal::new(Tab::Record);
     let tabs = TabCtx(tab);

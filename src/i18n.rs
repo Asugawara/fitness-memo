@@ -295,6 +295,14 @@ pub struct Settings {
     pub row_backup: &'static str,
     pub row_routines: &'static str,
     pub row_exercises: &'static str,
+    /// 過去の記録の件数の行 / そのサブページの h1。
+    ///
+    /// ★ **何の数かはラベルに書かない。** 右端に現在値（`1 回分`）が出ていて、
+    ///   入れば注記が説明するので、行のラベルは他の 5 行と同じ短さで揃える
+    pub row_history: &'static str,
+    /// 件数サブページの注記。**ラベルが短いぶん、ここが説明を持つ。**
+    /// 「表示数」だけでは何の数か読めないので、ここで種目カードの話だと言う
+    pub history_note: &'static str,
     /// 言語の行 / 言語サブページの h1
     pub row_language: &'static str,
     /// 言語サブページの注記。**種目名が変わらないことを先に言う** —
@@ -348,6 +356,8 @@ const JA_SETTINGS: Settings = Settings {
     row_backup: "エクスポート / インポート",
     row_routines: "トレーニングメニュー",
     row_exercises: "種目",
+    row_history: "表示数",
+    history_note: "種目カードに、その種目をやった直近の記録を何回分出すか。日付の新しい順に並びます",
     row_language: "言語",
     language_note: "種目名と部位名は変わりません（自分で付けた名前として扱うため）。変えたいときは「種目」から 1 つずつ編集してください",
     edit_group: "部位を編集",
@@ -388,6 +398,8 @@ const EN_SETTINGS: Settings = Settings {
     row_backup: "Export / Import",
     row_routines: "Routines",
     row_exercises: "Exercises",
+    row_history: "Sessions shown",
+    history_note: "How many of an exercise's most recent sessions its card shows, newest first.",
     row_language: "Language",
     language_note: "Exercise and muscle-group names do not change — they are treated as names you gave them. Edit them one by one under Exercises if you want them in another language.",
     edit_group: "Edit muscle group",
@@ -632,9 +644,12 @@ pub struct Day {
     pub body_weight: &'static str,
     pub note: &'static str,
     pub deleted_exercise: &'static str,
-    /// 前回の記録が 1 件も無い
+    /// 前回までの記録が 1 件も無い
     pub no_last_log: &'static str,
     pub copy_last: &'static str,
+    /// 履歴ブロックの `aria-label`。**表記が日付になると
+    /// 「これは過去の記録だ」という語が画面から消える**ので、ここで補う
+    pub past_records: &'static str,
     /// セット行の入力欄
     pub weight: &'static str,
     pub reps: &'static str,
@@ -643,6 +658,16 @@ pub struct Day {
     pub weight_missing: &'static str,
     pub reps_missing: &'static str,
     pub add_set: &'static str,
+    /// マシンのピン。**ラベル 1 語で種目メモと読み分ける**
+    /// （adr/ux/machine-pins-on-the-exercise.md 決定 3）
+    pub pins: &'static str,
+    pub pin_value: &'static str,
+    pub pin_delete: &'static str,
+    pub pin_add: &'static str,
+    /// セット間のインターバル。ラベルと単位を分けて持つ（値だけ読めるように）
+    /// adr/ux/interval-seconds-on-the-exercise.md
+    pub interval: &'static str,
+    pub interval_unit: &'static str,
     pub exercise_note: &'static str,
     pub note_open: &'static str,
     pub note_close: &'static str,
@@ -667,14 +692,21 @@ const JA_DAY: Day = Day {
     body_weight: "体重",
     note: "メモ",
     deleted_exercise: "(削除された種目)",
-    no_last_log: "前回 —",
+    no_last_log: "記録なし",
     copy_last: "前回をコピー",
+    past_records: "前回までの記録",
     weight: "重量",
     reps: "回数",
     delete_set: "このセットを削除",
     weight_missing: "重量未入力",
     reps_missing: "回数を入れると保存されます",
     add_set: "+ セット",
+    pins: "ピン",
+    pin_value: "ピンの番号",
+    pin_delete: "このピンを削除",
+    pin_add: "ピンを追加",
+    interval: "インターバル",
+    interval_unit: "秒",
     exercise_note: "この種目のメモ",
     note_open: "＋ メモ",
     note_close: "－ メモ",
@@ -698,14 +730,21 @@ const EN_DAY: Day = Day {
     body_weight: "Body weight",
     note: "Note",
     deleted_exercise: "(deleted exercise)",
-    no_last_log: "Last —",
+    no_last_log: "No records",
     copy_last: "Copy last time",
+    past_records: "Past records",
     weight: "Weight",
     reps: "Reps",
     delete_set: "Delete this set",
     weight_missing: "No weight yet",
     reps_missing: "Enter reps and this set is saved",
     add_set: "+ Set",
+    pins: "Pins",
+    pin_value: "Pin number",
+    pin_delete: "Delete this pin",
+    pin_add: "Add a pin",
+    interval: "Interval",
+    interval_unit: "s",
     exercise_note: "Note for this exercise",
     note_open: "+ Note",
     note_close: "- Note",
@@ -1166,14 +1205,6 @@ impl Lang {
         }
     }
 
-    /// 前回いつやったか。「前回 3日前」/ "Last: 3 days ago"。
-    pub fn last_log(self, when: &str) -> String {
-        match self {
-            Lang::Ja => format!("前回 {when}"),
-            Lang::En => format!("Last: {when}"),
-        }
-    }
-
     /// セットメモ欄の `aria-label`。「{n} セット目のメモ」。
     pub fn set_note_label(self, index: usize) -> String {
         match self {
@@ -1195,6 +1226,19 @@ impl Lang {
         match self {
             Lang::Ja => format!("{n} 種目"),
             Lang::En => format!("{n} {}", plural(n, "exercise", "exercises")),
+        }
+    }
+
+    /// 種目カードに出す過去の記録の件数。「3 回分」/ "3 sessions"。
+    ///
+    /// ★ **「日」ではなく「回」。** 出すのは直近 N 日ではなく**その種目をやった直近 N 回**で、
+    ///   3 回分が 3 週間にまたがることがある。
+    /// ★ 設定行の右端とセグメントのラベルで**同じこれを使う**（`endonym()` と同じ作法）。
+    ///   素の数字だと「種目 28」「メニュー 0」と同じ件数に見えて意味が読めない
+    pub fn n_past_sessions(self, n: usize) -> String {
+        match self {
+            Lang::Ja => format!("{n} 回分"),
+            Lang::En => format!("{n} {}", plural(n, "session", "sessions")),
         }
     }
 

@@ -255,6 +255,21 @@ pub struct Exercise {
     /// 利用者の JSON は**今までとバイト単位で同一**のままになる。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pins: Vec<String>,
+    /// セット間に取るインターバル（**秒**）。[`Exercise::pins`] と同じく種目に貼り付く
+    /// 設定で、日ごとのメモ（[`SetEntry::note`] / [`ExerciseLog::note`]）とはスコープが
+    /// 違う。あちらは「その日に起きたこと」で、これは「その種目をどう回すか」。
+    /// adr/ux/interval-seconds-on-the-exercise.md
+    ///
+    /// ★ `pins` と違って `u32`。ピンが `String` なのは穴に `A` / `赤` と刻んだマシンが
+    /// 実在するからで、秒数にその事情は無い。
+    ///
+    /// ★ `Option` にするのは「未設定」と「0 秒」（休まず次のセットへ = スーパーセット）を
+    /// 分けるため。[`Session::body_weight`] が「未計量」を `Option` で持つのと同じ。
+    ///
+    /// ★ `skip_serializing_if` は [`Exercise::pins`] と同じ理由。インターバルを使わない
+    /// 利用者の JSON は**今までとバイト単位で同一**のままになる。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_sec: Option<u32>,
 }
 
 /// 1 種目が持てるピンの本数。
@@ -268,6 +283,19 @@ pub const MAX_PINS: usize = 8;
 /// ピン 1 つの長さ。**バイトではなく char で数える**（バイトで切ると UTF-8 の
 /// 途中で割れて panic する）。
 pub const MAX_PIN_LEN: usize = 6;
+
+/// インターバルの上限（秒）。**UI の制限ではなく取り込みの門番**（[`MAX_PINS`] と
+/// 同じ立場）。999 秒 = 16 分で、デッドリフトの 5 分でも収まる。
+///
+/// ★ 上限を持つのは、取り込んだ JSON / TSV には `u32::MAX` が入りうるので
+/// （`4294967295秒` が薄字に出るとカードが折り返して壊れる）。
+pub const MAX_INTERVAL_SEC: u32 = 999;
+
+/// インターバル入力欄の `maxlength`。[`MAX_INTERVAL_SEC`] の桁数。
+///
+/// ★ 別の定数にするのは、`maxlength` が**文字数**で上限が**値**なので単位が違うため。
+/// 2 つがずれないことは `max_interval_len_matches_the_cap` が見る。
+pub const MAX_INTERVAL_LEN: usize = 3;
 
 /// 名前付きの種目リスト。**UI では「トレーニングメニュー」**。
 ///
@@ -642,6 +670,7 @@ mod tests {
             order: 0,
             archived: false,
             pins,
+            interval_sec: None,
         }
     }
 
@@ -671,6 +700,56 @@ mod tests {
         )
         .expect("ピン以前の形も読める");
         assert!(ex.pins.is_empty());
+    }
+
+    // ── インターバル（adr/ux/interval-seconds-on-the-exercise.md）──────────────
+
+    #[test]
+    fn exercise_omits_an_unset_interval_from_its_json() {
+        // ★ バイト一致で見る。ここが崩れるとインターバルを使っていない利用者の保存
+        //   データが変わり、`e2e/pwa.spec.mjs` が組み立てている生 JSON と食い違う
+        assert_eq!(
+            serde_json::to_string(&ex_of(Vec::new())).expect("直列化できる"),
+            r#"{"id":"000000000001","name":"ベンチプレス","group_id":"000000000002","order":0,"archived":false}"#
+        );
+    }
+
+    #[test]
+    fn exercise_writes_the_interval_when_it_is_set() {
+        let mut ex = ex_of(Vec::new());
+        ex.interval_sec = Some(90);
+        let json = serde_json::to_string(&ex).expect("直列化できる");
+        assert!(json.ends_with(r#","interval_sec":90}"#), "{json}");
+    }
+
+    #[test]
+    fn exercise_writes_a_zero_interval() {
+        // ★ 0 は「未設定」ではない（休まず次のセットへ）。`Option::is_none` で
+        //   落としているので 0 は書かれる。ここを `is_zero` 相当にすると
+        //   スーパーセットの記録が黙って消える
+        let mut ex = ex_of(Vec::new());
+        ex.interval_sec = Some(0);
+        let json = serde_json::to_string(&ex).expect("直列化できる");
+        assert!(json.ends_with(r#","interval_sec":0}"#), "{json}");
+    }
+
+    #[test]
+    fn exercise_reads_json_written_before_the_interval_existed() {
+        // ★ schema を上げずにフィールドを足せる根拠（SCHEMA の doc）。ピンを足したときと
+        //   同じで、旧版が書いた JSON がそのまま読めるので `migrate` は Err を返さない
+        let ex: Exercise = serde_json::from_str(
+            r#"{"id":"000000000001","name":"ベンチプレス","group_id":"000000000002","order":0,"archived":false,"pins":["3"]}"#,
+        )
+        .expect("インターバル以前の形も読める");
+        assert_eq!(ex.interval_sec, None);
+        assert_eq!(ex.pins, vec!["3".to_string()]);
+    }
+
+    #[test]
+    fn max_interval_len_matches_the_cap() {
+        // 上限（値）と入力欄の maxlength（文字数）は単位が違うので別の定数だが、
+        // ずれると「打てるのに保存で丸められる」欄になる
+        assert_eq!(MAX_INTERVAL_SEC.to_string().len(), MAX_INTERVAL_LEN);
     }
 
     // ── トレーニングメニュー（adr/data-model/routines-as-named-exercise-lists.md）──

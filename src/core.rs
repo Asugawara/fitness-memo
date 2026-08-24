@@ -9,8 +9,8 @@ use chrono::{Datelike, NaiveDate, TimeDelta};
 
 use crate::i18n::Lang;
 use crate::model::{
-    Db, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, MAX_PIN_LEN, MAX_PINS, Routine,
-    RoutineId, SCHEMA, Session, SetEntry,
+    Db, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, MAX_INTERVAL_SEC, MAX_PIN_LEN,
+    MAX_PINS, Routine, RoutineId, SCHEMA, Session, SetEntry,
 };
 
 /// `Db::sessions` のキー書式。ゼロ埋め ISO なので辞書順 = 時系列順になる。
@@ -120,6 +120,18 @@ pub fn parse_weight(s: &str) -> f32 {
 /// 入力欄の生文字列 → レップ数。**空欄と 0 は「行なし」として扱う。**
 pub fn parse_reps(s: &str) -> Option<u32> {
     s.trim().parse::<u32>().ok().filter(|r| *r > 0)
+}
+
+/// 入力欄の生文字列 → インターバル（秒）。**空欄は「未設定」。**
+///
+/// ★ [`parse_reps`] と違って **0 を落とさない**。0 秒は「休まず次のセットへ」という
+/// 正当な入力で、`0×0` のゴーストセットのような下流の汚染も無い
+/// （adr/ux/interval-seconds-on-the-exercise.md）。
+///
+/// ★ 上限で丸めない。丸めるのは [`set_interval`] / [`normalize_exercises`] が共有する
+/// [`clean_interval`] の仕事で、ここで別に丸めると規則が 2 本に割れる。
+pub fn parse_interval(s: &str) -> Option<u32> {
+    s.trim().parse::<u32>().ok()
 }
 
 // ── メモ（adr/data-model/notes-on-logs-and-sets.md）──────────────────────────
@@ -1161,7 +1173,8 @@ fn normalize_routines(db: &mut Db, ids: &mut IdGen) {
     }
 }
 
-/// 種目の正規化。いまは [`Exercise::pins`]（マシンのピン）だけを見る。
+/// 種目の正規化。[`Exercise::pins`]（マシンのピン）と
+/// [`Exercise::interval_sec`]（インターバル）を見る。
 ///
 /// ★ ここの `split_whitespace` は**書式の整形ではなく構造の適用**なので、
 /// [`normalize_routines`] の「取り込んだデータを trim しない」規則とは矛盾しない。
@@ -1172,6 +1185,7 @@ fn normalize_routines(db: &mut Db, ids: &mut IdGen) {
 fn normalize_exercises(db: &mut Db) {
     for e in &mut db.exercises {
         e.pins = clean_pins(std::mem::take(&mut e.pins));
+        e.interval_sec = clean_interval(e.interval_sec);
     }
 }
 
@@ -1205,6 +1219,26 @@ pub fn set_pins(db: &mut Db, id: ExerciseId, pins: Vec<String>) {
     }
 }
 
+/// [`normalize_exercises`] と [`set_interval`] が共有する 1 種目ぶんの規則。
+///
+/// ★ [`clean_pins`] と**同じ理由で共有する**。片方だけに上限を書くと「画面から
+/// 打てるのに取り込みで丸められる」「取り込みで残るのに画面で消える」が起きる。
+///
+/// ★ **0 は落とさない。** 0 秒は「休まず次のセットへ」で、`parse_reps` が 0 を
+/// 落とすのとは前提が違う（あちらは `0×0` のゴーストセットが指標を汚すため）。
+fn clean_interval(sec: Option<u32>) -> Option<u32> {
+    sec.map(|s| s.min(MAX_INTERVAL_SEC))
+}
+
+/// 種目のインターバル（秒）を差し替える（記録タブの入力欄から呼ぶ）。
+///
+/// ★ 正規化を `views` 側に持たせない理由は [`set_pins`] と同じ。
+pub fn set_interval(db: &mut Db, id: ExerciseId, sec: Option<u32>) {
+    if let Some(e) = db.exercises.iter_mut().find(|e| e.id == id) {
+        e.interval_sec = clean_interval(sec);
+    }
+}
+
 /// 既存の種目に取り込み側のピンを**空のときだけ**入れる（[`merge_db`] から呼ぶ）。
 ///
 /// ★ これが無いと、新品端末へ書き出しを戻したときに**ピンだけが黙って落ちる**。
@@ -1220,6 +1254,21 @@ pub fn set_pins(db: &mut Db, id: ExerciseId, pins: Vec<String>) {
 fn fill_pins(existing: &mut Exercise, incoming: &Exercise) {
     if existing.pins.is_empty() {
         existing.pins = incoming.pins.clone();
+    }
+}
+
+/// 既存の種目に取り込み側のインターバルを**未設定のときだけ**入れる
+/// （[`merge_db`] から呼ぶ）。
+///
+/// ★ 落とし穴も規則も [`fill_pins`] とまったく同じ。プリセットは固定 ID を持つので
+/// 新品端末への復元は必ず「ID 一致」の枝を通り、そこを直さないと**記録は全部戻るのに
+/// インターバルだけ落ちる**。
+///
+/// ★ 「未設定のときだけ」は `Option::is_none` で見る。`Some(0)` は入っている値なので
+/// 上書きしない（0 秒を明示的に選んだ利用者の入力を、古いファイル 1 枚で巻き戻さない）。
+fn fill_interval(existing: &mut Exercise, incoming: &Exercise) {
+    if existing.interval_sec.is_none() {
+        existing.interval_sec = incoming.interval_sec;
     }
 }
 
@@ -1374,6 +1423,7 @@ fn upgrade_from_sequential(old: legacy::Db, ids: &mut IdGen) -> Db {
                 order: e.order,
                 archived: e.archived,
                 pins: Vec::new(),
+                interval_sec: None,
             })
             .collect(),
         // schema ≤2 にトレーニングメニューは存在しない（`legacy::Db` にフィールドが無い）
@@ -1539,7 +1589,7 @@ pub const TSV_MIME: &str = "text/tab-separated-values";
 
 /// 見出し行（日本語）。**この並びと綴りが外部仕様**なので、テストがバイト一致で
 /// 固定している。**1 文字も変えてはいけない** — 過去に書き出したファイルが読めなくなる。
-const TSV_HEADER_JA: [&str; 13] = [
+const TSV_HEADER_JA: [&str; 14] = [
     "日付",
     "部位",
     "種目",
@@ -1558,6 +1608,9 @@ const TSV_HEADER_JA: [&str; 13] = [
     //   だけ書く（体重・種目メモと同じ「使ったら空にする」）。セル内は半角空白区切りで、
     //   1 要素が空白を含まないことは `normalize_exercises` が保証する
     "ピン",
+    // ★ 同じく後から足した列。ピンと同じ「その種目が最初に現れた行にだけ書く」規則で、
+    //   セルは裸の数字（単位は見出しに入れる — `重量kg` / `体重kg` と同じ流儀）
+    "インターバル秒",
 ];
 
 /// 見出し行（英語）。位置と意味は [`TSV_HEADER_JA`] と 1:1。
@@ -1565,7 +1618,7 @@ const TSV_HEADER_JA: [&str; 13] = [
 /// ★ TSV は版番号を持てないので、**この綴りも足した時点で永久の外部仕様**になる
 /// （adr/storage/tsv-header-follows-the-ui-language.md）。日本語版と同じ強度で
 /// バイト一致テストが固定している。
-const TSV_HEADER_EN: [&str; 13] = [
+const TSV_HEADER_EN: [&str; 14] = [
     "Date",
     "Muscle group",
     "Exercise",
@@ -1579,6 +1632,7 @@ const TSV_HEADER_EN: [&str; 13] = [
     "Time",
     "Routine",
     "Pins",
+    "Interval sec",
 ];
 
 /// 書き出しに使う見出し。**UI の言語に従う。**
@@ -1587,7 +1641,7 @@ const TSV_HEADER_EN: [&str; 13] = [
 /// （adr/storage/tsv-export-for-spreadsheets.md）で、読めない言語の列名はその意義を
 /// 失わせる。取り込み側は [`is_known_header_cell`] のとおり日英どちらも受けるので、
 /// 言語を切り替えても過去のファイルは読める。
-pub fn tsv_header_row(lang: Lang) -> [&'static str; 13] {
+pub fn tsv_header_row(lang: Lang) -> [&'static str; 14] {
     match lang {
         Lang::Ja => TSV_HEADER_JA,
         Lang::En => TSV_HEADER_EN,
@@ -1615,7 +1669,7 @@ fn flatten_cell(s: &str) -> String {
 }
 
 /// 1 行書く。★ 引数 11 個の関数を作らないための入れ物（`clippy::too_many_arguments`）。
-fn push_row(out: &mut String, cells: [&str; 13]) {
+fn push_row(out: &mut String, cells: [&str; 14]) {
     for (i, cell) in cells.iter().enumerate() {
         if i > 0 {
             out.push('\t');
@@ -1671,10 +1725,13 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
         .iter()
         .flat_map(|r| r.exercises.iter().copied())
         .collect();
-    // ピンを書き終えた種目。★ その種目が**ファイル中で最初に現れた行**にだけ書く
-    //   （体重・種目メモの「使ったら空にする」と同じ手）。毎行書くとシートで同じ
-    //   文字列が縦に伸びて読みづらく、行数ぶん容量も増える
-    let mut pins_written: HashSet<ExerciseId> = HashSet::new();
+    // 種目に貼り付く設定（ピン・インターバル）を書き終えた種目。★ その種目が
+    //   **ファイル中で最初に現れた行**にだけ書く（体重・種目メモの「使ったら空にする」と
+    //   同じ手）。毎行書くとシートで同じ文字列が縦に伸びて読みづらく、行数ぶん容量も増える
+    //
+    // ★ ピンとインターバルで集合を分けない。条件が「その種目の初出行」で完全に同じなので、
+    //   2 本持つと片方だけ `insert` を忘れる余地が生まれる（列が増えるたびに増える）
+    let mut ex_meta_written: HashSet<ExerciseId> = HashSet::new();
 
     for (key, session) in &db.sessions {
         let Some(date) = parse_date_key(key) else {
@@ -1704,12 +1761,19 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
             let ex_name = crate::presets::exercise_name(ex.id, &ex.name, lang);
             let time = tsv_time(log.at, date, tz);
             let mut log_note = log.note.as_str();
-            let ex_pins = if pins_written.insert(ex.id) {
+            // ★ 1 回の `insert` でピンとインターバルの両方を決める（`ex_meta_written` の注記）
+            let first_row_of_ex = ex_meta_written.insert(ex.id);
+            let ex_pins = if first_row_of_ex {
                 ex.pins.join(" ")
             } else {
                 String::new()
             };
+            let ex_interval = match (first_row_of_ex, ex.interval_sec) {
+                (true, Some(s)) => s.to_string(),
+                _ => String::new(),
+            };
             let mut pins_cell = ex_pins.as_str();
+            let mut interval_cell = ex_interval.as_str();
 
             if log.sets.is_empty() {
                 // セットが 1 本も無いログ（「肩が痛いのでやめた」）。メモだけの行として残す。
@@ -1717,8 +1781,20 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                 push_row(
                     &mut out,
                     [
-                        key, group, ex_name, "", "", "", day_weight, "", log_note, day_note, &time,
-                        "", pins_cell,
+                        key,
+                        group,
+                        ex_name,
+                        "",
+                        "",
+                        "",
+                        day_weight,
+                        "",
+                        log_note,
+                        day_note,
+                        &time,
+                        "",
+                        pins_cell,
+                        interval_cell,
                     ],
                 );
                 day_weight = "";
@@ -1738,14 +1814,27 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                 push_row(
                     &mut out,
                     [
-                        key, group, ex_name, &no, &w, &reps, day_weight, &set.note, log_note,
-                        day_note, &time, "", pins_cell,
+                        key,
+                        group,
+                        ex_name,
+                        &no,
+                        &w,
+                        &reps,
+                        day_weight,
+                        &set.note,
+                        log_note,
+                        day_note,
+                        &time,
+                        "",
+                        pins_cell,
+                        interval_cell,
                     ],
                 );
                 day_weight = "";
                 day_note = "";
                 log_note = "";
                 pins_cell = "";
+                interval_cell = "";
                 wrote_any = true;
             }
         }
@@ -1755,7 +1844,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
             push_row(
                 &mut out,
                 [
-                    key, "", "", "", "", "", day_weight, "", "", day_note, "", "", "",
+                    key, "", "", "", "", "", day_weight, "", "", day_note, "", "", "", "",
                 ],
             );
         }
@@ -1768,12 +1857,16 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
         }
         // 手つかずのプリセット（名前も ID もそのまま）は書かない。新規インストールに
         // 必ず同じ固定 ID で居るので、書かなくても失われない。
-        // ★ ただしピンを入れた種目は「手つかず」ではない。ここで弾くと、記録もメニューも
-        //   無いプリセットに付けたピンだけが黙って消える
-        if ex.pins.is_empty() && crate::presets::preset_exercise_id(&ex.name) == Some(ex.id) {
+        // ★ ただしピンやインターバルを入れた種目は「手つかず」ではない。ここで弾くと、
+        //   記録もメニューも無いプリセットに付けた設定だけが黙って消える
+        if ex.pins.is_empty()
+            && ex.interval_sec.is_none()
+            && crate::presets::preset_exercise_id(&ex.name) == Some(ex.id)
+        {
             continue;
         }
         let pins = ex.pins.join(" ");
+        let interval = ex.interval_sec.map(|s| s.to_string()).unwrap_or_default();
         let group = db
             .group(ex.group_id)
             .map(|g| crate::presets::group_name(g.id, &g.name, lang))
@@ -1794,6 +1887,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                 "",
                 "",
                 &pins,
+                &interval,
             ],
         );
     }
@@ -1810,6 +1904,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
             [
                 "",
                 crate::presets::group_name(g.id, &g.name, lang),
+                "",
                 "",
                 "",
                 "",
@@ -1841,7 +1936,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
             // 名前だけのメニュー（種目を選ぶ前に閉じた状態）。`migrate` が残すと決めた形
             push_row(
                 &mut out,
-                ["", "", "", "", "", "", "", "", "", "", "", &r.name, ""],
+                ["", "", "", "", "", "", "", "", "", "", "", &r.name, "", ""],
             );
             continue;
         }
@@ -1853,10 +1948,15 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
             };
             no += 1;
             let pos = no.to_string();
-            let pins = if pins_written.insert(ex.id) {
+            let first_row_of_ex = ex_meta_written.insert(ex.id);
+            let pins = if first_row_of_ex {
                 ex.pins.join(" ")
             } else {
                 String::new()
+            };
+            let interval = match (first_row_of_ex, ex.interval_sec) {
+                (true, Some(s)) => s.to_string(),
+                _ => String::new(),
             };
             let group = db
                 .group(ex.group_id)
@@ -1878,6 +1978,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                     "",
                     &r.name,
                     &pins,
+                    &interval,
                 ],
             );
         }
@@ -2013,6 +2114,7 @@ struct TsvCols {
     day_note: Option<usize>,
     routine: Option<usize>,
     pins: Option<usize>,
+    interval: Option<usize>,
 }
 
 /// 見出し行 → 列の対応。知らない列は無視する（形式の進化規則 2）。
@@ -2040,6 +2142,9 @@ fn tsv_header(line: &str) -> Option<TsvCols> {
             "体調メモ" | "Day note" => &mut cols.day_note,
             "メニュー" | "Routine" => &mut cols.routine,
             "ピン" | "Pins" => &mut cols.pins,
+            "インターバル秒" | "インターバル" | "Interval sec" | "Interval" => {
+                &mut cols.interval
+            }
             // 「時刻」/ "Time" は書き出し専用（[`export_tsv`] の doc 参照）。読まない
             _ => continue,
         };
@@ -2207,6 +2312,7 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
                 )
             {
                 take_pins(&mut out, id, at(cols.pins));
+                take_interval(&mut out, id, at(cols.interval));
                 // ★ 重複は初出だけ残す。同じ種目が 2 回入ると展開時にログが 2 本でき、
                 //   「1 日 1 種目 1 ログ」が破れる（`normalize_routines` も同じことをする）
                 if !members.contains(&id) {
@@ -2241,6 +2347,7 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
 
         if let Some(id) = ex_id {
             take_pins(&mut out, id, at(cols.pins));
+            take_interval(&mut out, id, at(cols.interval));
         }
 
         let Some(date) = date else {
@@ -2413,6 +2520,24 @@ fn take_pins(out: &mut Db, id: ExerciseId, cell: &str) {
     }
 }
 
+/// 取り込んだ行の `インターバル秒` 列を `out` の種目へ入れる。**未設定のときだけ**入れる。
+///
+/// ★ 規則は [`take_pins`] とまったく同じ（最初の非空を採る / 上書きしない）。
+///
+/// ★ **読めないセルは黙って無視する。** シートで `1:30` や `90秒` と打ち直された値を
+/// 0 として取り込むと「休まない種目」に化ける。落とすほうが安全で、元の値は
+/// ファイルに残っている。
+fn take_interval(out: &mut Db, id: ExerciseId, cell: &str) {
+    let Some(sec) = parse_interval(cell) else {
+        return;
+    };
+    if let Some(e) = out.exercises.iter_mut().find(|e| e.id == id)
+        && e.interval_sec.is_none()
+    {
+        e.interval_sec = clean_interval(Some(sec));
+    }
+}
+
 /// 部位名 → `GroupId`。引き当てた部位は `out.groups` にも載せる。
 fn resolve_group(
     out: &mut Db,
@@ -2494,6 +2619,7 @@ fn resolve_exercise(
             order: 0,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         }
     };
 
@@ -2702,12 +2828,14 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
                 });
             }
             fill_pins(existing, &e);
+            fill_interval(existing, &e);
             exercise_alias.insert(e.id, e.id);
             continue;
         }
         if let Some(existing) = mine.exercises.iter_mut().find(|x| x.name == e.name) {
             exercise_alias.insert(e.id, existing.id);
             fill_pins(existing, &e);
+            fill_interval(existing, &e);
             report.conflicts.push(Conflict::NameMatched {
                 name: e.name.clone(),
             });
@@ -2963,6 +3091,7 @@ mod tests {
             order: 0,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         }
     }
 
@@ -5294,7 +5423,7 @@ mod tests {
         );
         assert_eq!(
             tsv.lines().next().expect("見出し行"),
-            "日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン"
+            "日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒"
         );
     }
 
@@ -5309,7 +5438,7 @@ mod tests {
         );
         assert_eq!(
             tsv.lines().next().expect("見出し行"),
-            "Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins"
+            "Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec"
         );
     }
 
@@ -5755,6 +5884,7 @@ mod tests {
             order: 99,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
@@ -5788,7 +5918,7 @@ mod tests {
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         assert_eq!(tsv.lines().count(), 2, "改行でレコードが割れている: {tsv}");
         let r = rows(&tsv);
-        assert_eq!(r[1].len(), 13, "タブで列がずれている");
+        assert_eq!(r[1].len(), 14, "タブで列がずれている");
         assert_eq!(r[1][7], "前半 きつい");
         assert_eq!(r[1][8], "1 本目 2 本目");
     }
@@ -6001,6 +6131,7 @@ mod tests {
             order: 99,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         });
 
         let tsv = export_tsv(&mine, jst(), crate::i18n::Lang::Ja);
@@ -6050,6 +6181,7 @@ mod tests {
             order: 9,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         });
 
         let tsv =
@@ -6077,6 +6209,7 @@ mod tests {
             order: 9,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         });
         let chest_bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         let set = |weight, reps| SetEntry {
@@ -6409,6 +6542,27 @@ mod tests {
         assert_eq!(parse_weight(""), 0.0);
     }
 
+    /// ★ `parse_reps` と非対称なのが要点。0 秒は「休まず次のセットへ」で、
+    ///   落とすとスーパーセットの記録が黙って消える。
+    #[test]
+    fn parse_interval_treats_blank_as_unset_and_keeps_zero() {
+        assert_eq!(parse_interval("90"), Some(90));
+        assert_eq!(parse_interval(" 180 "), Some(180));
+        assert_eq!(parse_interval("0"), Some(0), "0 秒は正当な入力");
+        assert_eq!(parse_interval(""), None);
+        assert_eq!(parse_interval("  "), None);
+        assert_eq!(parse_interval("-1"), None);
+        assert_eq!(parse_interval("1.5"), None, "秒は整数");
+        assert_eq!(parse_interval("あ"), None);
+        assert_eq!(parse_interval("1:30"), None, "分:秒 は受けない");
+    }
+
+    /// ★ 丸めるのは `clean_interval` の仕事。ここで丸めると規則が 2 本に割れる。
+    #[test]
+    fn parse_interval_does_not_clamp() {
+        assert_eq!(parse_interval("5000"), Some(5000));
+    }
+
     #[test]
     fn parse_reps_treats_zero_and_blank_as_no_row() {
         assert_eq!(parse_reps("10"), Some(10));
@@ -6538,6 +6692,7 @@ mod tests {
             order: 9,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         });
 
         let raw = export_json(&db);
@@ -6697,6 +6852,7 @@ mod tests {
             order: 9,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         });
         db.sessions.insert(
             date_key(d(2026, 8, 1)),
@@ -6752,6 +6908,7 @@ mod tests {
             order: 9,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         });
         db.sessions.insert(
             date_key(d(2026, 8, 2)),
@@ -6965,6 +7122,7 @@ mod tests {
             order: 9,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         });
         theirs.sessions.insert(
             date_key(d(2026, 9, 9)),
@@ -7096,6 +7254,7 @@ mod tests {
                 order: 9,
                 archived: false,
                 pins: Vec::new(),
+                interval_sec: None,
             });
         }
         theirs.routines.push(Routine {
@@ -7128,6 +7287,7 @@ mod tests {
             order: 9,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         });
         theirs.routines.push(Routine {
             id: r(1),
@@ -7493,6 +7653,7 @@ mod tests {
             order: 9,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         });
 
         // B は同名の種目を**別の ID** で持ち、A に無い日に記録している
@@ -7504,6 +7665,7 @@ mod tests {
             order: 9,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         });
         b.sessions.insert(
             date_key(d(2026, 9, 9)),
@@ -7673,6 +7835,7 @@ mod tests {
             order: 9,
             archived: false,
             pins: Vec::new(),
+            interval_sec: None,
         });
         let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         theirs.exercises.push(Exercise {
@@ -7682,6 +7845,7 @@ mod tests {
             order: 9,
             archived: false,
             pins: vec!["7".into()],
+            interval_sec: None,
         });
 
         merge_db(&mut mine, theirs);
@@ -7826,6 +7990,7 @@ mod tests {
             order: 9,
             archived: false,
             pins: vec!["4".into(), "12".into()],
+            interval_sec: None,
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 
@@ -7876,5 +8041,468 @@ mod tests {
         }
 
         assert_eq!(mine.exercise(bench).expect("種目").pins, ["3", "5"]);
+    }
+
+    // ── インターバル（adr/ux/interval-seconds-on-the-exercise.md）────────────────
+
+    /// 上限は UI の制限ではなく**取り込みの門番**（`clean_pins` の `MAX_PINS` と同じ
+    /// 立場）。取り込んだ JSON には `u32::MAX` が入りうる。
+    #[test]
+    fn normalize_caps_the_interval() {
+        assert_eq!(clean_interval(Some(u32::MAX)), Some(MAX_INTERVAL_SEC));
+        assert_eq!(clean_interval(Some(1000)), Some(MAX_INTERVAL_SEC));
+        assert_eq!(clean_interval(Some(999)), Some(999));
+        assert_eq!(clean_interval(Some(90)), Some(90));
+        assert_eq!(clean_interval(None), None);
+    }
+
+    /// ★ 0 は落とさない。`parse_reps` が 0 を落とすのとは前提が違う（あちらは
+    /// `0×0` のゴーストセットが指標を汚すため）。ここで落とすと「休まず次のセットへ」
+    /// を選んだ利用者の入力が黙って未設定に戻る。
+    #[test]
+    fn normalize_keeps_a_zero_interval() {
+        assert_eq!(clean_interval(Some(0)), Some(0));
+    }
+
+    /// 画面からの書き込み（`set_interval`）と取り込み（`normalize_exercises`）で
+    /// 規則が割れていないこと。`set_pins` と同じ検証。
+    #[test]
+    fn set_interval_normalizes_the_same_way_as_normalize() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+
+        let mut through_ui = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut through_ui, bench, Some(5000));
+
+        let mut through_import = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        if let Some(e) = through_import.exercises.iter_mut().find(|e| e.id == bench) {
+            e.interval_sec = Some(5000);
+        }
+        normalize_exercises(&mut through_import);
+
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").interval_sec,
+            through_import.exercise(bench).expect("種目").interval_sec,
+            "画面からの書き込みと取り込みで規則がずれている"
+        );
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").interval_sec,
+            Some(MAX_INTERVAL_SEC)
+        );
+    }
+
+    /// 空欄まで戻せる（`None` を渡すと未設定に戻る）。戻せないと、間違って打った
+    /// 秒数がカードの薄字に永久に残る。
+    #[test]
+    fn set_interval_can_clear_the_value() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut db, bench, Some(90));
+        set_interval(&mut db, bench, None);
+        assert_eq!(db.exercise(bench).expect("種目").interval_sec, None);
+    }
+
+    /// ★ インターバルを足しても schema は上げない（`model::SCHEMA` の doc）。
+    /// 上げると旧版が `RestoreError::Unsupported` で退避し、前方互換を積極的に壊す
+    /// 側になる（ピンを足したときとまったく同じ理由）。
+    #[test]
+    fn migrate_does_not_bump_the_schema_for_the_interval() {
+        let db = migrate(
+            r#"{"schema":3,"groups":[],"exercises":[{"id":"000000000001","name":"自作マシン","group_id":"000000000002","order":0,"archived":false,"interval_sec":5000}],"sessions":{}}"#,
+            &mut ids(),
+        )
+        .expect("読める");
+
+        assert_eq!(db.schema, SCHEMA);
+        assert_eq!(SCHEMA, 3, "インターバルの追加で schema を上げてはいけない");
+        assert_eq!(
+            db.exercises[0].interval_sec,
+            Some(MAX_INTERVAL_SEC),
+            "migrate が normalize_exercises を通っていない"
+        );
+    }
+
+    /// schema ≤2 のデータからの昇格でも壊れない（フィールドが無いので未設定）。
+    #[test]
+    fn migrate_from_schema_two_leaves_the_interval_unset() {
+        let db = migrate(
+            r##"{"schema":2,"next_id":3,"groups":[{"id":1,"name":"胸","color":"#e0524a","order":0}],"exercises":[{"id":2,"name":"自作マシン","group_id":1,"order":0,"archived":false}],"sessions":{}}"##,
+            &mut ids(),
+        )
+        .expect("読める");
+        assert!(db.exercises.iter().all(|e| e.interval_sec.is_none()));
+    }
+
+    /// ★ **これが落ちると機能そのものが成立しない。** 新品端末への復元は
+    /// 「プリセットは固定 ID を持つので必ず ID 一致する」枝を通るので、そこが
+    /// 取り込み側を見ないと**記録は全部戻るのにインターバルだけ消える**。
+    #[test]
+    fn merge_fills_an_empty_interval_from_the_incoming_db() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut theirs, bench, Some(90));
+
+        merge_db(&mut mine, theirs);
+
+        assert_eq!(
+            mine.exercise(bench).expect("種目").interval_sec,
+            Some(90),
+            "ID 一致の枝でインターバルが落ちた"
+        );
+    }
+
+    /// 名前一致の枝（2 台で別々に作った同名の自作種目）も同じ扱い。
+    #[test]
+    fn merge_fills_an_empty_interval_when_the_exercise_matched_by_name() {
+        let chest = crate::presets::preset_group_id("胸").expect("プリセット");
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        mine.exercises.push(Exercise {
+            id: ExerciseId::from_bits(0xB002),
+            name: "ペックフライ".into(),
+            group_id: chest,
+            order: 9,
+            archived: false,
+            pins: Vec::new(),
+            interval_sec: None,
+        });
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        theirs.exercises.push(Exercise {
+            id: ExerciseId::from_bits(0xC002),
+            name: "ペックフライ".into(),
+            group_id: chest,
+            order: 9,
+            archived: false,
+            pins: Vec::new(),
+            interval_sec: Some(120),
+        });
+
+        merge_db(&mut mine, theirs);
+
+        assert_eq!(
+            mine.exercise(ExerciseId::from_bits(0xB002))
+                .expect("種目")
+                .interval_sec,
+            Some(120),
+            "名前一致の枝でインターバルが落ちた"
+        );
+    }
+
+    /// 取り込みは足すだけ（adr/storage/import-is-merge-only.md）。**手元に値があるなら
+    /// 触らない** — 上書きすると引っ越し先で入れ直した値が古いファイル 1 枚で巻き戻る。
+    #[test]
+    fn merge_never_overwrites_an_interval_that_is_already_set() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut mine, bench, Some(60));
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut theirs, bench, Some(180));
+
+        merge_db(&mut mine, theirs);
+
+        assert_eq!(
+            mine.exercise(bench).expect("種目").interval_sec,
+            Some(60),
+            "取り込みが手元のインターバルを書き換えた"
+        );
+    }
+
+    /// ★ `Some(0)` は「入っている値」。`is_none()` で見ているので上書きされない。
+    /// `unwrap_or(0) == 0` のような判定に変えるとここが落ちる。
+    #[test]
+    fn merge_never_overwrites_a_zero_interval() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut mine, bench, Some(0));
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut theirs, bench, Some(180));
+
+        merge_db(&mut mine, theirs);
+
+        assert_eq!(
+            mine.exercise(bench).expect("種目").interval_sec,
+            Some(0),
+            "0 秒を未設定として扱っている"
+        );
+    }
+
+    /// インターバルの列位置を見出しから引く（テストが列順に依存しないように）。
+    fn interval_col(r: &[Vec<&str>]) -> usize {
+        r[0].iter()
+            .position(|c| *c == "インターバル秒")
+            .expect("インターバル秒列がある")
+    }
+
+    /// ピンと同じ「その種目が最初に現れた行にだけ書く」。毎行書くとシートで同じ
+    /// 数字が縦に伸び、行数ぶん容量も増える。
+    #[test]
+    fn export_tsv_writes_the_interval_only_on_the_first_row_of_an_exercise() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut db, bench, Some(90));
+        db.sessions.insert(
+            date_key(d(2026, 8, 1)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: bench,
+                    sets: vec![
+                        SetEntry {
+                            weight: 60.0,
+                            reps: 10,
+                            note: String::new(),
+                        },
+                        SetEntry {
+                            weight: 60.0,
+                            reps: 8,
+                            note: String::new(),
+                        },
+                    ],
+                    at: None,
+                    note: String::new(),
+                }],
+                ..Session::default()
+            },
+        );
+
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+        let r = rows(&tsv);
+        let col = interval_col(&r);
+        let cells: Vec<&str> = r[1..]
+            .iter()
+            .filter(|row| row[2] == "ベンチプレス")
+            .map(|row| row[col])
+            .collect();
+
+        assert_eq!(
+            cells,
+            ["90", ""],
+            "毎行書いている（または 1 行も書いていない）"
+        );
+    }
+
+    /// ★ ピンと 1 つの `insert` を共有しているので、**両方が同じ行に出る**。
+    /// 集合を 2 本に割ると片方だけ `insert` を忘れる余地が生まれる。
+    #[test]
+    fn export_tsv_writes_the_pins_and_the_interval_on_the_same_row() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_pins(&mut db, bench, vec!["3".into(), "5".into()]);
+        set_interval(&mut db, bench, Some(90));
+
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+        let r = rows(&tsv);
+        let row = r[1..]
+            .iter()
+            .find(|row| row[2] == "ベンチプレス")
+            .expect("種目マスタ行に出る");
+
+        assert_eq!(row[pin_col(&r)], "3 5");
+        assert_eq!(row[interval_col(&r)], "90");
+    }
+
+    /// ★ 手つかずのプリセットを書き出さない規則の穴。記録にもメニューにも出てこない
+    /// 種目にインターバルだけ付けると、種目マスタ行の「プリセットは書かない」で
+    /// 弾かれて**インターバルだけが黙って消える**（ピンとまったく同じ経路）。
+    #[test]
+    fn export_tsv_keeps_a_preset_that_only_has_an_interval() {
+        let squat = crate::presets::preset_exercise_id("スクワット").expect("プリセット");
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut db, squat, Some(180));
+
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+        let r = rows(&tsv);
+        let col = interval_col(&r);
+        let row = r[1..]
+            .iter()
+            .find(|row| row[2] == "スクワット")
+            .expect("インターバルを持つプリセットは種目マスタ行に出る");
+
+        assert_eq!(row[col], "180");
+        assert!(
+            !r[1..].iter().any(|row| row[2] == "デッドリフト"),
+            "インターバルの無いプリセットまで書き出している"
+        );
+    }
+
+    /// ★ 0 秒も書き出す。`String::new()` と `"0"` を混同すると、スーパーセットの
+    /// 設定が機種変更で消える。
+    #[test]
+    fn export_tsv_writes_a_zero_interval() {
+        let squat = crate::presets::preset_exercise_id("スクワット").expect("プリセット");
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut db, squat, Some(0));
+
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+        let r = rows(&tsv);
+        let row = r[1..]
+            .iter()
+            .find(|row| row[2] == "スクワット")
+            .expect("種目マスタ行に出る");
+        assert_eq!(row[interval_col(&r)], "0");
+    }
+
+    /// ★ メニューにだけ入っている種目（記録が 1 日も無い）の経路。`logged` が
+    /// メニューの種目を先に集めるので**種目マスタ行は書かれず**、メニュー行が
+    /// 唯一の運び手になる。ここで `insert` を忘れると、記録の無い種目の設定だけが
+    /// 機種変更で黙って消える。
+    #[test]
+    fn tsv_round_trips_the_interval_for_an_exercise_only_in_a_routine() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_pins(&mut db, bench, vec!["3".into()]);
+        set_interval(&mut db, bench, Some(90));
+        db.routines.push(Routine {
+            id: RoutineId::from_bits(0xE001),
+            name: "胸の日".into(),
+            exercises: vec![bench],
+        });
+
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+        let r = rows(&tsv);
+        // 種目マスタ行は出ず、メニュー行（メニュー列が埋まる行）だけがある
+        let row = exactly_one(r[1..].iter().filter(|row| row[2] == "ベンチプレス"))
+            .expect("ベンチプレスの行はちょうど 1 本");
+        assert_eq!(row[11], "胸の日", "メニュー行ではない");
+        assert_eq!(row[interval_col(&r)], "90");
+        assert_eq!(row[pin_col(&r)], "3");
+
+        let mut fresh = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let incoming = parse_import(&tsv, &mut ids(), &fresh).expect("読み戻せる");
+        merge_db(&mut fresh, incoming);
+
+        assert_eq!(fresh.exercise(bench).expect("種目").interval_sec, Some(90));
+        assert_eq!(fresh.exercise(bench).expect("種目").pins, ["3"]);
+    }
+
+    /// 書き出し → 新品端末へ戻す。**この経路が通らないと機種変更で消える。**
+    #[test]
+    fn tsv_round_trips_the_interval() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut db, bench, Some(90));
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+
+        let mut fresh = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let incoming = parse_import(&tsv, &mut ids(), &fresh).expect("読み戻せる");
+        merge_db(&mut fresh, incoming);
+
+        assert_eq!(
+            fresh.exercise(bench).expect("種目").interval_sec,
+            Some(90),
+            "TSV の往復でインターバルが落ちた"
+        );
+    }
+
+    /// 自作種目でも往復する。ID は取り込み側で採番されるので名前で引き直して見る。
+    #[test]
+    fn tsv_round_trips_the_interval_for_a_custom_exercise() {
+        let chest = crate::presets::preset_group_id("胸").expect("プリセット");
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        db.exercises.push(Exercise {
+            id: ExerciseId::from_bits(0xD002),
+            name: "ペックフライ".into(),
+            group_id: chest,
+            order: 9,
+            archived: false,
+            pins: Vec::new(),
+            interval_sec: Some(75),
+        });
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+
+        let mut fresh = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let incoming = parse_import(&tsv, &mut ids(), &fresh).expect("読み戻せる");
+        merge_db(&mut fresh, incoming);
+
+        let got = fresh
+            .exercises
+            .iter()
+            .find(|e| e.name == "ペックフライ")
+            .expect("自作種目が復活する");
+        assert_eq!(got.interval_sec, Some(75));
+    }
+
+    /// 英語で書き出したファイルを日本語の端末で取り込める（見出しは日英どちらも受ける）。
+    #[test]
+    fn tsv_round_trips_the_interval_across_languages() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut db, bench, Some(90));
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::En);
+
+        let mut fresh = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let incoming = parse_import(&tsv, &mut ids(), &fresh).expect("読み戻せる");
+        merge_db(&mut fresh, incoming);
+
+        assert_eq!(fresh.exercise(bench).expect("種目").interval_sec, Some(90));
+    }
+
+    /// 取り込みは足すだけ。`merge_db` の `fill_interval` と `parse_tsv` の
+    /// `take_interval` の**両方**が上書きしないことを、経路の端から端まで通して見る。
+    #[test]
+    fn tsv_import_does_not_overwrite_a_local_interval() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut theirs, bench, Some(180));
+        let tsv = export_tsv(&theirs, jst(), crate::i18n::Lang::Ja);
+
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut mine, bench, Some(60));
+        let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
+        merge_db(&mut mine, incoming);
+
+        assert_eq!(
+            mine.exercise(bench).expect("種目").interval_sec,
+            Some(60),
+            "取り込みが手元のインターバルを書き換えた"
+        );
+    }
+
+    /// ★ シートで `1:30` や `90秒` と打ち直された値を 0 として取り込まない
+    /// （「休まない種目」に化ける）。読めないセルは黙って無視する。
+    #[test]
+    fn tsv_import_ignores_an_unreadable_interval_cell() {
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let incoming = parse_import(
+            "日付\t部位\t種目\tセット\t重量kg\t回数\tインターバル秒\n2026-08-01\t胸\tベンチプレス\t1\t60\t10\t1:30\n",
+            &mut ids(),
+            &mine,
+        )
+        .expect("読み戻せる");
+        merge_db(&mut mine, incoming);
+
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        assert_eq!(
+            mine.exercise(bench).expect("種目").interval_sec,
+            None,
+            "読めない値を 0 秒として取り込んでいる"
+        );
+    }
+
+    /// インターバル列を持たない古いファイルも今までどおり読める（進化規則 3）。
+    #[test]
+    fn tsv_import_reads_a_file_written_before_the_interval_column() {
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let incoming = parse_import(
+            "日付\t部位\t種目\tセット\t重量kg\t回数\n2026-08-01\t胸\tベンチプレス\t1\t60\t10\n",
+            &mut ids(),
+            &mine,
+        )
+        .expect("インターバル列より前しか無い TSV も読める");
+        assert!(incoming.exercises.iter().all(|e| e.interval_sec.is_none()));
+    }
+
+    #[test]
+    fn importing_the_same_tsv_twice_keeps_the_interval_unchanged() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_interval(&mut db, bench, Some(90));
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        for _ in 0..2 {
+            let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
+            merge_db(&mut mine, incoming);
+        }
+
+        assert_eq!(mine.exercise(bench).expect("種目").interval_sec, Some(90));
     }
 }

@@ -237,6 +237,7 @@ pub fn seed(db: &mut Db, lang: Lang) {
                 order,
                 archived: false,
                 pins: Vec::new(),
+                interval_sec: None,
             });
         }
     }

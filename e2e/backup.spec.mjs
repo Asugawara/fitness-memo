@@ -109,7 +109,7 @@ test('書き出しは共有シートに files だけを .tsv で渡す', async (
   expect(shared.type).toBe(TSV_MIME);
   // 見出しは外部仕様（cargo test がバイト一致で固定しているのと同じ並び）
   expect(shared.text.split('\n')[0]).toBe(
-    '日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン',
+    '日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒',
   );
   // 保存形式は JSON のまま（書き出し形式とは別。adr/storage/tsv-export-for-spreadsheets.md）
   const stored = await page.evaluate((k) => localStorage.getItem(k), KEY);
@@ -186,6 +186,40 @@ test('ピンは TSV に載り、読み戻すと復活する', async ({ page }) =
     .map((r) => r.split('\t')[col]);
   expect(cells[0]).toBe('3 5 2');
   expect(cells.slice(1).every((c) => c === '')).toBe(true);
+});
+
+// ★ インターバル（adr/ux/interval-seconds-on-the-exercise.md）も同じ理由で TSV に載る。
+//   書かないと機種変更で秒数だけ消える。ピンと**同じ行**に出ること（書き出し側が
+//   1 つの `insert` で両方を決めている）もここで見る。
+test('インターバルは TSV に載り、読み戻すと復活する', async ({ page }) => {
+  await stubShare(page);
+  await openSheet(page);
+
+  await importFile(
+    page,
+    '日付\t部位\t種目\tセット\t重量kg\t回数\tピン\tインターバル秒\n' +
+      '2026-08-01\t胸\tベンチプレス\t1\t60\t10\t3 5\t90\n',
+  );
+  await page.getByTestId('backup-apply').click();
+  await expect(page.getByTestId('backup-note')).toContainText('取り込みました');
+
+  const saved = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), KEY);
+  expect(saved.exercises.find((e) => e.name === 'ベンチプレス').interval_sec).toBe(90);
+
+  await page.getByTestId('backup-export').click();
+  await page.waitForFunction(() => !!window.__shared);
+  const tsv = await page.evaluate(() => window.__shared.text);
+
+  const [header, ...rows] = tsv.split('\n');
+  const cols = header.split('\t');
+  const pinCol = cols.indexOf('ピン');
+  const col = cols.indexOf('インターバル秒');
+  expect(col, '見出しにインターバル秒列が無い').toBeGreaterThan(-1);
+  const bench = rows.filter((r) => r.split('\t')[2] === 'ベンチプレス').map((r) => r.split('\t'));
+  // その種目が最初に現れた行にだけ書く。ピンと同じ行に出る
+  expect(bench[0][col]).toBe('90');
+  expect(bench[0][pinCol]).toBe('3 5');
+  expect(bench.slice(1).every((r) => r[col] === '')).toBe(true);
 });
 
 // ── 取り込み ────────────────────────────────────────────────────────────────

@@ -695,7 +695,8 @@ h3 {
    ★ 削除の ✕ は `.icon-btn` の 44px のまま縮めない。静かにするのは色と文字
      サイズだけで、当たり判定ではない
      （adr/ux/destructive-affordance-quiet-at-rest.md）。 */
-.pin-num {
+.pin-num,
+.interval-num {
   width: 2.9em;
   min-height: 44px;
   padding: 4px 8px;
@@ -715,6 +716,33 @@ h3 {
   min-width: 44px;
   color: var(--muted);
 }
+
+/* ── インターバル（adr/ux/interval-seconds-on-the-exercise.md）───────────────
+   ピンの真下に置く。値の性質（種目に貼り付く設定）が同じなので、寸法もトークンも
+   `.pin-*` と揃える — 段が変わると「その日のメモ」と同じ列に見えてしまう。
+   ★ 薄さを opacity で作らない。非テキストの 3:1 を割り、ダークで消える
+     （`.pin-read` / `.ex-note-read` と同じ規則。e2e が opacity: 1 で固定している）。 */
+.interval-read {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ラベル・入力欄・単位の 1 行。`.pin-box` と同値だが、あちらはチップが折り返す前提の
+   flex-wrap を持つ。こちらは 3 要素固定なので折り返さない。 */
+.interval-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* 入力欄そのものは `.pin-num` とセレクタを共有している（同じ見た目の同じ部品）。
+   単位の「秒」はラベルと同じ --muted / 13px を継ぐので専用ルールは持たない。
+   ★ gap は `.pin-box` の列間 10px と同値。数値と「秒」が詰まって
+     「90秒」という 1 トークンに見えると、入力欄の縁が読めなくなる。 */
 
 .card-foot {
   display: flex;

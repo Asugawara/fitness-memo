@@ -78,7 +78,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 
 | タイトル | 状態 |
 |---|---|
-| [「前回をコピー」はセットが空のときだけ出す](ux/copy-button-only-when-empty.md) | 採用 |
+| [「前回をコピー」はセットが空のときだけ出す](ux/copy-button-only-when-empty.md) | 採用（「前回 —」の表記は [前回までの記録を日付で出し、何回分出すかを表示設定にする](ux/past-records-by-date-with-a-count-setting.md) で改訂。コピーの挙動は変わらない） |
 | [トレ前情報とトレ中情報を排他表示にする](ux/pre-workout-and-in-workout-exclusive.md) | 置換済み → [記録タブをカレンダー + 選択日エディタの単一画面にする](ux/record-tab-calendar-with-day-editor.md) |
 | [数値入力に `type="number"` を使わない](ux/text-input-not-number.md) | 採用 |
 | [カレンダーの空日からも記録を追加できるようにする](ux/calendar-add-from-empty-day.md) | 採用（導線は [記録タブをカレンダー + 選択日エディタの単一画面にする](ux/record-tab-calendar-with-day-editor.md) で改訂） |
@@ -108,6 +108,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [言語はブラウザに従い、選んだらそれを優先する](ux/language-follows-the-browser-then-the-setting.md) | 採用 |
 | [プリセット名は表示時に言語へ追従させ、改名したものだけ据え置く](ux/preset-names-follow-the-ui-language.md) | 採用 |
 | [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](ux/interval-seconds-on-the-exercise.md) | 採用 |
+| [前回までの記録を日付で出し、何回分出すかを表示設定にする](ux/past-records-by-date-with-a-count-setting.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

@@ -34,7 +34,8 @@ use super::icon::{self, icon};
 use super::routine::{RoutineEditor, routine_exercise_names};
 use super::{
     SettingsPage, Sheet, cur_lang, ex_name, grp_name, kb_blur, kb_focus,
-    scroll_into_view_if_needed, t, use_db, use_kb, use_lang, use_open_group, use_settings_page,
+    scroll_into_view_if_needed, t, use_db, use_history_count, use_kb, use_lang, use_open_group,
+    use_settings_page,
 };
 
 /// 部位を追加するときの既定色。プリセットの 6 色を順に回す。
@@ -287,6 +288,7 @@ pub fn Settings() -> impl IntoView {
     //   言語シグナルは購読しない — 切り替えの反映は `App` が画面ごと作り直して起こす
     let t = t();
     let lang = use_lang();
+    let hist = use_history_count();
     let db = use_db();
     let editor: RwSignal<Option<Editor>> = RwSignal::new(None);
     let backup_open = RwSignal::new(false);
@@ -372,6 +374,23 @@ pub fn Settings() -> impl IntoView {
                                 "settings-row-exercises",
                                 move || go(SettingsPage::Exercises),
                             )}
+                            // ★ 表示の好みなので、データ（メニュー / 種目）の後・
+                            //   常設導線（ホーム画面追加）と言語の前。並びは探しに来る頻度順で、
+                            //   これは言語より高くバックアップ / 種目より低い
+                            //   （adr/ux/past-records-by-date-with-a-count-setting.md）
+                            // ★ 右端は件数ではなく現在値。ただし素の数字だと「種目 28」と
+                            //   同じ件数に見えるので単位を付ける（言語行の endonym と同じで、
+                            //   行の値とセグメントのラベルに**同じ関数**を使う）
+                            {section_row(
+                                t.settings.row_history,
+                                Some(
+                                    Signal::derive(move || {
+                                        cur_lang().n_past_sessions(hist.get())
+                                    }),
+                                ),
+                                "settings-row-history",
+                                move || go(SettingsPage::History),
+                            )}
                             // 手順シートを開くだけなので、節ではなく行として並べる
                             <InstallHelpLink />
                             // ★ 末尾に置く。先頭はデータを失う前に見つけてもらう必要がある
@@ -433,6 +452,54 @@ pub fn Settings() -> impl IntoView {
 
                         <p class="settings-note muted" data-testid="lang-note">
                             {t.settings.language_note}
+                        </p>
+                    }
+                        .into_any()
+                }
+                SettingsPage::History => {
+                    // 言語ページと同じ形（同値ガード → 保存 → シグナル）。
+                    //
+                    // ★ 同値ガードの効き目はこちらでは「無駄な localStorage 書き込みを
+                    //   飛ばす」こと。言語と違って画面の作り直しは起きない
+                    //   （文言を差し替えないので）
+                    let pick = move |n: usize| {
+                        if hist.get_untracked() == n {
+                            return;
+                        }
+                        storage::save_history(n);
+                        hist.set(n);
+                    };
+                    view! {
+                        {back_head(t.settings.row_history, move || go(SettingsPage::Root))}
+
+                        // ★ 言語ページ / 推移タブと同じ `.segmented`。`.seg-btn { flex: 1 }`
+                        //   なので 3 等分は無調整（推移タブの期間が 5 択で成立している）
+                        <div
+                            class="segmented"
+                            role="group"
+                            aria-label=t.settings.row_history
+                            data-testid="history-select"
+                        >
+                            {(1..=crate::core::MAX_HISTORY)
+                                .map(|n| {
+                                    view! {
+                                        <button
+                                            class="seg-btn"
+                                            class:active=move || hist.get() == n
+                                            aria-pressed=move || (hist.get() == n).to_string()
+                                            data-testid="history-btn"
+                                            data-count=n
+                                            on:click=move |_| pick(n)
+                                        >
+                                            {cur_lang().n_past_sessions(n)}
+                                        </button>
+                                    }
+                                })
+                                .collect::<Vec<_>>()}
+                        </div>
+
+                        <p class="settings-note muted" data-testid="history-note">
+                            {t.settings.history_note}
                         </p>
                     }
                         .into_any()

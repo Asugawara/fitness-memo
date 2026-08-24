@@ -489,22 +489,45 @@ h3 {
   color: var(--muted);
 }
 
-.last-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
+/* ★ **3 列を全エントリで揃える。** 日付は "8/3 (月)" と "8/17 (月)" で幅が違うので、
+   エントリごとに flex で組むとセット列の開始位置が行ごとにずれ、
+   **縦に数字を読む**という履歴の目的が崩れる（日付表記にしたのはそのためだった）。
+   列の実体を親が 1 つ持ち、各エントリは subgrid でそれを借りる。
+   ★ subgrid は Baseline widely available（Safari 16 / Chrome 117）なので
+   フォールバックを持たない（adr/architecture/browser-support-policy.md）。
+   ★ row-gap で行間を作るので `.last-row` 側に margin を持たせない。
+   gap は「間だけ」に入るので、件数 1（既定）のときは 1px も増えない */
+.last-rows {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content;
+  row-gap: 8px;
   margin-top: 4px;
+}
+
+.last-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: baseline;
+  column-gap: 10px;
   font-size: 12px;
   color: var(--muted);
+}
+
+/* ★ 日付は**左**を揃える（右揃えにするとブロックの左端がぎざぎざになる）。
+   桁数のぶんの差は日付列の右側に出て、セット列の開始位置は動かない */
+.last-row .when {
+  font-variant-numeric: tabular-nums;
 }
 
 .last-row .sets {
   font-variant-numeric: tabular-nums;
 }
 
+/* 指標は右端で**桁を揃える**。列幅は max-content なので、揃えるには終端寄せが要る */
 .last-row .metric {
-  margin-left: auto;
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
 }
 
 .copy {
@@ -695,7 +718,8 @@ h3 {
    ★ 削除の ✕ は `.icon-btn` の 44px のまま縮めない。静かにするのは色と文字
      サイズだけで、当たり判定ではない
      （adr/ux/destructive-affordance-quiet-at-rest.md）。 */
-.pin-num {
+.pin-num,
+.interval-num {
   width: 2.9em;
   min-height: 44px;
   padding: 4px 8px;
@@ -715,6 +739,33 @@ h3 {
   min-width: 44px;
   color: var(--muted);
 }
+
+/* ── インターバル（adr/ux/interval-seconds-on-the-exercise.md）───────────────
+   ピンの真下に置く。値の性質（種目に貼り付く設定）が同じなので、寸法もトークンも
+   `.pin-*` と揃える — 段が変わると「その日のメモ」と同じ列に見えてしまう。
+   ★ 薄さを opacity で作らない。非テキストの 3:1 を割り、ダークで消える
+     （`.pin-read` / `.ex-note-read` と同じ規則。e2e が opacity: 1 で固定している）。 */
+.interval-read {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ラベル・入力欄・単位の 1 行。`.pin-box` と同値だが、あちらはチップが折り返す前提の
+   flex-wrap を持つ。こちらは 3 要素固定なので折り返さない。 */
+.interval-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* 入力欄そのものは `.pin-num` とセレクタを共有している（同じ見た目の同じ部品）。
+   単位の「秒」はラベルと同じ --muted / 13px を継ぐので専用ルールは持たない。
+   ★ gap は `.pin-box` の列間 10px と同値。数値と「秒」が詰まって
+     「90秒」という 1 トークンに見えると、入力欄の縁が読めなくなる。 */
 
 .card-foot {
   display: flex;

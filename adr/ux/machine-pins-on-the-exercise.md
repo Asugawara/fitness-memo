@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-19
 - **カテゴリ**: ux
-- **関連**: [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（入口を共有する相手）, [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md)（スコープの対比）, [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [数値入力に `type="number"` を使わない](text-input-not-number.md), [表計算で開ける TSV で書き出す](../storage/tsv-export-for-spreadsheets.md), [取り込みは「足すだけ」に固定する](../storage/import-is-merge-only.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（住み分けの相手）
+- **関連**: [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（入口を共有する相手）, [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md)（スコープの対比）, [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [数値入力に `type="number"` を使わない](text-input-not-number.md), [表計算で開ける TSV で書き出す](../storage/tsv-export-for-spreadsheets.md), [取り込みは「足すだけ」に固定する](../storage/import-is-merge-only.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（住み分けの相手）, [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](interval-seconds-on-the-exercise.md)（この ADR の制約と作法をそのまま継いだ隣人）
 
 ## 背景
 
@@ -80,6 +80,8 @@ pub pins: Vec<String>,
 
 **その種目がファイル中で最初に現れた行にだけ書く**（体重・種目メモの「使ったら空にする」と同じ手）。毎行書くとシートで同じ文字列が縦に伸び、行数ぶん容量も増える。
 
+> **補足（[インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](interval-seconds-on-the-exercise.md) で採り直した）**: 書き終えた種目を覚える `HashSet` を `pins_written` から **`ex_meta_written` に改名し、インターバル列と共有した**。条件（「その種目の初出行」）が完全に同じなので集合を 2 本持つと片方だけ `insert` を忘れる余地が生まれる。**この決定の内容は 1 つも変わっていない。**
+
 種目マスタ行の「手つかずのプリセットは書かない」判定に `pins.is_empty()` を足した。**足さないと、記録にもメニューにも出てこないプリセットに付けたピンだけが黙って消える。**
 
 ### 8. 取り込みは上書きしない / 空なら埋める
@@ -110,7 +112,7 @@ pub pins: Vec<String>,
 
 **iOS のテンキーから英字ラベルは打てない。** `inputmode="decimal"` なので `A` / `赤` は画面から入力できない。型が `String` なのは**取り込んだ値を落とさない**ためで、キーボードは 99% を占める数字の速度に倒した。
 
-**ピンとメモの両方があるカードは 12px 薄字が 2 行並ぶ。** ラベルの有無で読み分けるが、同 ADR 決定 4 が避けた「トークンが同一な行の連続」に片足を踏んでいる。
+**ピンとメモの両方があるカードは 12px 薄字が 2 行並ぶ。** ラベルの有無で読み分けるが、同 ADR 決定 4 が避けた「トークンが同一な行の連続」に片足を踏んでいる。**→ [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](interval-seconds-on-the-exercise.md) で 3 行になりうる**（ピン / インターバル / メモ）。読み分けの手はラベルのまま増やしていない。
 
 **TSV が 13 列になる。** 既存のシートで列幅や数式の範囲を設定していた人は作り直しになる。
 

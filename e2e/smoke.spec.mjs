@@ -2426,7 +2426,7 @@ test('メニューに履歴の無い種目が入っていても、空のカー�
   const cards = page.getByTestId('exercise-card');
   await expect(cards).toHaveCount(2);
   await expect(cards.nth(1)).toContainText('チェストフライ');
-  await expect(cards.nth(1)).toContainText('前回 —');
+  await expect(cards.nth(1)).toContainText('記録なし');
   // 空の 1 行が出るだけで、値は入らない
   await expect(cards.nth(1).getByTestId('set-row').nth(0).getByTestId('set-reps')).toHaveValue('');
 });
@@ -2778,10 +2778,10 @@ test('★ 設定タブの入口は節の一覧で、中身は入るまで出な�
   await blurActive(page);
   await page.getByTestId('tab-settings').click();
 
-  // トップは 5 行だけ（書き出し / メニュー / 種目 / ホーム画面 / 言語）。
+  // トップは 6 行だけ（書き出し / メニュー / 種目 / 表示数 / ホーム画面 / 言語）。
   // 種目もメニューも 1 件も出ていない
   // （`.row` で数える。手順シートの <dialog> も同じ親に出るので `> *` だと 1 多くなる）
-  await expect(page.getByTestId('settings-rows').locator('.row')).toHaveCount(5);
+  await expect(page.getByTestId('settings-rows').locator('.row')).toHaveCount(6);
   await expect(page.getByTestId('group-item')).toHaveCount(0);
   await expect(page.getByTestId('routine-item')).toHaveCount(0);
   await expect(page.getByTestId('settings-add-group')).toHaveCount(0);

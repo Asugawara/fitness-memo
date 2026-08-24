@@ -15,7 +15,8 @@ use web_sys::PointerEvent;
 use crate::core;
 use crate::core::Metric;
 use crate::model::{
-    Db, ExerciseId, ExerciseLog, GroupId, MAX_PIN_LEN, MAX_PINS, RoutineId, SetEntry,
+    Db, ExerciseId, ExerciseLog, GroupId, MAX_INTERVAL_LEN, MAX_PIN_LEN, MAX_PINS, RoutineId,
+    SetEntry,
 };
 use crate::reorder;
 
@@ -26,7 +27,8 @@ use super::drag::{
 use super::icon::{self, icon};
 use super::{
     Sheet, cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, fmt_weight, grp_name, kb_blur,
-    kb_focus, now_ms, parse_reps, parse_weight, scroll_to_id, t, use_dates, use_db, use_kb,
+    kb_focus, now_ms, parse_reps, parse_weight, scroll_to_id, t, use_dates, use_db,
+    use_history_count, use_kb,
 };
 
 /// 選択日に並べているカード 1 枚。
@@ -801,6 +803,7 @@ fn ExerciseCard(
     let db = use_db();
     let dates = use_dates();
     let kb = use_kb();
+    let history_count = use_history_count();
 
     // Memo にするのは「値が変わったときだけ」下流を再描画させるため。
     // 素の closure だと db が動くたびに構造ごと作り直され、入力中の文字列が消える
@@ -818,9 +821,23 @@ fn ExerciseCard(
         .unwrap_or_default()
     });
 
-    let last = Memo::new(move |_| {
+    // 種目カードに出す過去の記録。**新しい順で、先頭が「前回」。**
+    // 件数は利用者の表示設定（既定 1 = 従来どおり前回だけ）。
+    //
+    // ★ **「前回」1 件しか見ない判断は必ず `first()` を通す**（`show_copy` /
+    //   `uses_weight` / `copy_last`）。`iter()` を回すと**表示件数という表示設定が、
+    //   コピーの中身と「重量未入力」の出方まで変えてしまう** — 加重懸垂を 3 週間前に
+    //   1 度だけやった人が、件数を 3 にした途端に自重懸垂の全行へ警告が出る。
+    //   件数が 0 にならないこと（`core::history_count` の不変条件）がこの式の前提
+    let history = Memo::new(move |_| {
         let before = dates.selected.get();
-        db.with(|d| core::last_log_before(d, ex, before).map(|(date, l)| (date, l.clone())))
+        let n = history_count.get();
+        db.with(|d| {
+            core::last_logs_before(d, ex, before, n)
+                .into_iter()
+                .map(|(date, l)| (date, l.clone()))
+                .collect::<Vec<_>>()
+        })
     });
 
     // ★「前回をコピー」はその種目の今日のセットが空のときだけ出す。
@@ -828,7 +845,7 @@ fn ExerciseCard(
     //   必要性がまとめて消える
     let show_copy = Memo::new(move |_| {
         let key = core::date_key(dates.selected.get());
-        last.with(|l| l.is_some())
+        history.with(|h| !h.is_empty())
             && db.with(|d| {
                 d.sessions
                     .get(&key)
@@ -919,6 +936,21 @@ fn ExerciseCard(
     let pins =
         Memo::new(move |_| db.with(|d| d.exercise(ex).map(|e| e.pins.clone()).unwrap_or_default()));
 
+    // ── インターバル（adr/ux/interval-seconds-on-the-exercise.md）────────────────
+    //
+    // ★ ピンとまったく同じ持ち方。**種目に紐づく永続設定**なので `db.exercises` から
+    //   読み、編集中はローカル signal に文字列で持つ（`u32` では空欄が表現できず、
+    //   `db` を直接読む生クロージャでは 1 文字打つたびに入力中の文字が消える）。
+    let interval0: String = db.with_untracked(|d| {
+        d.exercise(ex)
+            .and_then(|e| e.interval_sec)
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    });
+    let interval_text = RwSignal::new(interval0);
+    // 閉じているときに薄字で出す値。**保存済みのものだけ**なので `db` から引く
+    let interval = Memo::new(move |_| db.with(|d| d.exercise(ex).and_then(|e| e.interval_sec)));
+
     // ★ この種目が普段「重量を使う」種目かを**実データから**判定する。
     //
     // 旧実装は `Kind::Weighted` で判定していたが `Kind` は無くなった。単に
@@ -929,8 +961,10 @@ fn ExerciseCard(
     //
     // 前回ログか、この日の他の行に重量が入っていれば「重量を使う種目」とみなす。
     let uses_weight = Memo::new(move |_| {
-        last.with(|l| {
-            l.as_ref()
+        // ★ `first()`（= 前回）だけを見る。`iter().any(..)` にすると表示件数を
+        //   増やしたとたんに、もう何週間も自重でやっている種目へ警告が戻ってくる
+        history.with(|h| {
+            h.first()
                 .is_some_and(|(_, log)| log.sets.iter().any(|s| s.weight > 0.0))
         }) || rows.with(|rs| rs.iter().any(|r| parse_weight(&r.weight) > 0.0))
     });
@@ -997,6 +1031,14 @@ fn ExerciseCard(
         commit_pins();
     };
 
+    // ★ 正規化（上限の丸め）は `core::set_interval` に委ねる。パースだけは
+    //   `core::parse_interval` を通す（`views/*` に unit test が無いので、規則を
+    //   ここに書くと `normalize_exercises` とずれても気づけない）。
+    let commit_interval = move || {
+        let sec = interval_text.with_untracked(|s| core::parse_interval(s));
+        db.update(|d| core::set_interval(d, ex, sec));
+    };
+
     let fresh_key = move || {
         let key = next_key.get_untracked();
         next_key.set(key + 1);
@@ -1057,7 +1099,9 @@ fn ExerciseCard(
     };
 
     let copy_last = move |_| {
-        let Some((_, log)) = last.get_untracked() else {
+        // ★ 表示件数がいくつでも**先頭 1 件（= 前回）だけ**を流し込む。
+        //   「どれがコピーされたか」が件数で変わってはいけない
+        let Some((_, log)) = history.with_untracked(|h| h.first().cloned()) else {
             return;
         };
         // ★ 新しいキーを振る。既存キーを再利用すると <For> が DOM を作り直さないため
@@ -1331,21 +1375,46 @@ fn ExerciseCard(
                 <span class="group-name">{move || group_name.get()}</span>
             </header>
 
-            <div class="last-row">
-                {move || match last.get() {
-                    None => view! { <span class="muted" data-testid="last-log">{t().day.no_last_log}</span> }.into_any(),
-                    Some((date, log)) => {
-                        let days = (dates.selected.get() - date).num_days();
-                        let when = core::humanize_days(days, cur_lang());
-                        let sets = log.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  ");
-                        let metric = fmt_metric(core::log_value(Metric::Volume, &log));
-                        view! {
-                            <span class="when" data-testid="last-log">{cur_lang().last_log(&when)}</span>
-                            <span class="sets">{sets}</span>
-                            <span class="metric">{metric}</span>
+            // ★ **相対日数ではなく日付を出す**（adr/ux/past-records-by-date-with-a-count-setting.md）。
+            //   件数が可変になると「前回 / 前々回 / 前々々回」が破綻するし、日付なら
+            //   縦に並べたとき曜日が揃って「毎週水曜」がそのまま読める。
+            //   経過日数はヒーロー（`elapsed`）と部位チップに残っている。
+            // ★ `role="group"` + `aria-label` は 1px も使わずに「これは過去の記録だ」を
+            //   補うため。表記が日付になると、その語が画面から消える
+            <div class="last-rows" role="group" aria-label=t().day.past_records>
+                {move || {
+                    let rows = history.get();
+                    // ★ **空でも .last-row を 1 個描く。** ここを「あるときだけ」に
+                    //   すると、e2e/smoke.spec.mjs の薄字テストが引く
+                    //   `querySelector('.last-row')` が null になって落ちる
+                    if rows.is_empty() {
+                        return view! {
+                            <div class="last-row">
+                                <span class="muted" data-testid="last-log">{t().day.no_last_log}</span>
+                            </div>
                         }
-                            .into_any()
+                            .into_any();
                     }
+                    rows.into_iter()
+                        .map(|(date, log)| {
+                            let sets = log.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  ");
+                            let metric = fmt_metric(core::log_value(Metric::Volume, &log));
+                            // ★ **メモは出さない。** 数値を縦に読んで「伸びているか停滞か」を
+                            //   見るための場所なので、自由文が挟まると列が崩れて桁が揃わなくなる。
+                            //   その日のメモはコピーで今日のカードへ運ばれてくる
+                            //   （adr/ux/copy-carries-the-notes.md）
+                            view! {
+                                <div class="last-row" data-testid="last-row">
+                                    <span class="when" data-testid="last-log">
+                                        {fmt_date(date, cur_lang())}
+                                    </span>
+                                    <span class="sets">{sets}</span>
+                                    <span class="metric">{metric}</span>
+                                </div>
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .into_any()
                 }}
             </div>
 
@@ -1702,7 +1771,7 @@ fn ExerciseCard(
                 if note_open.get() {
                     view! {
                         <div class="pin-box" data-testid="pin-box">
-                            <span class="pin-label">"ピン"</span>
+                            <span class="pin-label">{t().day.pins}</span>
                             <For
                                 each=move || pin_rows.get()
                                 key=|r| r.key
@@ -1720,7 +1789,7 @@ fn ExerciseCard(
                                                 pattern="[0-9]*([.,][0-9]*)?"
                                                 maxlength=MAX_PIN_LEN.to_string()
                                                 value=row.value.clone()
-                                                aria-label="ピンの番号"
+                                                aria-label=t().day.pin_value
                                                 data-testid="pin-value"
                                                 on:focusin=move |_| kb_focus(kb)
                                                 on:focusout=move |_| kb_blur(kb)
@@ -1740,7 +1809,7 @@ fn ExerciseCard(
                                             />
                                             <button
                                                 class="icon-btn pin-remove"
-                                                aria-label="このピンを削除"
+                                                aria-label=t().day.pin_delete
                                                 data-testid="pin-remove"
                                                 on:click=move |_| remove_pin(key)
                                             >
@@ -1757,7 +1826,7 @@ fn ExerciseCard(
                                         view! {
                                             <button
                                                 class="link-btn pin-add"
-                                                aria-label="ピンを追加"
+                                                aria-label=t().day.pin_add
                                                 data-testid="pin-add"
                                                 on:click=add_pin
                                             >
@@ -1776,7 +1845,70 @@ fn ExerciseCard(
                         .then(|| {
                             view! {
                                 <p class="pin-read" data-testid="pin-read">
-                                    {move || format!("ピン {}", pins.with(|p| p.join("・")))}
+                                    {move || {
+                                        format!(
+                                            "{} {}",
+                                            t().day.pins,
+                                            pins.with(|p| p.join("・")),
+                                        )
+                                    }}
+                                </p>
+                            }
+                        })
+                        .into_any()
+                }
+            }}
+
+            // ── インターバル ──────────────────────────────────────────────────
+            //
+            // ★ ピンの**下**・種目メモの**上**。読み順が「準備（ピン → インターバル）
+            //   → 観測（メモ）」になる。ピンと同じく**種目に貼り付く設定**なので隣に
+            //   置き、その日のメモとはこの 2 段でスコープが分かれる。
+            //
+            // ★ 入口を増やさない。開閉はピン・種目メモと同じ `note_open` に相乗りする
+            //   ので、**新しい 44px のタップ標的は 0 個**でカードの高さも 1px も増えない
+            //   （`e2e/interval.spec.mjs` が `.card-head button` 0 件 /
+            //   `.card-foot button` 2 個で固定している）。
+            //   adr/ux/interval-seconds-on-the-exercise.md
+            {move || {
+                if note_open.get() {
+                    view! {
+                        <label class="interval-box" data-testid="interval-box">
+                            <span class="interval-label">{t().day.interval}</span>
+                            <input
+                                class="interval-num"
+                                type="text"
+                                // ★ 整数秒なので `pattern` は付けない（回数欄と同じ）。
+                                //   `type="number"` は使わない（中間状態が読めない）:
+                                //   adr/ux/text-input-not-number.md
+                                inputmode="numeric"
+                                maxlength=MAX_INTERVAL_LEN.to_string()
+                                value=interval_text.get_untracked()
+                                data-testid="interval-value"
+                                on:focusin=move |_| kb_focus(kb)
+                                on:focusout=move |_| kb_blur(kb)
+                                on:input=move |ev| {
+                                    interval_text.set(event_target_value(&ev));
+                                    commit_interval();
+                                }
+                            />
+                            <span class="interval-unit">{t().day.interval_unit}</span>
+                        </label>
+                    }
+                        .into_any()
+                } else {
+                    // 閉じていても保存済みの秒数は読める（ピンの `.pin-read` と同じ作法）
+                    interval
+                        .get()
+                        .map(|sec| {
+                            view! {
+                                <p class="interval-read" data-testid="interval-read">
+                                    {format!(
+                                        "{} {}{}",
+                                        t().day.interval,
+                                        sec,
+                                        t().day.interval_unit,
+                                    )}
                                 </p>
                             }
                         })

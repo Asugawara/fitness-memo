@@ -169,6 +169,40 @@ test('言語を切り替えても記録は残る', async ({ page }) => {
   await expect(page.getByTestId('set-reps').first()).toHaveValue('10');
 });
 
+// ★ ピンとインターバルのラベルが英語で出る。ピンの 5 文字列はインターバルを足すまで
+//   `views/day.rs` に日本語でハードコードされていて、英語 UI でも「ピン」と出ていた
+//   （adr/architecture/i18n-hand-rolled-string-table.md の規約違反）。同じ行に並ぶので、
+//   直さないと英語モードで「ピン 3・5 / Interval 90s」と半分日本語になる。
+test('種目に貼り付く設定（ピン・インターバル）のラベルが英語で出る', async ({ page }) => {
+  await boot(page);
+
+  await page.getByTestId('add-exercise').click();
+  await page
+    .getByTestId('add-sheet')
+    .getByTestId('pick-exercise')
+    .filter({ hasText: exactText('Bench Press') })
+    .click();
+
+  const card = page.getByTestId('exercise-card').first();
+  await card.getByTestId('note-toggle').click();
+  await expect(card.locator('.pin-label')).toHaveText('Pins');
+  await expect(card.locator('.interval-label')).toHaveText('Interval');
+  await expect(card.locator('.interval-unit')).toHaveText('s');
+  await expect(card.getByTestId('pin-value').first()).toHaveCount(0);
+
+  await card.getByTestId('pin-add').click();
+  await card.getByTestId('pin-value').fill('3');
+  await card.getByTestId('interval-value').fill('90');
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+
+  // 閉じたときの薄字も英語。単位は "90s"（日本語の「90秒」と 1:1）
+  await card.getByTestId('note-toggle').click();
+  await expect(card.getByTestId('pin-read')).toHaveText('Pins 3');
+  await expect(card.getByTestId('interval-read')).toHaveText('Interval 90s');
+});
+
 test('英語で書き出した TSV は英語の見出しで、日本語の見出しのファイルも取り込める', async ({
   page,
 }) => {
@@ -195,7 +229,7 @@ test('英語で書き出した TSV は英語の見出しで、日本語の見出
     return await f.text();
   });
   expect(tsv.split('\n')[0]).toBe(
-    'Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins',
+    'Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec',
   );
 
   // ★ 過去に日本語で書き出したファイルが、英語に切り替えた端末でも読める。
@@ -224,4 +258,74 @@ test('英語でも取り込めないファイルの理由が英語で出る', as
   //   文言が出ること自体が回帰テストになっている
   await expect(page.getByTestId('backup-note')).toContainText('does not look like a log');
   await expect(page.getByTestId('backup-confirm')).toHaveCount(0);
+});
+
+test('前回までの記録は英語で "Aug 20 (Wed)" の形になり、件数の設定も英語で読める', async ({
+  page,
+}) => {
+  await boot(page);
+
+  // 3 日前にベンチプレスを 1 セット。英語プリセットなので種目名は "Bench Press"
+  await page.evaluate((key) => {
+    const db = JSON.parse(localStorage.getItem(key));
+    const d = new Date();
+    d.setDate(d.getDate() - 3);
+    const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate(),
+    ).padStart(2, '0')}`;
+    const ex = db.exercises.find((e) => e.name === 'Bench Press');
+    db.sessions[k] = {
+      logs: [{ exercise_id: ex.id, sets: [{ weight: 60, reps: 10 }], at: null, note: 'Felt good' }],
+      body_weight: null,
+      note: '',
+    };
+    localStorage.setItem(key, JSON.stringify(db));
+  }, KEY);
+  await page.reload();
+
+  // 設定トップの行。★ 右端は件数ではなく現在値で、単位が付く
+  await page.getByTestId('tab-settings').click();
+  const row = page.getByTestId('settings-row-history');
+  await expect(row).toContainText('Sessions shown');
+  await expect(row, '1 は単数形').toContainText('1 session');
+
+  await row.click();
+  await expect(page.getByTestId('history-note')).toContainText('most recent sessions');
+  await expect(page.getByTestId('history-btn')).toHaveText([
+    '1 session',
+    '2 sessions',
+    '3 sessions',
+  ]);
+  await page.getByTestId('settings-back').click();
+
+  // 記録タブ。★ 英語で 8/20 は使わない（米式 M/D と英式 D/M が見た目で区別できない）
+  await page.getByTestId('tab-record').click();
+  await page.getByTestId('add-exercise').click();
+  await page
+    .getByTestId('add-sheet')
+    .getByTestId('pick-exercise')
+    .filter({ hasText: exactText('Bench Press') })
+    .click();
+
+  const d = new Date();
+  d.setDate(d.getDate() - 3);
+  const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][
+    d.getMonth()
+  ];
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+  await expect(page.getByTestId('last-log')).toHaveText(`${month} ${d.getDate()} (${weekday})`);
+  // メモは履歴に出さない（数値の列を崩さないため）
+  await expect(page.getByTestId('last-row')).not.toContainText('Felt good');
+});
+
+test('記録がまったく無い種目は英語で "No records" と出る', async ({ page }) => {
+  await boot(page);
+  await page.getByTestId('add-exercise').click();
+  await page
+    .getByTestId('add-sheet')
+    .getByTestId('pick-exercise')
+    .filter({ hasText: exactText('Bench Press') })
+    .click();
+
+  await expect(page.getByTestId('last-log')).toHaveText('No records');
 });

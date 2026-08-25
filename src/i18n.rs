@@ -500,12 +500,21 @@ pub struct Progress {
     pub period_all: &'static str,
     /// 記録がまだ 1 件も無い
     pub empty_all: &'static str,
-    /// セレクタ 3 つの `aria-label`
-    pub pick_target: &'static str,
+    /// 指標 / 期間セグメントの `aria-label`
     pub pick_metric: &'static str,
     pub pick_period: &'static str,
-    /// `<optgroup>` の見出し
-    pub optgroup_groups: &'static str,
+    /// 対象セレクタ 2 つの `aria-label`。見えるラベルは置かないのでここだけが頼り
+    pub pick_group: &'static str,
+    pub pick_exercise: &'static str,
+    /// 各セレクタの先頭（絞り込みなし）。
+    ///
+    /// ★ 両方を「すべて」の 1 語にしない。2 つの select が横に並ぶので、
+    ///   同じ語だとどちらの「すべて」か取り違える
+    pub all_groups: &'static str,
+    pub all_exercises: &'static str,
+    /// 部位も種目も選ばれていないときにグラフの代わりに出す案内
+    pub pick_hint: &'static str,
+    /// 種目セレクタの `<optgroup>` の見出し
     pub optgroup_exercises: &'static str,
     pub optgroup_archived: &'static str,
     /// 全期間だけ週単位に落ちることの断り。体重の線が出ているかで文が変わる
@@ -530,10 +539,13 @@ const JA_PROGRESS: Progress = Progress {
     title: "推移",
     period_all: "全期間",
     empty_all: "まだ記録がありません。記録タブで種目を追加すると、ここに推移が出ます",
-    pick_target: "対象",
     pick_metric: "指標",
     pick_period: "期間",
-    optgroup_groups: "部位",
+    pick_group: "部位",
+    pick_exercise: "種目",
+    all_groups: "すべての部位",
+    all_exercises: "すべての種目",
+    pick_hint: "部位か種目を選んでください",
     optgroup_exercises: "種目",
     optgroup_archived: "アーカイブ済み",
     weekly_note: "全期間は週単位で集計しています",
@@ -553,10 +565,13 @@ const EN_PROGRESS: Progress = Progress {
     title: "Progress",
     period_all: "All",
     empty_all: "Nothing recorded yet. Add an exercise on the Record tab and your progress will show up here.",
-    pick_target: "Target",
     pick_metric: "Metric",
     pick_period: "Period",
-    optgroup_groups: "Muscle groups",
+    pick_group: "Muscle group",
+    pick_exercise: "Exercise",
+    all_groups: "All groups",
+    all_exercises: "All exercises",
+    pick_hint: "Pick a muscle group or an exercise.",
     optgroup_exercises: "Exercises",
     optgroup_archived: "Archived",
     weekly_note: "Over all time, figures are grouped by week.",
@@ -1424,5 +1439,33 @@ mod tests {
         assert_eq!(plural(0, "day", "days"), "days");
         assert_eq!(plural(1, "day", "days"), "day");
         assert_eq!(plural(2, "day", "days"), "days");
+    }
+
+    /// 2 つの select は横に並ぶ。先頭の「すべて」が同じ語だと、どちらを
+    /// 触っているのか分からなくなる。ラベルも同様。
+    #[test]
+    fn the_two_progress_selectors_read_apart_in_every_language() {
+        for (lang, _) in Lang::CHOICES {
+            let p = &lang.strings().progress;
+            assert_ne!(p.all_groups, p.all_exercises, "{lang:?} の「すべて」が同語");
+            assert_ne!(p.pick_group, p.pick_exercise, "{lang:?} のラベルが同語");
+        }
+    }
+
+    /// 対象セレクタには見えるラベルが無く、`aria-label` だけが読み上げの頼り。
+    #[test]
+    fn the_progress_selector_labels_are_never_empty() {
+        for (lang, _) in Lang::CHOICES {
+            let p = &lang.strings().progress;
+            for s in [
+                p.pick_group,
+                p.pick_exercise,
+                p.all_groups,
+                p.all_exercises,
+                p.pick_hint,
+            ] {
+                assert!(!s.is_empty(), "{lang:?} に空の文言がある");
+            }
+        }
     }
 }

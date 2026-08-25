@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-08
 - **カテゴリ**: storage
-- **関連**: [localStorage の単一キーに JSON 全体を持つ](localstorage-single-key-json.md), [JSON エクスポート/インポートを v1 に入れない](defer-export-import.md), [保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す](storage-key-per-schema-generation.md), [ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする](../ux/install-guide-banner-and-sheet.md)
+- **関連**: [localStorage の単一キーに JSON 全体を持つ](localstorage-single-key-json.md), [JSON エクスポート/インポートを v1 に入れない](defer-export-import.md), [保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す](storage-key-per-schema-generation.md), [ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする](../ux/install-guide-banner-and-sheet.md), [UI の状態に `Db` の ID を置いてよい条件を決める（寛容な受け口と既定への受け皿）](db-ids-in-ui-state-behind-a-fallback.md)（条件 1 を改訂）
 
 ## 背景
 
@@ -35,7 +35,7 @@ pub fn dismiss_install_hint();
 
 このキーに 3 つの性質を課す。
 
-1. **`Db` を一切参照しない。** ID も日付キーも入れない
+1. **`Db` を一切参照しない。** ID も日付キーも入れない（**この条件は [UI の状態に `Db` の ID を置いてよい条件を決める](db-ids-in-ui-state-behind-a-fallback.md) で改訂した** — 寛容な受け口と既定への受け皿の 2 つを満たす場合に限り ID を置いてよい）
 2. **失われても害がない内容だけを置く。** 読めなければ既定値に戻るだけで済むものに限る
 3. **移行も退避も持たせない。** `LEGACY_KEYS` にも `.bak-` にも関与しない。読めなければ `Default` で始める
 
@@ -51,7 +51,7 @@ pub fn dismiss_install_hint();
 ## 結果（トレードオフ）
 
 - **`localStorage` のキーが 2 本になった。** 「このアプリのデータは 1 キーに全部入っている」と読める [localStorage の単一キーに JSON 全体を持つ](localstorage-single-key-json.md) の記述が、そのままでは正しくなくなった。この ADR からの相互リンクで補っている。
-- **境界の判断を人間が守る必要がある。** 「`Db` を参照しない」「失われても害がない」は型で強制できない。`UiState` に `last_selected_exercise: ExerciseId` のようなフィールドを足した瞬間に前提が崩れる（`Db` から種目が消えたときに宙に浮く）。`src/storage.rs` の該当ブロックにコメントで条件を書いてあるが、レビューで見るしかない。
+- **境界の判断を人間が守る必要がある。** 「`Db` を参照しない」「失われても害がない」は型で強制できない。`UiState` に `last_selected_exercise: ExerciseId` のようなフィールドを足した瞬間に前提が崩れる（`Db` から種目が消えたときに宙に浮く）。`src/storage.rs` の該当ブロックにコメントで条件を書いてあるが、レビューで見るしかない。**この例はのちに [UI の状態に `Db` の ID を置いてよい条件を決める](db-ids-in-ui-state-behind-a-fallback.md) で条件つきの許可に改められた**（推移タブの対象がまさにこの形で、宙に浮いた ID を既定へ寄せ直す受け皿が画面側に元からあった）。見るべき点が「ID を入れていないか」から「受け口が寛容か・受け皿があるか」に変わっただけで、レビューで見るしかないことは変わらない。
 - **エクスポートの対象外になる。** バックアップを取って別端末へ復元しても、UI の状態は移らない。今回の内容（案内を消したか）では望ましい挙動だが、将来「移ってほしい UI 設定」が出てきたらこの置き場では扱えない。
 - **`store()` が使えない環境では機能しない。** Safari のプライベートブラウズでは `local_storage()` が例外を投げるので、✕ を押してもその場で消えるだけで次回また出る。ただしその環境では `Db` も保存されないので、案内が出続けること自体は害にならない。
 - **E2E で「`Db` に混ざっていないこと」を固定した。** `fitness-memo/v2` の JSON に `install_hint` が含まれないことをテストしている。これが無いと、後から誰かが `Db` へ移しても気付けない。

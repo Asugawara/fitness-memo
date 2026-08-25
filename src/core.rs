@@ -820,6 +820,190 @@ pub fn used_exercise_ids(db: &Db) -> Vec<ExerciseId> {
         .collect()
 }
 
+// ── 推移タブの対象（部位 + 種目） ───────────────────────────────────────────
+
+/// 推移タブの対象。**部位と種目を必ず組で持つ。**
+///
+/// ★ 不変条件: `exercise` が `Some` なら `group` は**その種目の所属部位**。
+///   ただし所属部位が `Db` から消えている種目（`migrate` / `merge_db` が
+///   「宙に浮いた参照は宙に浮いたまま残す」ので実在しうる）では `None` になる。
+///   この型のメソッド以外から状態を作らないことで成立させる。
+///
+/// ★ **画面のシグナルを部位・種目の 2 本に分けないための型**でもある。分けると
+///   「部位を変えたら属さない種目を落とす」と「種目を選んだら部位を埋める」が
+///   `Effect` で追随し合って循環する。加えて 2 回の `set` の間に render effect が
+///   走るので、**新しい部位で絞った候補に古い部位の種目が選ばれている**中間状態が
+///   DOM に出る（`<option selected>` がどれにも当たらず、ブラウザが先頭へ落とす）。
+///   組で 1 つにすれば `set` が原子的になり、どちらも定義上ありえなくなる。
+///
+/// 両方 `None`（= どちらも「すべて」）は**グラフを描かない正当な状態**。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Pick {
+    pub group: Option<GroupId>,
+    pub exercise: Option<ExerciseId>,
+}
+
+impl Pick {
+    /// 部位か種目のどちらかが選ばれているか。グラフを出すかどうかの判定に使う。
+    pub fn is_set(self) -> bool {
+        self.group.is_some() || self.exercise.is_some()
+    }
+
+    /// 部位セレクタを操作したときの新しい組。
+    ///
+    /// ★ **その部位に属さない種目は落とす。** `group` が `None`（すべて）なら種目も
+    ///   必ず落ちる。「部位はすべて・種目は懸垂」のように 2 つのセレクタが食い違って
+    ///   見える状態を作らないため（部位の「すべて」は絞り込みの解除ではなくリセット）。
+    pub fn with_group(self, db: &Db, group: Option<GroupId>) -> Pick {
+        let exercise = group.and_then(|g| {
+            self.exercise
+                .filter(|ex| db.exercise(*ex).is_some_and(|e| e.group_id == g))
+        });
+        Pick { group, exercise }
+    }
+
+    /// 種目セレクタを操作したときの新しい組。
+    ///
+    /// ★ **部位はその種目の所属で必ず上書きする**（種目から部位は一意に決まる）。
+    ///   知らない種目 ID（消された種目 / 手で編集された保存値）は「すべて」に落とし、
+    ///   部位だけ残す。`None`（すべて）も同じ腕に落ちる。
+    ///
+    /// ★ **所属部位が `Db` に無ければ `group` は `None`。** 宙に浮いた `group_id` を
+    ///   そのまま入れると、どの `<option>` にも当たらず部位セレクタが黙って先頭
+    ///   （「すべて」）に落ち、`pick` と表示が食い違う。`None` なら表示と一致し、
+    ///   種目リストも絞られない（絞る部位が無いのだから正しい）。
+    pub fn with_exercise(self, db: &Db, exercise: Option<ExerciseId>) -> Pick {
+        match exercise.and_then(|ex| db.exercise(ex)) {
+            Some(e) => Pick {
+                group: db.group(e.group_id).map(|g| g.id),
+                exercise: Some(e.id),
+            },
+            None => Pick {
+                group: self.group,
+                exercise: None,
+            },
+        }
+    }
+
+    /// 保存する文字列の組 `(部位, 種目)`。
+    ///
+    /// ★ `storage` が書く形そのもの。読み戻した生の値と突き合わせて
+    ///   「候補から落ちた ID が保存値に残っていないか」を見るのにも使う。
+    pub fn ids(self) -> (Option<String>, Option<String>) {
+        (
+            self.group.map(|id| id.to_string()),
+            self.exercise.map(|id| id.to_string()),
+        )
+    }
+}
+
+/// 部位の並び順。`order` が同値なら宣言順。**知らない部位は末尾**。
+fn group_rank(db: &Db, g: GroupId) -> (u32, usize) {
+    db.groups
+        .iter()
+        .position(|x| x.id == g)
+        .map_or((u32::MAX, usize::MAX), |i| (db.groups[i].order, i))
+}
+
+/// 推移タブのセレクタに出す種目。**記録がある種目だけ**を、画面と同じ並びで返す。
+///
+/// 並びは 部位の順 → 部位内の `order` → `id`。**アーカイブ済みは末尾**に回す
+/// （記録があるものは消さない — 消すと過去データが参照不能になる）。
+///
+/// ★ 並べ替えを画面側に置かないのは、**既定値の規則（先頭）とセレクタの並びが
+///   2 箇所に分かれる**のを避けるため。片方だけ直すと「既定は先頭の種目」が静かにずれる。
+pub fn progress_candidates(db: &Db) -> Vec<ExerciseId> {
+    let used = used_exercise_ids(db);
+    if used.is_empty() {
+        return Vec::new();
+    }
+    let mut sorted: Vec<&Exercise> = db
+        .exercises
+        .iter()
+        .filter(|e| used.contains(&e.id))
+        .collect();
+    sorted.sort_by_key(|e| (e.archived, group_rank(db, e.group_id), e.order, e.id));
+    sorted.into_iter().map(|e| e.id).collect()
+}
+
+/// 推移タブのセレクタに出す部位。**記録がある種目を 1 つ以上持つ部位だけ**を順に。
+///
+/// ★ アーカイブ済みの種目も数える。その部位を選べば合算に載るので、
+///   セレクタから消すと「グラフには出るのに部位が選べない」食い違いになる。
+pub fn progress_candidate_groups(db: &Db) -> Vec<GroupId> {
+    let used = used_exercise_ids(db);
+    if used.is_empty() {
+        return Vec::new();
+    }
+    let mut groups: Vec<&Group> = db
+        .groups
+        .iter()
+        .filter(|g| {
+            db.exercises
+                .iter()
+                .any(|e| e.group_id == g.id && used.contains(&e.id))
+        })
+        .collect();
+    // db.groups の順で集めたあと安定ソートするので、`order` が同値なら宣言順が残る
+    groups.sort_by_key(|g| g.order);
+    groups.into_iter().map(|g| g.id).collect()
+}
+
+/// 保存が無いときの既定。**記録がある先頭の種目**（部位はその所属で埋まる）。
+///
+/// ★ 部位ではなく種目を既定にするのは、この画面の主眼が種目別の仕事量だから
+///   （改修前の `Options::first` と同じ規則）。記録が 1 件も無ければ両方「すべて」。
+pub fn default_pick(db: &Db) -> Pick {
+    Pick::default().with_exercise(db, progress_candidates(db).first().copied())
+}
+
+/// 保存値 → 実際に使う対象。**必ず候補の中にある組か [`default_pick`] を返す。**
+///
+/// 引数が `Option<&str>` なのは `storage::UiState` の受け口に合わせたもの
+/// （[`history_count`] が `Option<i64>` を受けるのと同じ理由）。JSON にどんな文字列が
+/// 入っていてもパースを落とさず、検証をここ（ホストのテストが届く側）でやる。
+///
+/// ★ **種目が生きていれば種目が勝つ**（部位はその所属で埋め直す）。保存された部位と
+///   食い違っていても種目に寄せる — 部位は種目から一意に決まるので、食い違いは
+///   保存後に種目が別の部位へ移されたことしか意味しない。
+/// ★ **両方「すべて」は既定に倒す。** 案内文だけの画面を復元して見せる価値がない。
+pub fn restore_pick(db: &Db, group: Option<&str>, exercise: Option<&str>) -> Pick {
+    let ex = exercise
+        .and_then(|s| s.parse::<ExerciseId>().ok())
+        .filter(|id| progress_candidates(db).contains(id));
+    if ex.is_some() {
+        return Pick::default().with_exercise(db, ex);
+    }
+    let g = group
+        .and_then(|s| s.parse::<GroupId>().ok())
+        .filter(|id| progress_candidate_groups(db).contains(id));
+    match g {
+        Some(g) => Pick {
+            group: Some(g),
+            exercise: None,
+        },
+        None => default_pick(db),
+    }
+}
+
+/// 選んだ組の推移。種目が入っていればその種目、部位だけならその部位の合算、
+/// どちらも「すべて」なら空。
+///
+/// ★ グラフ側と記録テーブル側で同じ `match` を 2 度書かないための 1 本。
+pub fn pick_series(
+    db: &Db,
+    p: Pick,
+    m: Metric,
+    from: NaiveDate,
+    to: NaiveDate,
+) -> Vec<(NaiveDate, f64)> {
+    match (p.exercise, p.group) {
+        (Some(ex), _) => exercise_series(db, ex, m, from, to),
+        (None, Some(g)) => group_series(db, g, m, from, to),
+        (None, None) => Vec::new(),
+    }
+}
+
 /// 週の始まりは**日曜**（カレンダー画面の 日〜土 グリッドに合わせる）。
 pub fn week_start(d: NaiveDate) -> NaiveDate {
     d - TimeDelta::days(i64::from(d.weekday().num_days_from_sunday()))
@@ -4512,6 +4696,348 @@ mod tests {
         // db.exercises に存在しない ID のログ（通常経路では起きないが、壊れた JSON では有りうる）
         put(&mut db, d(2026, 8, 1), vec![log(999, &[(60.0, 10)], None)]);
         assert!(used_exercise_ids(&db).is_empty());
+    }
+
+    // ── 推移タブの対象（Pick / 候補 / 復元） ────────────────────────────────
+
+    /// 3 部位 3 種目に記録を入れた `test_db`。胸(ベンチ/プッシュアップ) と 体幹(プランク)
+    /// に記録があり、脚は種目が無いので候補に出ない。
+    fn picks_db() -> Db {
+        let mut db = test_db();
+        put(&mut db, d(2026, 8, 1), vec![log(20, &[(0.0, 60)], None)]);
+        put(
+            &mut db,
+            d(2026, 8, 2),
+            vec![log(10, &[(60.0, 10)], None), log(11, &[(0.0, 20)], None)],
+        );
+        db
+    }
+
+    #[test]
+    fn progress_candidates_lists_only_exercises_that_have_records() {
+        let db = test_db();
+        assert!(
+            progress_candidates(&db).is_empty(),
+            "記録が無ければ候補も空"
+        );
+
+        let mut db = db;
+        put(&mut db, d(2026, 8, 2), vec![log(10, &[(60.0, 10)], None)]);
+        // 空セットのログは「使った」に数えない（used_exercise_ids と同じ規則）
+        put(&mut db, d(2026, 8, 3), vec![log(11, &[], None)]);
+        assert_eq!(progress_candidates(&db), vec![e(10)]);
+    }
+
+    #[test]
+    fn progress_candidates_are_ordered_by_group_then_exercise_order() {
+        let mut db = picks_db();
+        // 胸(order 0) の中では order の小さいプッシュアップが先、体幹(order 1) は後ろ
+        db.exercises[0].order = 1; // ベンチプレス
+        db.exercises[1].order = 0; // プッシュアップ
+        assert_eq!(progress_candidates(&db), vec![e(11), e(10), e(20)]);
+    }
+
+    #[test]
+    fn progress_candidates_put_archived_exercises_last() {
+        let mut db = picks_db();
+        // 胸のベンチプレスをアーカイブ。部位の順（胸 → 体幹）より後ろへ回る
+        db.exercises[0].archived = true;
+        assert_eq!(progress_candidates(&db), vec![e(11), e(20), e(10)]);
+    }
+
+    #[test]
+    fn progress_candidate_groups_skip_groups_without_records() {
+        let db = picks_db();
+        // 脚(g3) は種目そのものが無いので出ない
+        assert_eq!(progress_candidate_groups(&db), vec![g(1), g(2)]);
+        assert!(
+            progress_candidate_groups(&test_db()).is_empty(),
+            "記録が無ければ部位も空"
+        );
+    }
+
+    /// アーカイブ済みでも記録があれば部位は選べる。ここが漏れると
+    /// 「グラフには合算で出るのに部位がセレクタに無い」食い違いになる。
+    #[test]
+    fn progress_candidate_groups_count_archived_exercises() {
+        let mut db = picks_db();
+        db.exercises[2].archived = true; // プランク（体幹の唯一の種目）
+        assert!(progress_candidate_groups(&db).contains(&g(2)));
+    }
+
+    #[test]
+    fn default_pick_is_the_first_candidate_exercise_with_its_group() {
+        let db = picks_db();
+        assert_eq!(
+            default_pick(&db),
+            Pick {
+                group: Some(g(1)),
+                exercise: Some(e(10)),
+            }
+        );
+    }
+
+    #[test]
+    fn default_pick_is_empty_when_nothing_is_recorded() {
+        let p = default_pick(&test_db());
+        assert_eq!(p, Pick::default());
+        assert!(!p.is_set(), "両方すべては「選ばれていない」");
+    }
+
+    /// 既定値の規則とセレクタの並びが 2 箇所に分かれていないことを固定する。
+    #[test]
+    fn default_pick_agrees_with_the_head_of_progress_candidates() {
+        let mut db = picks_db();
+        db.exercises[0].archived = true; // 先頭が入れ替わる状況を作る
+        assert_eq!(
+            default_pick(&db).exercise,
+            progress_candidates(&db).first().copied()
+        );
+    }
+
+    #[test]
+    fn picking_an_exercise_fills_in_the_group_it_belongs_to() {
+        let db = picks_db();
+        let p = Pick::default().with_exercise(&db, Some(e(20)));
+        assert_eq!(p.group, Some(g(2)), "プランクの所属は体幹");
+        assert_eq!(p.exercise, Some(e(20)));
+    }
+
+    #[test]
+    fn picking_an_exercise_from_another_group_moves_the_group() {
+        let db = picks_db();
+        let p = default_pick(&db).with_exercise(&db, Some(e(20)));
+        assert_eq!(
+            p,
+            Pick {
+                group: Some(g(2)),
+                exercise: Some(e(20)),
+            }
+        );
+    }
+
+    /// 所属部位が `Db` から消えた種目（`migrate` / `merge_db` が宙に浮いた参照を
+    /// 残すので実在しうる）。部位に入れると、どの `<option>` にも当たらず
+    /// セレクタが黙って「すべて」へ落ちて `Pick` と表示が食い違う。
+    #[test]
+    fn picking_an_exercise_whose_group_is_gone_leaves_the_group_unset() {
+        let mut db = picks_db();
+        db.groups.retain(|x| x.id != g(2)); // 体幹を消す。プランクの group_id が宙に浮く
+        let p = Pick::default().with_exercise(&db, Some(e(20)));
+        assert_eq!(p.group, None, "実在しない部位は入れない");
+        assert_eq!(
+            p.exercise,
+            Some(e(20)),
+            "種目自体は選べる（記録は参照できる）"
+        );
+    }
+
+    /// 宙に浮いた種目も候補には残す。消すと過去データが推移タブから参照不能になる。
+    #[test]
+    fn progress_candidates_keep_an_exercise_whose_group_is_gone() {
+        let mut db = picks_db();
+        db.groups.retain(|x| x.id != g(2));
+        assert!(progress_candidates(&db).contains(&e(20)));
+        assert!(
+            !progress_candidate_groups(&db).contains(&g(2)),
+            "部位のほうは実在しないので出さない"
+        );
+    }
+
+    #[test]
+    fn restore_pick_leaves_the_group_unset_for_an_orphaned_exercise() {
+        let mut db = picks_db();
+        db.groups.retain(|x| x.id != g(2));
+        let p = restore_pick(&db, Some(&g(2).to_string()), Some(&e(20).to_string()));
+        assert_eq!(
+            p,
+            Pick {
+                group: None,
+                exercise: Some(e(20)),
+            }
+        );
+    }
+
+    #[test]
+    fn picking_no_exercise_keeps_the_group() {
+        let db = picks_db();
+        let p = default_pick(&db).with_exercise(&db, None);
+        assert_eq!(p.group, Some(g(1)), "部位は残る（その部位の合算になる）");
+        assert_eq!(p.exercise, None);
+    }
+
+    #[test]
+    fn picking_an_unknown_exercise_falls_back_to_no_exercise() {
+        let db = picks_db();
+        let p = default_pick(&db).with_exercise(&db, Some(e(999)));
+        assert_eq!(p.group, Some(g(1)));
+        assert_eq!(p.exercise, None);
+    }
+
+    #[test]
+    fn switching_the_group_keeps_an_exercise_that_belongs_to_it() {
+        let db = picks_db();
+        let p = default_pick(&db).with_group(&db, Some(g(1)));
+        assert_eq!(p.exercise, Some(e(10)), "同じ部位なら種目は残る");
+    }
+
+    #[test]
+    fn switching_the_group_drops_an_exercise_from_another_group() {
+        let db = picks_db();
+        let p = default_pick(&db).with_group(&db, Some(g(2)));
+        assert_eq!(
+            p,
+            Pick {
+                group: Some(g(2)),
+                exercise: None,
+            },
+            "属さない種目は落ちてその部位の合算になる"
+        );
+    }
+
+    /// 部位の「すべて」は絞り込みの解除ではなくリセット。2 つのセレクタが
+    /// 食い違って見える状態（部位=すべて / 種目=懸垂）を作らない。
+    #[test]
+    fn switching_the_group_to_all_clears_the_exercise() {
+        let db = picks_db();
+        let p = default_pick(&db).with_group(&db, None);
+        assert_eq!(p, Pick::default());
+    }
+
+    #[test]
+    fn restore_pick_returns_the_saved_exercise_and_its_group() {
+        let db = picks_db();
+        let p = restore_pick(&db, Some(&g(2).to_string()), Some(&e(20).to_string()));
+        assert_eq!(
+            p,
+            Pick {
+                group: Some(g(2)),
+                exercise: Some(e(20)),
+            }
+        );
+    }
+
+    #[test]
+    fn restore_pick_keeps_a_group_only_selection() {
+        let db = picks_db();
+        let p = restore_pick(&db, Some(&g(2).to_string()), None);
+        assert_eq!(
+            p,
+            Pick {
+                group: Some(g(2)),
+                exercise: None,
+            }
+        );
+    }
+
+    /// 保存後に種目が別の部位へ移されたときは種目に寄せる（部位は種目から一意）。
+    #[test]
+    fn restore_pick_prefers_the_saved_exercise_over_a_disagreeing_saved_group() {
+        let db = picks_db();
+        let p = restore_pick(&db, Some(&g(2).to_string()), Some(&e(10).to_string()));
+        assert_eq!(p.group, Some(g(1)), "ベンチプレスの所属である胸に寄る");
+        assert_eq!(p.exercise, Some(e(10)));
+    }
+
+    #[test]
+    fn restore_pick_ignores_an_exercise_that_no_longer_has_records() {
+        let db = picks_db();
+        // e(999) は候補に無い。部位だけが残る
+        let p = restore_pick(&db, Some(&g(2).to_string()), Some(&e(999).to_string()));
+        assert_eq!(
+            p,
+            Pick {
+                group: Some(g(2)),
+                exercise: None,
+            }
+        );
+    }
+
+    #[test]
+    fn restore_pick_ignores_a_group_that_no_longer_has_records() {
+        let db = picks_db();
+        // 脚(g3) は候補に無いので既定へ倒れる
+        assert_eq!(
+            restore_pick(&db, Some(&g(3).to_string()), None),
+            default_pick(&db)
+        );
+    }
+
+    /// 手で編集された値・schema 2 以前の数値 ID の残骸が来ても既定に落ちるだけ。
+    /// ここが `Option<String>` で受ける理由（`Id` の deserialize は落ちる）。
+    #[test]
+    fn restore_pick_survives_garbage_in_the_saved_values() {
+        let db = picks_db();
+        for raw in ["", "not-an-id", "7", "zzzzzzzzzzzzz", "0000000000000"] {
+            assert_eq!(
+                restore_pick(&db, Some(raw), Some(raw)),
+                default_pick(&db),
+                "壊れた保存値 {raw:?} は既定へ落ちる"
+            );
+        }
+    }
+
+    /// `ids` で書いた値は `restore_pick` でそのまま戻る。保存と復元が
+    /// 同じ表現を使っていることを 1 本で固定する。
+    #[test]
+    fn a_pick_survives_a_round_trip_through_its_saved_ids() {
+        let db = picks_db();
+        for p in [
+            default_pick(&db),
+            Pick {
+                group: Some(g(2)),
+                exercise: None,
+            },
+            Pick::default().with_exercise(&db, Some(e(20))),
+        ] {
+            let (g_raw, e_raw) = p.ids();
+            assert_eq!(restore_pick(&db, g_raw.as_deref(), e_raw.as_deref()), p);
+        }
+    }
+
+    #[test]
+    fn restore_pick_falls_back_to_the_default_when_nothing_is_saved() {
+        let db = picks_db();
+        assert_eq!(restore_pick(&db, None, None), default_pick(&db));
+    }
+
+    #[test]
+    fn pick_series_uses_the_exercise_when_one_is_chosen() {
+        let db = picks_db();
+        let p = Pick::default().with_exercise(&db, Some(e(10)));
+        assert_eq!(
+            pick_series(&db, p, Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)),
+            exercise_series(&db, e(10), Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)),
+        );
+    }
+
+    #[test]
+    fn pick_series_sums_the_group_when_only_a_group_is_chosen() {
+        let db = picks_db();
+        let p = Pick {
+            group: Some(g(1)),
+            exercise: None,
+        };
+        // 胸は 8/2 にベンチ 60×10 と プッシュアップ 20（重量なし）で 620
+        assert_eq!(
+            pick_series(&db, p, Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)),
+            vec![(d(2026, 8, 2), 620.0)],
+        );
+    }
+
+    #[test]
+    fn pick_series_is_empty_when_nothing_is_chosen() {
+        let db = picks_db();
+        assert!(
+            pick_series(
+                &db,
+                Pick::default(),
+                Metric::Volume,
+                d(2026, 8, 1),
+                d(2026, 8, 2)
+            )
+            .is_empty()
+        );
     }
 
     // ── aggregate_weekly ────────────────────────────────────────────────────

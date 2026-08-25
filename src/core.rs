@@ -877,6 +877,17 @@ impl Pick {
             },
         }
     }
+
+    /// 保存する文字列の組 `(部位, 種目)`。
+    ///
+    /// ★ `storage` が書く形そのもの。読み戻した生の値と突き合わせて
+    ///   「候補から落ちた ID が保存値に残っていないか」を見るのにも使う。
+    pub fn ids(self) -> (Option<String>, Option<String>) {
+        (
+            self.group.map(|id| id.to_string()),
+            self.exercise.map(|id| id.to_string()),
+        )
+    }
 }
 
 /// 部位の並び順。`order` が同値なら宣言順。**知らない部位は末尾**。
@@ -4914,6 +4925,24 @@ mod tests {
                 default_pick(&db),
                 "壊れた保存値 {raw:?} は既定へ落ちる"
             );
+        }
+    }
+
+    /// `ids` で書いた値は `restore_pick` でそのまま戻る。保存と復元が
+    /// 同じ表現を使っていることを 1 本で固定する。
+    #[test]
+    fn a_pick_survives_a_round_trip_through_its_saved_ids() {
+        let db = picks_db();
+        for p in [
+            default_pick(&db),
+            Pick {
+                group: Some(g(2)),
+                exercise: None,
+            },
+            Pick::default().with_exercise(&db, Some(e(20))),
+        ] {
+            let (g_raw, e_raw) = p.ids();
+            assert_eq!(restore_pick(&db, g_raw.as_deref(), e_raw.as_deref()), p);
         }
     }
 

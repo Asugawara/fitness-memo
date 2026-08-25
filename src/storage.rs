@@ -486,8 +486,7 @@ pub fn save_progress_pick(p: core::Pick) {
     };
     // ★ 読んでから該当フィールドだけ差し替える（`save_lang` と同じ理由）
     let mut next = ui_state();
-    next.progress_group = p.group.map(|id| id.to_string());
-    next.progress_exercise = p.exercise.map(|id| id.to_string());
+    (next.progress_group, next.progress_exercise) = p.ids();
     if let Ok(json) = serde_json::to_string(&next) {
         let _ = store.set_item(UI_KEY, &json);
     }

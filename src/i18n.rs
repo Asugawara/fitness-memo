@@ -500,8 +500,7 @@ pub struct Progress {
     pub period_all: &'static str,
     /// 記録がまだ 1 件も無い
     pub empty_all: &'static str,
-    /// セレクタ 3 つの `aria-label`
-    pub pick_target: &'static str,
+    /// 指標 / 期間セグメントの `aria-label`
     pub pick_metric: &'static str,
     pub pick_period: &'static str,
     /// 対象セレクタ 2 つの `aria-label`。見えるラベルは置かないのでここだけが頼り
@@ -515,8 +514,7 @@ pub struct Progress {
     pub all_exercises: &'static str,
     /// 部位も種目も選ばれていないときにグラフの代わりに出す案内
     pub pick_hint: &'static str,
-    /// `<optgroup>` の見出し
-    pub optgroup_groups: &'static str,
+    /// 種目セレクタの `<optgroup>` の見出し
     pub optgroup_exercises: &'static str,
     pub optgroup_archived: &'static str,
     /// 全期間だけ週単位に落ちることの断り。体重の線が出ているかで文が変わる
@@ -541,7 +539,6 @@ const JA_PROGRESS: Progress = Progress {
     title: "推移",
     period_all: "全期間",
     empty_all: "まだ記録がありません。記録タブで種目を追加すると、ここに推移が出ます",
-    pick_target: "対象",
     pick_metric: "指標",
     pick_period: "期間",
     pick_group: "部位",
@@ -549,7 +546,6 @@ const JA_PROGRESS: Progress = Progress {
     all_groups: "すべての部位",
     all_exercises: "すべての種目",
     pick_hint: "部位か種目を選んでください",
-    optgroup_groups: "部位",
     optgroup_exercises: "種目",
     optgroup_archived: "アーカイブ済み",
     weekly_note: "全期間は週単位で集計しています",
@@ -569,7 +565,6 @@ const EN_PROGRESS: Progress = Progress {
     title: "Progress",
     period_all: "All",
     empty_all: "Nothing recorded yet. Add an exercise on the Record tab and your progress will show up here.",
-    pick_target: "Target",
     pick_metric: "Metric",
     pick_period: "Period",
     pick_group: "Muscle group",
@@ -577,7 +572,6 @@ const EN_PROGRESS: Progress = Progress {
     all_groups: "All groups",
     all_exercises: "All exercises",
     pick_hint: "Pick a muscle group or an exercise.",
-    optgroup_groups: "Muscle groups",
     optgroup_exercises: "Exercises",
     optgroup_archived: "Archived",
     weekly_note: "Over all time, figures are grouped by week.",

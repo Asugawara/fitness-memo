@@ -394,6 +394,22 @@ struct UiState {
     ///   丸めは `core::history_count`（ホストのテストが届く側）に任せる
     #[serde(default)]
     history: Option<i64>,
+    /// 推移タブで最後に見ていた部位 / 種目。**このキーで唯一 `Db` の ID を持つ**
+    /// （adr/storage/db-ids-in-ui-state-behind-a-fallback.md）。
+    ///
+    /// ★ `Option<GroupId>` / `Option<ExerciseId>` ではなく `Option<String>` で持つ。
+    ///   `lang` / `history` とまったく同じ理由で、`Id` の deserialize は
+    ///   **12 文字ちょうどの base32 しか受けない**。手で編集された値や schema 2 以前の
+    ///   数値 ID の残骸が入っていると、**`UiState` 全体のパースが落ちて `lang` と
+    ///   `history` と `install_hint_dismissed` まで巻き添えで消える**。文字列で受けて
+    ///   `core::restore_pick`（ホストのテストが届く側）で寛容に解けば、知らない値は
+    ///   「未設定」に落ちるだけで済む。
+    ///
+    /// ★ 消えても既定（記録がある先頭の種目）に戻るだけなので、退避も世代切りも要らない。
+    #[serde(default)]
+    progress_group: Option<String>,
+    #[serde(default)]
+    progress_exercise: Option<String>,
 }
 
 fn ui_state() -> UiState {
@@ -443,6 +459,35 @@ pub fn save_history(n: usize) {
     // ★ 読んでから 1 フィールドだけ差し替える（`save_lang` と同じ理由）
     let mut next = ui_state();
     next.history = Some(n as i64);
+    if let Ok(json) = serde_json::to_string(&next) {
+        let _ = store.set_item(UI_KEY, &json);
+    }
+}
+
+/// 推移タブで最後に見ていた対象の**生の保存値** `(部位, 種目)`。
+///
+/// ★ ここでは解かない。`Id` へのパースと「今も候補にあるか」の検証は
+///   `core::restore_pick` がやる（ホストの `cargo test` が届く側に寄せる）。
+pub fn saved_progress_pick() -> (Option<String>, Option<String>) {
+    let ui = ui_state();
+    (ui.progress_group, ui.progress_exercise)
+}
+
+/// 推移タブの対象を保存する。
+///
+/// クリック 1 回きりなので debounce しない（`save_lang` と同じ）。
+///
+/// ★ **部位と種目を必ず一緒に書く。** setter を 2 本に分けると、
+///   読む → 差し替える → 書き戻す を 2 回やる間に、`Pick` の不変条件が破れた組
+///   （別の部位の種目）が `localStorage` に残る瞬間ができる。
+pub fn save_progress_pick(p: core::Pick) {
+    let Some(store) = store() else {
+        return;
+    };
+    // ★ 読んでから該当フィールドだけ差し替える（`save_lang` と同じ理由）
+    let mut next = ui_state();
+    next.progress_group = p.group.map(|id| id.to_string());
+    next.progress_exercise = p.exercise.map(|id| id.to_string());
     if let Ok(json) = serde_json::to_string(&next) {
         let _ = store.set_item(UI_KEY, &json);
     }

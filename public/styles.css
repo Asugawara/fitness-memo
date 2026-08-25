@@ -1341,6 +1341,29 @@ h3 {
   margin-bottom: 12px;
 }
 
+/* ★ 部位と種目は**横に並べる**。縦に積むと 44px + gap ぶんグラフが下がり、
+   この改修の起点（下の項目が押しにくい）をセレクタ 1 本増やして作り直すことになる。 */
+.target-row {
+  display: flex;
+  gap: 8px;
+}
+
+/* ★ min-width: 0 が要る。付けないと長い種目名（ラットプルダウン）が flex アイテムの
+   最小内容幅を押し広げ、下の比率が崩れて部位側が潰れる。 */
+.target-row > .target-select {
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+/* 部位名は短く（胸 / 背中）、種目名は長い。等分より読みやすい */
+.target-row > .target-select:first-child {
+  flex: 2 1 0;
+}
+
+.target-row > .target-select:last-child {
+  flex: 3 1 0;
+}
+
 .target-select {
   width: 100%;
   /* ★ WebKit（iOS Safari）のネイティブ menulist は UA テーマが min-height を 18px へ

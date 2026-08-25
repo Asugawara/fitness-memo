@@ -59,7 +59,8 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [書き出しを TSV にし、保存形式（JSON）と分ける](storage/tsv-export-for-spreadsheets.md) | 採用 |
 | [取り込みは「足すだけ」に固定する](storage/import-is-merge-only.md) | 採用 |
 | [同一オリジン内の多層バックアップを採用しない](storage/no-same-origin-redundancy.md) | 採用 |
-| [UI の状態を `Db` に入れず別キーに置く](storage/ui-state-in-separate-key.md) | 採用 |
+| [UI の状態を `Db` に入れず別キーに置く](storage/ui-state-in-separate-key.md) | 採用（`Db` の ID を置く条件は [UI の状態に `Db` の ID を置いてよい条件を決める（寛容な受け口と既定への受け皿）](storage/db-ids-in-ui-state-behind-a-fallback.md) で改訂） |
+| [UI の状態に `Db` の ID を置いてよい条件を決める（寛容な受け口と既定への受け皿）](storage/db-ids-in-ui-state-behind-a-fallback.md) | 採用 |
 | [プリセット名は初回投入の言語で固定し、ユーザーデータとして扱う](storage/preset-names-are-user-data-seeded-once.md) | 置換済み → [プリセット名は表示時に言語へ追従させ、改名したものだけ据え置く](ux/preset-names-follow-the-ui-language.md) |
 | [TSV の見出しは UI 言語で書き、読み込みは日英どちらも受ける](storage/tsv-header-follows-the-ui-language.md) | 採用 |
 
@@ -109,6 +110,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [プリセット名は表示時に言語へ追従させ、改名したものだけ据え置く](ux/preset-names-follow-the-ui-language.md) | 採用 |
 | [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](ux/interval-seconds-on-the-exercise.md) | 採用 |
 | [前回までの記録を日付で出し、何回分出すかを表示設定にする](ux/past-records-by-date-with-a-count-setting.md) | 採用 |
+| [推移タブの対象を「部位 + 種目」の 2 セレクタにする](ux/progress-target-as-group-plus-exercise-selects.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

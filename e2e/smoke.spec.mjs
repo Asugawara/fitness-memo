@@ -352,7 +352,11 @@ test('9. 推移タブの種目別グラフに2点描かれ、重量なしの記�
   // ★ 重量を入れない記録（懸垂 12 回）も 0 に潰れず 12 になる。
   //   指標は「重量 × 回数、重量が空なら重量 1」の単一式なので、種目ごとに
   //   式を切り替えなくても自重種目が実質レップ数として意味を持つ
-  await page.getByTestId('target-select').selectOption({ label: '懸垂' });
+  //   ★ 種目セレクタは選択中の部位で絞られている。既定は 胸/ベンチプレス なので、
+  //     背中の懸垂へ行くには先に部位を移す（部位を移すと種目は「すべて」に戻る）
+  await page.getByTestId('group-select').selectOption({ label: '背中' });
+  await expect(page.getByTestId('exercise-select')).toHaveValue('');
+  await page.getByTestId('exercise-select').selectOption({ label: '懸垂' });
   await expect(page.getByTestId('stat-best')).toHaveText('12');
 });
 
@@ -381,9 +385,12 @@ test('推移タブの指標セグメントでボリューム / セット数 / �
   await metrics.filter({ hasText: '回数' }).click();
   await expect(best).toHaveText('18 回');
 
-  // ★ 単位は指標だけで決まる。対象種目を切り替えても軸の意味は変わらない
-  //   （旧 Kind 方式では種目ごとに単位が変わっていた）
-  await page.getByTestId('target-select').selectOption({ label: '胸' });
+  // ★ 単位は指標だけで決まる。対象を種目から部位の合計へ切り替えても軸の意味は
+  //   変わらない（旧 Kind 方式では種目ごとに単位が変わっていた）。
+  //   ★ 部位を選び直すのではなく種目を外す。既定が既に 胸/ベンチプレス なので、
+  //     部位に「胸」を選んでも何も変わらず、このテストが何も検証しなくなる
+  await page.getByTestId('exercise-select').selectOption({ label: 'すべての種目' });
+  await expect(page.getByTestId('group-select')).toHaveValue(/.+/);
   await expect(best).toContainText('回');
 });
 
@@ -394,14 +401,16 @@ test('推移タブの候補には記録のある種目だけが出る', async ({
 
   await page.getByTestId('tab-progress').click();
 
-  const options = page.getByTestId('target-select').locator('option');
-  await expect(options.filter({ hasText: exactText('ベンチプレス') })).toHaveCount(1);
+  const groups = page.getByTestId('group-select').locator('option');
+  const exercises = page.getByTestId('exercise-select').locator('option');
+
+  await expect(exercises.filter({ hasText: exactText('ベンチプレス') })).toHaveCount(1);
   // プリセットは 28 種目あるが、使っていないものは並べない
-  await expect(options.filter({ hasText: exactText('スクワット') })).toHaveCount(0);
-  await expect(options.filter({ hasText: exactText('プランク') })).toHaveCount(0);
+  await expect(exercises.filter({ hasText: exactText('スクワット') })).toHaveCount(0);
+  await expect(exercises.filter({ hasText: exactText('プランク') })).toHaveCount(0);
   // 記録のある種目を持たない部位も出ない
-  await expect(options.filter({ hasText: exactText('脚') })).toHaveCount(0);
-  await expect(options.filter({ hasText: exactText('胸') })).toHaveCount(1);
+  await expect(groups.filter({ hasText: exactText('脚') })).toHaveCount(0);
+  await expect(groups.filter({ hasText: exactText('胸') })).toHaveCount(1);
 });
 
 test('記録が 1 件も無いと推移タブは空状態の説明を出す', async ({ page }) => {
@@ -763,7 +772,9 @@ test('11. 設定タブでの改名・部位変更・新規追加が記録タブ�
   await page.getByTestId('add-sheet-close').click();
 
   await page.getByTestId('tab-progress').click();
-  const archivedOptions = page.getByTestId('target-select').locator('optgroup[label="アーカイブ済み"] option');
+  const archivedOptions = page
+    .getByTestId('exercise-select')
+    .locator('optgroup[label="アーカイブ済み"] option');
   await expect(archivedOptions.filter({ hasText: exactText('テスト種目') })).toHaveCount(1);
 
   // 部位グループの削除ガード: アーカイブ済み種目も所属種目として数えるので削除できない。

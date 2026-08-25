@@ -504,6 +504,17 @@ pub struct Progress {
     pub pick_target: &'static str,
     pub pick_metric: &'static str,
     pub pick_period: &'static str,
+    /// 対象セレクタ 2 つの `aria-label`。見えるラベルは置かないのでここだけが頼り
+    pub pick_group: &'static str,
+    pub pick_exercise: &'static str,
+    /// 各セレクタの先頭（絞り込みなし）。
+    ///
+    /// ★ 両方を「すべて」の 1 語にしない。2 つの select が横に並ぶので、
+    ///   同じ語だとどちらの「すべて」か取り違える
+    pub all_groups: &'static str,
+    pub all_exercises: &'static str,
+    /// 部位も種目も選ばれていないときにグラフの代わりに出す案内
+    pub pick_hint: &'static str,
     /// `<optgroup>` の見出し
     pub optgroup_groups: &'static str,
     pub optgroup_exercises: &'static str,
@@ -533,6 +544,11 @@ const JA_PROGRESS: Progress = Progress {
     pick_target: "対象",
     pick_metric: "指標",
     pick_period: "期間",
+    pick_group: "部位",
+    pick_exercise: "種目",
+    all_groups: "すべての部位",
+    all_exercises: "すべての種目",
+    pick_hint: "部位か種目を選んでください",
     optgroup_groups: "部位",
     optgroup_exercises: "種目",
     optgroup_archived: "アーカイブ済み",
@@ -556,6 +572,11 @@ const EN_PROGRESS: Progress = Progress {
     pick_target: "Target",
     pick_metric: "Metric",
     pick_period: "Period",
+    pick_group: "Muscle group",
+    pick_exercise: "Exercise",
+    all_groups: "All groups",
+    all_exercises: "All exercises",
+    pick_hint: "Pick a muscle group or an exercise.",
     optgroup_groups: "Muscle groups",
     optgroup_exercises: "Exercises",
     optgroup_archived: "Archived",
@@ -1424,5 +1445,33 @@ mod tests {
         assert_eq!(plural(0, "day", "days"), "days");
         assert_eq!(plural(1, "day", "days"), "day");
         assert_eq!(plural(2, "day", "days"), "days");
+    }
+
+    /// 2 つの select は横に並ぶ。先頭の「すべて」が同じ語だと、どちらを
+    /// 触っているのか分からなくなる。ラベルも同様。
+    #[test]
+    fn the_two_progress_selectors_read_apart_in_every_language() {
+        for (lang, _) in Lang::CHOICES {
+            let p = &lang.strings().progress;
+            assert_ne!(p.all_groups, p.all_exercises, "{lang:?} の「すべて」が同語");
+            assert_ne!(p.pick_group, p.pick_exercise, "{lang:?} のラベルが同語");
+        }
+    }
+
+    /// 対象セレクタには見えるラベルが無く、`aria-label` だけが読み上げの頼り。
+    #[test]
+    fn the_progress_selector_labels_are_never_empty() {
+        for (lang, _) in Lang::CHOICES {
+            let p = &lang.strings().progress;
+            for s in [
+                p.pick_group,
+                p.pick_exercise,
+                p.all_groups,
+                p.all_exercises,
+                p.pick_hint,
+            ] {
+                assert!(!s.is_empty(), "{lang:?} に空の文言がある");
+            }
+        }
     }
 }

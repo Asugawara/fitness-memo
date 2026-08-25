@@ -167,6 +167,39 @@ test('5. 部位を「すべて」に戻すと種目も外れ、グラフの代�
   await expect(page.getByTestId('records')).toHaveCount(0);
 });
 
+// ★ **一度触った `<option>` を経由する順序で回す。** content attribute の `selected` は
+//   HTML の dirtiness が立った `<option>` では selectedness を動かさないので、
+//   `selected=` のままだと 2 つの select が食い違う（部位=すべて / 種目=懸垂 の表示）。
+//   触っていない option だけを通る手順では通ってしまうため、**先に選んでおく手順が要る**。
+test('11. 一度選んだ部位を経由しても 2 つの select は食い違わない', async ({ page }) => {
+  await seedTwoGroups(page);
+  await openProgress(page);
+
+  // 背中の option を dirty にしてから、いったん「すべて」を経由して戻る
+  await groupSelect(page).selectOption({ label: '背中' });
+  await groupSelect(page).selectOption({ label: 'すべての部位' });
+  await exerciseSelect(page).selectOption({ label: '懸垂' });
+
+  await expect(groupSelect(page).locator('option:checked')).toHaveText('背中');
+  await expect(exerciseSelect(page).locator('option:checked')).toHaveText('懸垂');
+  expect(await exerciseLabels(page)).toEqual(['懸垂']);
+});
+
+test('12. 一度選んだ種目を経由しても統計はセレクタの表示と一致する', async ({ page }) => {
+  await seedTwoGroups(page);
+  await openProgress(page);
+
+  // 胸の 2 種目を両方 dirty にしてから部位を外し、別部位の種目へ飛ぶ
+  await exerciseSelect(page).selectOption({ label: 'プッシュアップ' });
+  await exerciseSelect(page).selectOption({ label: 'ベンチプレス' });
+  await groupSelect(page).selectOption({ label: 'すべての部位' });
+  await exerciseSelect(page).selectOption({ label: '懸垂' });
+
+  await expect(exerciseSelect(page).locator('option:checked')).toHaveText('懸垂');
+  // セレクタが「懸垂」と言っている以上、統計も懸垂（12）でなければならない
+  await expect(page.getByTestId('stat-best')).toHaveText('12');
+});
+
 // ── 保存 ────────────────────────────────────────────────────────────────────
 
 test('6. 最後に見た部位と種目はリロードしても残り、Db には混ざらない', async ({ page }) => {
@@ -263,6 +296,35 @@ test('9. 保存した種目の記録が消えると既定の種目へ倒れる',
   expect((await uiState(page)).progress_exercise).not.toBe(saved);
 });
 
+// ★ 所属部位が消えた種目は `migrate` / `merge_db` が「宙に浮いた参照は残す」ので実在する。
+//   部位に宙に浮いた ID を入れると、どの option にも当たらず部位セレクタが黙って
+//   「すべての部位」へ落ち、`pick` と表示が食い違う。
+test('13. 所属部位が消えた種目でもセレクタの表示と選択は食い違わない', async ({ page }) => {
+  await seedTwoGroups(page);
+
+  // ★ 先に flush する。起動直後の debounce 保存が残っていると、下の書き換えを
+  //   400ms 後に「読み込んだ Db」で上書きされる
+  await flushToStorage(page);
+  await page.evaluate((key) => {
+    const db = JSON.parse(localStorage.getItem(key));
+    const ex = db.exercises.find((e) => e.name === '懸垂');
+    db.groups = db.groups.filter((g) => g.id !== ex.group_id); // 背中ごと消す
+    localStorage.setItem(key, JSON.stringify(db));
+  }, STORAGE_KEY);
+  await page.reload();
+  await openProgress(page);
+
+  // 部位セレクタに「背中」は無い。種目は「すべての部位」のときだけ並ぶ
+  await expect(groupSelect(page).locator('option')).toHaveText(['すべての部位', '胸']);
+  await groupSelect(page).selectOption({ label: 'すべての部位' });
+  await exerciseSelect(page).selectOption({ label: '懸垂' });
+
+  await expect(groupSelect(page).locator('option:checked')).toHaveText('すべての部位');
+  await expect(exerciseSelect(page).locator('option:checked')).toHaveText('懸垂');
+  // 記録そのものは参照できる（過去データを推移タブから見えなくしない）
+  await expect(page.getByTestId('stat-best')).toHaveText('12');
+});
+
 test('10. 記録が 1 件も無いときは案内文を二重に出さない', async ({ page }) => {
   await openProgress(page);
 
@@ -270,4 +332,6 @@ test('10. 記録が 1 件も無いときは案内文を二重に出さない', a
   // 両方「すべて」ではあるが、上の空状態が既に説明しているので重ねない
   await expect(page.getByTestId('progress-pick-hint')).toHaveCount(0);
   await expect(page.getByTestId('chart')).toHaveCount(0);
+  // 中身ゼロの見出しをネイティブのピッカーに出さない
+  await expect(page.getByTestId('exercise-select').locator('optgroup')).toHaveCount(0);
 });

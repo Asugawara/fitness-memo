@@ -825,6 +825,8 @@ pub fn used_exercise_ids(db: &Db) -> Vec<ExerciseId> {
 /// 推移タブの対象。**部位と種目を必ず組で持つ。**
 ///
 /// ★ 不変条件: `exercise` が `Some` なら `group` は**その種目の所属部位**。
+///   ただし所属部位が `Db` から消えている種目（`migrate` / `merge_db` が
+///   「宙に浮いた参照は宙に浮いたまま残す」ので実在しうる）では `None` になる。
 ///   この型のメソッド以外から状態を作らないことで成立させる。
 ///
 /// ★ **画面のシグナルを部位・種目の 2 本に分けないための型**でもある。分けると
@@ -865,10 +867,15 @@ impl Pick {
     /// ★ **部位はその種目の所属で必ず上書きする**（種目から部位は一意に決まる）。
     ///   知らない種目 ID（消された種目 / 手で編集された保存値）は「すべて」に落とし、
     ///   部位だけ残す。`None`（すべて）も同じ腕に落ちる。
+    ///
+    /// ★ **所属部位が `Db` に無ければ `group` は `None`。** 宙に浮いた `group_id` を
+    ///   そのまま入れると、どの `<option>` にも当たらず部位セレクタが黙って先頭
+    ///   （「すべて」）に落ち、`pick` と表示が食い違う。`None` なら表示と一致し、
+    ///   種目リストも絞られない（絞る部位が無いのだから正しい）。
     pub fn with_exercise(self, db: &Db, exercise: Option<ExerciseId>) -> Pick {
         match exercise.and_then(|ex| db.exercise(ex)) {
             Some(e) => Pick {
-                group: Some(e.group_id),
+                group: db.group(e.group_id).map(|g| g.id),
                 exercise: Some(e.id),
             },
             None => Pick {
@@ -4804,6 +4811,48 @@ mod tests {
             p,
             Pick {
                 group: Some(g(2)),
+                exercise: Some(e(20)),
+            }
+        );
+    }
+
+    /// 所属部位が `Db` から消えた種目（`migrate` / `merge_db` が宙に浮いた参照を
+    /// 残すので実在しうる）。部位に入れると、どの `<option>` にも当たらず
+    /// セレクタが黙って「すべて」へ落ちて `Pick` と表示が食い違う。
+    #[test]
+    fn picking_an_exercise_whose_group_is_gone_leaves_the_group_unset() {
+        let mut db = picks_db();
+        db.groups.retain(|x| x.id != g(2)); // 体幹を消す。プランクの group_id が宙に浮く
+        let p = Pick::default().with_exercise(&db, Some(e(20)));
+        assert_eq!(p.group, None, "実在しない部位は入れない");
+        assert_eq!(
+            p.exercise,
+            Some(e(20)),
+            "種目自体は選べる（記録は参照できる）"
+        );
+    }
+
+    /// 宙に浮いた種目も候補には残す。消すと過去データが推移タブから参照不能になる。
+    #[test]
+    fn progress_candidates_keep_an_exercise_whose_group_is_gone() {
+        let mut db = picks_db();
+        db.groups.retain(|x| x.id != g(2));
+        assert!(progress_candidates(&db).contains(&e(20)));
+        assert!(
+            !progress_candidate_groups(&db).contains(&g(2)),
+            "部位のほうは実在しないので出さない"
+        );
+    }
+
+    #[test]
+    fn restore_pick_leaves_the_group_unset_for_an_orphaned_exercise() {
+        let mut db = picks_db();
+        db.groups.retain(|x| x.id != g(2));
+        let p = restore_pick(&db, Some(&g(2).to_string()), Some(&e(20).to_string()));
+        assert_eq!(
+            p,
+            Pick {
+                group: None,
                 exercise: Some(e(20)),
             }
         );

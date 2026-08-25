@@ -75,7 +75,9 @@ enum Body {
 #[derive(Clone, PartialEq)]
 struct ExOption {
     id: ExerciseId,
-    group: GroupId,
+    /// 所属部位。**`Db` から消えていれば `None`**（`core::Pick::with_exercise` と同じ規則）。
+    /// `None` の種目は「すべての部位」のときだけ並ぶ — 絞る部位が無いので当然。
+    group: Option<GroupId>,
     name: String,
     archived: bool,
 }
@@ -110,7 +112,7 @@ impl Options {
         self.exercises
             .iter()
             .filter(move |e| e.archived == archived)
-            .filter(move |e| group.is_none_or(|g| e.group == g))
+            .filter(move |e| group.is_none_or(|g| e.group == Some(g)))
     }
 
     /// その組が今も候補として成立するか。**部位の一致まで見る**
@@ -122,7 +124,7 @@ impl Options {
             (_, Some(ex)) => self
                 .exercises
                 .iter()
-                .any(|e| e.id == ex && Some(e.group) == p.group),
+                .any(|e| e.id == ex && e.group == p.group),
         }
     }
 
@@ -131,7 +133,7 @@ impl Options {
     fn default_pick(&self) -> Pick {
         match self.exercises.first() {
             Some(e) => Pick {
-                group: Some(e.group),
+                group: e.group,
                 exercise: Some(e.id),
             },
             None => Pick::default(),
@@ -150,7 +152,8 @@ fn options(d: &Db) -> Options {
             .filter_map(|id| d.exercise(id))
             .map(|e| ExOption {
                 id: e.id,
-                group: e.group_id,
+                // 宙に浮いた `group_id` は `None`（`Pick::with_exercise` と同じ規則）
+                group: d.group(e.group_id).map(|g| g.id),
                 name: ex_name(e).to_string(),
                 archived: e.archived,
             })
@@ -564,7 +567,13 @@ pub fn Progress() -> impl IntoView {
                         let opts = opts.get();
                         let current = pick.get().group;
                         view! {
-                            <option value="" selected=current.is_none()>
+                            // ★ `selected=` ではなく `prop:selected=`。**content attribute の
+                            //   `selected` は、利用者が一度でも触った `<option>`（HTML の
+                            //   dirtiness が立った要素）では selectedness を動かさない。**
+                            //   leptos は要素を作り直さず属性を差し替えるので、背中を選ぶ →
+                            //   すべての部位に戻す、で部位セレクタが「背中」から動かなくなり、
+                            //   `pick` と表示が食い違う（実測済み）。IDL property なら常に勝つ
+                            <option value="" prop:selected=current.is_none()>
                                 {t.progress.all_groups}
                             </option>
                             {opts
@@ -572,7 +581,10 @@ pub fn Progress() -> impl IntoView {
                                 .iter()
                                 .map(|(id, name)| {
                                     view! {
-                                        <option value=id.to_string() selected=current == Some(*id)>
+                                        <option
+                                            value=id.to_string()
+                                            prop:selected=current == Some(*id)
+                                        >
                                             {name.clone()}
                                         </option>
                                     }
@@ -595,10 +607,11 @@ pub fn Progress() -> impl IntoView {
                         let opts = opts.get();
                         let p = pick.get();
                         // 部位が選ばれていればその部位の種目だけ。「すべて」なら全部位ぶん
+                        // `prop:selected` を使う理由は部位セレクタ側のコメントを参照
                         let option = move |e: &ExOption| {
                             let selected = p.exercise == Some(e.id);
                             view! {
-                                <option value=e.id.to_string() selected=selected>
+                                <option value=e.id.to_string() prop:selected=selected>
                                     {e.name.clone()}
                                 </option>
                             }
@@ -607,13 +620,24 @@ pub fn Progress() -> impl IntoView {
                             .exercises_of(p.group, true)
                             .map(&option)
                             .collect();
+                        let active: Vec<_> = opts
+                            .exercises_of(p.group, false)
+                            .map(&option)
+                            .collect();
                         view! {
-                            <option value="" selected=p.exercise.is_none()>
+                            <option value="" prop:selected=p.exercise.is_none()>
                                 {t.progress.all_exercises}
                             </option>
-                            <optgroup label=t.progress.optgroup_exercises>
-                                {opts.exercises_of(p.group, false).map(&option).collect::<Vec<_>>()}
-                            </optgroup>
+                            // 中身ゼロの見出しをネイティブのピッカーに出さない
+                            // （記録が無い / その部位が全部アーカイブ済みのとき）
+                            {(!active.is_empty())
+                                .then(|| {
+                                    view! {
+                                        <optgroup label=t.progress.optgroup_exercises>
+                                            {active}
+                                        </optgroup>
+                                    }
+                                })}
                             // アーカイブ済みも出さないと過去データが参照不能になる
                             {(!archived.is_empty())
                                 .then(|| {

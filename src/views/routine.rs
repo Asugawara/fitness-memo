@@ -601,7 +601,7 @@ pub fn RoutineEditor(
                         //   ピッカー全体が作り直される
                         let open = move || open_groups.with(|v| v.contains(&gid));
                         view! {
-                            <section class="sheet-group fold-group">
+                            <section class="fold-group">
                                 // ★ **`<h3>` は残す。** ここは畳む前から部位の見出しで、
                                 //   `<button>` に置き換えると 6 部位ぶんの見出しが a11y
                                 //   ツリーから消える（`views::settings` の `GroupBlock` に

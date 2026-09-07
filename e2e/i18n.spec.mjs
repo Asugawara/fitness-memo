@@ -148,15 +148,37 @@ test('自分で追加した種目は言語を切り替えても変わらない',
   ).toHaveCount(1);
 });
 
+/**
+ * 「種目を追加」シートの部位アコーディオンを、目当ての種目が出るまで順に開いて押す。
+ *
+ * ★ 部位は既定で全部閉じていて、**同時に開けるのは 1 つ**
+ *   （adr/ux/record-add-sheet-groups-as-single-open-accordion.md）。押す前に
+ *   `aria-expanded` を見ないと、開いている部位を閉じてしまう。
+ * ★ **部位名の表を持たない**ので、英語 UI（この spec）でもそのまま効く。
+ * ★ 正典は e2e/smoke.spec.mjs の `openPickGroupFor`（e2e は spec 単体で読める作法なので
+ *   共有モジュールを作らずコピーしてある）。
+ */
+async function pickFromAddSheet(page, name) {
+  const sheet = page.getByTestId('add-sheet');
+  const groups = sheet.getByTestId('pick-group');
+  const n = await groups.count();
+  expect(n, 'シートに部位が 1 つも出ていない').toBeGreaterThan(0);
+  for (let i = 0; i < n; i++) {
+    const group = groups.nth(i);
+    const toggle = group.getByTestId('pick-group-toggle');
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+    await expect(group.getByTestId('pick-exercise').first()).toBeVisible();
+    const pick = group.getByTestId('pick-exercise').filter({ hasText: exactText(name) });
+    if (await pick.count()) return pick.click();
+  }
+  throw new Error(`「種目を追加」シートに ${name} が無い`);
+}
+
 test('言語を切り替えても記録は残る', async ({ page }) => {
   await boot(page);
 
   await page.getByTestId('add-exercise').click();
-  await page
-    .getByTestId('add-sheet')
-    .getByTestId('pick-exercise')
-    .filter({ hasText: exactText('Bench Press') })
-    .click();
+  await pickFromAddSheet(page, 'Bench Press');
   await page.getByTestId('set-weight').first().fill('60');
   await page.getByTestId('set-reps').first().fill('10');
   await page.getByTestId('set-reps').first().blur();
@@ -177,11 +199,7 @@ test('種目に貼り付く設定（ピン・インターバル）のラベル�
   await boot(page);
 
   await page.getByTestId('add-exercise').click();
-  await page
-    .getByTestId('add-sheet')
-    .getByTestId('pick-exercise')
-    .filter({ hasText: exactText('Bench Press') })
-    .click();
+  await pickFromAddSheet(page, 'Bench Press');
 
   const card = page.getByTestId('exercise-card').first();
   await card.getByTestId('note-toggle').click();
@@ -301,11 +319,7 @@ test('前回までの記録は英語で "Aug 20 (Wed)" の形になり、件数�
   // 記録タブ。★ 英語で 8/20 は使わない（米式 M/D と英式 D/M が見た目で区別できない）
   await page.getByTestId('tab-record').click();
   await page.getByTestId('add-exercise').click();
-  await page
-    .getByTestId('add-sheet')
-    .getByTestId('pick-exercise')
-    .filter({ hasText: exactText('Bench Press') })
-    .click();
+  await pickFromAddSheet(page, 'Bench Press');
 
   const d = new Date();
   d.setDate(d.getDate() - 3);
@@ -321,11 +335,7 @@ test('前回までの記録は英語で "Aug 20 (Wed)" の形になり、件数�
 test('記録がまったく無い種目は英語で "No records" と出る', async ({ page }) => {
   await boot(page);
   await page.getByTestId('add-exercise').click();
-  await page
-    .getByTestId('add-sheet')
-    .getByTestId('pick-exercise')
-    .filter({ hasText: exactText('Bench Press') })
-    .click();
+  await pickFromAddSheet(page, 'Bench Press');
 
   await expect(page.getByTestId('last-log')).toHaveText('No records');
 });

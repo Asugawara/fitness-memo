@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-13
 - **カテゴリ**: ux
-- **関連**: [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](menu-groups-as-single-open-accordion.md), [「1日1種目1ログ」を不変条件にする](../data-model/one-log-per-exercise-per-day.md), [`at` を `Option<i64>` にし当日入力時のみ埋める](../data-model/at-optional-same-day-only.md), [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md), [セット削除は確認を挟まない（カード削除の確認は残す）](set-delete-without-confirmation.md), [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [localStorage の単一キーに JSON 全体を持つ](../storage/localstorage-single-key-json.md), [グラフの座標計算を `chart_layout` に切り出してテスト可能にする](../architecture/chart-layout-as-a-testable-module.md), [キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md), [メニュー編集シートの「選択中」をドラッグで並べ替え、種目ピッカーを複数開けるアコーディオンにする](routine-editor-drag-and-accordion.md)
+- **関連**: [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](menu-groups-as-single-open-accordion.md), [「1日1種目1ログ」を不変条件にする](../data-model/one-log-per-exercise-per-day.md), [`at` を `Option<i64>` にし当日入力時のみ埋める](../data-model/at-optional-same-day-only.md), [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md), [セット削除は確認を挟まない（カード削除の確認は残す）](set-delete-without-confirmation.md), [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [localStorage の単一キーに JSON 全体を持つ](../storage/localstorage-single-key-json.md), [グラフの座標計算を `chart_layout` に切り出してテスト可能にする](../architecture/chart-layout-as-a-testable-module.md), [キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md), [メニュー編集シートの「選択中」をドラッグで並べ替え、種目ピッカーを複数開けるアコーディオンにする](routine-editor-drag-and-accordion.md), [記録タブの「種目を追加」シートを部位のアコーディオンにし、1 つだけ開く](record-add-sheet-groups-as-single-open-accordion.md)（★ 「直近順」を残したまま折りたたみを採った）
 
 ## 背景
 
@@ -304,6 +304,8 @@ assert しない限り死んでいても気づけない。**
 却下（**「種目を追加」シートの並びには今も有効な案**なので、そちらの将来案として残す。
 [メニュー編集シートの「選択中」をドラッグで並べ替え、種目ピッカーを複数開けるアコーディオンにする](routine-editor-drag-and-accordion.md)
 はメニュー側のピッカーを折りたたみで畳んだが、**この案には触れていない**）。
+（★ **その「種目を追加」シートも後に折りたたみを採った** — [記録タブの「種目を追加」シートを部位のアコーディオンにし、1 つだけ開く](record-add-sheet-groups-as-single-open-accordion.md)。
+**そこでもこの案には触れていない** — 部位の中の並びに当てる形なら共存する。）
 
 **並びを `fitness-memo/ui/v1` に持つ**: `Db` を汚さない。しかし
 [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md) が

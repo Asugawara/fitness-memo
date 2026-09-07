@@ -577,6 +577,9 @@ pub fn RoutineEditor(
         //   `GroupBlock` 自体を再利用しないのは、あれが `views::settings` の private な
         //   `Editor` enum を prop に取っていて、鉛筆（部位の改名）まで一緒に付いてくるから。
         //   ここに改名の入口は要らない。
+        // ★ **記録タブの「種目を追加」シートも後に同じ折りたたみへ移した**
+        //   （adr/ux/record-add-sheet-groups-as-single-open-accordion.md）。見た目の CSS は
+        //   `.fold-group` で共有し、**開ける数だけが違う**（あちらは 1 つだけ）。
         {move || {
             db.with(|d| {
                 let mut groups = d.groups.clone();
@@ -598,7 +601,7 @@ pub fn RoutineEditor(
                         //   ピッカー全体が作り直される
                         let open = move || open_groups.with(|v| v.contains(&gid));
                         view! {
-                            <section class="sheet-group rtn-group">
+                            <section class="sheet-group fold-group">
                                 // ★ **`<h3>` は残す。** ここは畳む前から部位の見出しで、
                                 //   `<button>` に置き換えると 6 部位ぶんの見出しが a11y
                                 //   ツリーから消える（`views::settings` の `GroupBlock` に

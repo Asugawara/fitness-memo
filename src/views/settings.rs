@@ -162,6 +162,7 @@ fn add_exercise(db: &mut Db, id: ExerciseId, group: GroupId, name: String) {
         archived: false,
         pins: Vec::new(),
         interval_sec: None,
+        labels: Vec::new(),
     });
 }
 

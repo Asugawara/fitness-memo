@@ -9,8 +9,8 @@ use chrono::{Datelike, NaiveDate, TimeDelta};
 
 use crate::i18n::Lang;
 use crate::model::{
-    Db, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, MAX_INTERVAL_SEC, MAX_PIN_LEN,
-    MAX_PINS, Routine, RoutineId, SCHEMA, Session, SetEntry,
+    Db, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, LabelId, MAX_INTERVAL_SEC,
+    MAX_PIN_LEN, MAX_PINS, Routine, RoutineId, SCHEMA, Session, SetEntry,
 };
 
 /// `Db::sessions` のキー書式。ゼロ埋め ISO なので辞書順 = 時系列順になる。
@@ -509,6 +509,7 @@ struct Seed {
     exercise_id: ExerciseId,
     sets: Vec<SetEntry>,
     note: String,
+    label: Option<LabelId>,
 }
 
 impl Seed {
@@ -528,11 +529,17 @@ impl Seed {
             sets,
             at: _, // 運ばない。呼び出し側が渡す（この型に `at` が無いのがその保証）
             note,
+            // ★ 運ぶ。`copy_day` は候補リストで日付を名指しして 1 日丸ごと写す操作で、
+            //   ソースが可視なのでラベルはその日に実在した真実
+            //   （adr/ux/label-chips-switch-the-history-and-the-copy.md）。
+            //   `apply_routine` だけは [`Seed::without_label`] で落とす
+            label,
         } = src;
         Self {
             exercise_id: *exercise_id,
             sets: sets.clone(),
             note: note.clone(),
+            label: *label,
         }
     }
 }
@@ -564,6 +571,7 @@ fn seed_day(db: &mut Db, to: NaiveDate, picked: Vec<Seed>, at: Option<i64>) -> V
         exercise_id,
         sets,
         note,
+        label,
     } in picked
     {
         copied.push(exercise_id);
@@ -580,6 +588,7 @@ fn seed_day(db: &mut Db, to: NaiveDate, picked: Vec<Seed>, at: Option<i64>) -> V
             sets,
             at,
             note,
+            label,
         });
     }
     copied
@@ -1666,6 +1675,8 @@ fn upgrade_from_sequential(old: legacy::Db, ids: &mut IdGen) -> Db {
                 archived: e.archived,
                 pins: Vec::new(),
                 interval_sec: None,
+                // schema ≤2 にラベルは無い
+                labels: Vec::new(),
             })
             .collect(),
         // schema ≤2 にトレーニングメニューは存在しない（`legacy::Db` にフィールドが無い）
@@ -1684,8 +1695,9 @@ fn upgrade_from_sequential(old: legacy::Db, ids: &mut IdGen) -> Db {
                                 exercise_id: to_exercise(l.exercise_id),
                                 sets: l.sets,
                                 at: l.at,
-                                // schema ≤2 にメモは無い
+                                // schema ≤2 にメモもラベルも無い
                                 note: String::new(),
+                                label: None,
                             })
                             .collect(),
                         body_weight: s.body_weight,
@@ -2621,6 +2633,7 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
                     //   読まないのはこの規範に乗るためでもある
                     at: None,
                     note: String::new(),
+                    label: None,
                 });
                 session.logs.last_mut().expect("今 push した")
             }
@@ -2862,6 +2875,7 @@ fn resolve_exercise(
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         }
     };
 
@@ -3334,6 +3348,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         }
     }
 
@@ -3354,6 +3369,7 @@ mod tests {
                 .collect(),
             at,
             note: String::new(),
+            label: None,
         }
     }
 
@@ -3376,6 +3392,7 @@ mod tests {
                 .collect(),
             at,
             note: note.to_string(),
+            label: None,
         }
     }
 
@@ -6065,6 +6082,7 @@ mod tests {
                 }],
                 at: Some(1_800_000_000_000),
                 note: String::new(),
+                label: None,
             }],
         );
 
@@ -6133,6 +6151,7 @@ mod tests {
                     ],
                     at: None,
                     note: "肩が良い".into(),
+                    label: None,
                 }],
                 body_weight: Some(72.5),
                 note: "よく寝た".into(),
@@ -6255,6 +6274,7 @@ mod tests {
                     }],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Default::default()
             },
@@ -6292,6 +6312,7 @@ mod tests {
                     }],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Default::default()
             },
@@ -6338,6 +6359,7 @@ mod tests {
                     }],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Default::default()
             },
@@ -6366,6 +6388,7 @@ mod tests {
                     }],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Default::default()
             },
@@ -6551,6 +6574,7 @@ mod tests {
                     }],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 body_weight: None,
                 note: String::new(),
@@ -6575,6 +6599,7 @@ mod tests {
                     sets: Vec::new(),
                     at: None,
                     note: "肩が痛いのでやめた".into(),
+                    label: None,
                 }],
                 body_weight: None,
                 note: String::new(),
@@ -6619,6 +6644,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
@@ -6644,6 +6670,7 @@ mod tests {
                     }],
                     at: None,
                     note: "1 本目\n2 本目".into(),
+                    label: None,
                 }],
                 body_weight: None,
                 note: String::new(),
@@ -6680,6 +6707,7 @@ mod tests {
             }],
             at,
             note: String::new(),
+            label: None,
         };
         db.sessions.insert(
             date_key(d(2026, 8, 1)),
@@ -6866,6 +6894,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
 
         let tsv = export_tsv(&mine, jst(), crate::i18n::Lang::Ja);
@@ -6916,6 +6945,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
 
         let tsv =
@@ -6944,6 +6974,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         let chest_bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         let set = |weight, reps| SetEntry {
@@ -6960,12 +6991,14 @@ mod tests {
                         sets: vec![set(60.0, 10)],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                     ExerciseLog {
                         exercise_id: shoulder_bench,
                         sets: vec![set(20.0, 12)],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                 ],
                 body_weight: None,
@@ -7096,6 +7129,7 @@ mod tests {
                 sets,
                 at,
                 note: String::new(),
+                label: None,
             }],
             body_weight: None,
             note: String::new(),
@@ -7324,6 +7358,7 @@ mod tests {
                     }],
                     at: Some(1_800_000_000_000),
                     note: String::new(),
+                    label: None,
                 }],
                 body_weight: Some(70.5),
                 note: "調子よい".into(),
@@ -7427,6 +7462,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
 
         let raw = export_json(&db);
@@ -7466,6 +7502,7 @@ mod tests {
                     ],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Session::default()
             },
@@ -7587,6 +7624,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         db.sessions.insert(
             date_key(d(2026, 8, 1)),
@@ -7601,6 +7639,7 @@ mod tests {
                         }],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                     ExerciseLog {
                         exercise_id: ExerciseId::from_bits(0xAAA1),
@@ -7611,6 +7650,7 @@ mod tests {
                         }],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                 ],
                 body_weight: Some(70.0),
@@ -7643,6 +7683,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         db.sessions.insert(
             date_key(d(2026, 8, 2)),
@@ -7657,6 +7698,7 @@ mod tests {
                         }],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                     ExerciseLog {
                         exercise_id: ExerciseId::from_bits(0xBBB1),
@@ -7667,6 +7709,7 @@ mod tests {
                         }],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                 ],
                 body_weight: None,
@@ -7782,6 +7825,7 @@ mod tests {
                         sets,
                         at: None,
                         note: String::new(),
+                        label: None,
                     }],
                     ..Session::default()
                 },
@@ -7857,6 +7901,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         theirs.sessions.insert(
             date_key(d(2026, 9, 9)),
@@ -7871,6 +7916,7 @@ mod tests {
                         }],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                     ExerciseLog {
                         exercise_id: other,
@@ -7881,6 +7927,7 @@ mod tests {
                         }],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                 ],
                 ..Session::default()
@@ -7989,6 +8036,7 @@ mod tests {
                 archived: false,
                 pins: Vec::new(),
                 interval_sec: None,
+                labels: Vec::new(),
             });
         }
         theirs.routines.push(Routine {
@@ -8022,6 +8070,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         theirs.routines.push(Routine {
             id: r(1),
@@ -8167,6 +8216,7 @@ mod tests {
                             .collect(),
                         at: None,
                         note: note.to_string(),
+                        label: None,
                     }],
                     ..Session::default()
                 },
@@ -8388,6 +8438,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
 
         // B は同名の種目を**別の ID** で持ち、A に無い日に記録している
@@ -8400,6 +8451,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         b.sessions.insert(
             date_key(d(2026, 9, 9)),
@@ -8413,6 +8465,7 @@ mod tests {
                     }],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Session::default()
             },
@@ -8570,6 +8623,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         theirs.exercises.push(Exercise {
@@ -8580,6 +8634,7 @@ mod tests {
             archived: false,
             pins: vec!["7".into()],
             interval_sec: None,
+            labels: Vec::new(),
         });
 
         merge_db(&mut mine, theirs);
@@ -8646,6 +8701,7 @@ mod tests {
                     ],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Session::default()
             },
@@ -8725,6 +8781,7 @@ mod tests {
             archived: false,
             pins: vec!["4".into(), "12".into()],
             interval_sec: None,
+            labels: Vec::new(),
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 
@@ -8898,6 +8955,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         theirs.exercises.push(Exercise {
@@ -8908,6 +8966,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: Some(120),
+            labels: Vec::new(),
         });
 
         merge_db(&mut mine, theirs);
@@ -8992,6 +9051,7 @@ mod tests {
                     ],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Session::default()
             },
@@ -9139,6 +9199,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: Some(75),
+            labels: Vec::new(),
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 

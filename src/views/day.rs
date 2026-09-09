@@ -264,6 +264,7 @@ fn write_log(
                     sets,
                     at,
                     note,
+                    label: None,
                 });
             }
         }

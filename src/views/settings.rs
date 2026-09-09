@@ -1195,14 +1195,35 @@ fn ExerciseEditor(
 
     // 正規化（空欄落とし・char 切り詰め・上限・重複 ID の再採番）は
     // `core::set_labels` に委ねる。ここで trim すると規則が 2 本に割れる。
+    //
+    // ★ **空欄の行は `Db` の保存値を再送する。これが「✕ が唯一の削除経路」を守る。**
+    //   `core::clean_labels` は空名の要素を落とすので、素直に送ると**入力欄を空にして
+    //   blur するだけで定義が消える** — ✕ に置いた確認の `warn-box`（文言に「同じ名前で
+    //   作り直しても過去の記録には戻りません」という不可逆性の警告まで入っている）が
+    //   丸ごと迂回される。しかも `commit_labels` は `label_rows` の**全行**を送るので、
+    //   空にした行を放置したまま**別の行**を直すだけでも消える（`change_label` 側の
+    //   短絡だけでは足りない）。保存値を再送すれば、どの順序でも消えない。
+    //   `add_label` が作る**新規の空行は `Db` に無い**ので今までどおり落ちる
+    //   （規則が「空欄は commit しない」の 1 本に揃う）。
     let commit_labels = move || {
-        let values: Vec<Label> = label_rows.with_untracked(|rs| {
-            rs.iter()
-                .map(|r| Label {
-                    id: r.id,
-                    name: r.name.clone(),
-                })
-                .collect()
+        let values: Vec<Label> = db.with_untracked(|d| {
+            let saved = d.exercise(id).map(|e| e.labels.clone()).unwrap_or_default();
+            label_rows.with_untracked(|rs| {
+                rs.iter()
+                    .map(|r| Label {
+                        id: r.id,
+                        name: if r.name.trim().is_empty() {
+                            saved
+                                .iter()
+                                .find(|l| l.id == r.id)
+                                .map(|l| l.name.clone())
+                                .unwrap_or_default()
+                        } else {
+                            r.name.clone()
+                        },
+                    })
+                    .collect()
+            })
         });
         db.update(move |d| storage::with_ids(|ids| crate::core::set_labels(d, id, values, ids)));
     };
@@ -1261,6 +1282,14 @@ fn ExerciseEditor(
                 r.name = trimmed.clone();
             }
         });
+        // ★ **空にしただけでは `Db` を触らない。** 削除の入口は ✕（確認つき）だけに
+        //   する。画面上は空欄のまま残るので打ち直せば同じ `LabelId` で戻る
+        //   （`add_label` の「空欄は commit しない」と同じ規則）。
+        //   ここを通してしまっても `commit_labels` が保存値を再送するので消えないが、
+        //   **保存の予約（`save_debounced`）を無駄に武装させない**ためにも短絡する。
+        if trimmed.is_empty() {
+            return (trimmed != value).then_some(trimmed);
+        }
         commit_labels();
         // 打った値と保存した値が違うなら入力欄も揃える（見えている値と `Db` を
         // 食い違わせない）

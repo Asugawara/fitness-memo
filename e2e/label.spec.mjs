@@ -159,6 +159,20 @@ async function addLabels(page, sheet, names) {
   await expect(sheet.getByTestId('label-name')).toHaveCount(names.length);
 }
 
+/** `Db` に保存されているベンチプレスのラベル定義（名前の配列）。 */
+async function storedLabels(page, exerciseName = 'ベンチプレス') {
+  await flushToStorage(page);
+  return await page.evaluate(
+    ({ key, exerciseName }) => {
+      const db = JSON.parse(localStorage.getItem(key));
+      // `labels` は `skip_serializing_if = "Vec::is_empty"` なので 0 本なら欄ごと無い
+      const ex = db.exercises.find((e) => e.name === exerciseName);
+      return (ex.labels ?? []).map((l) => l.name);
+    },
+    { key: STORAGE_KEY, exerciseName },
+  );
+}
+
 /** ラベル名 → 記録タブのチップ。「指定なし」は `data-label-any` で引く。 */
 function chip(card, name) {
   return card.getByTestId('label-chip').filter({ hasText: exactText(name) });
@@ -611,13 +625,7 @@ test('ラベル名は前後の空白を落として保存する', async ({ page 
   // 入力欄も揃える（見えている値と `Db` を食い違わせない）
   await expect(input).toHaveValue('P');
 
-  await flushToStorage(page);
-  const stored = await page.evaluate((key) => {
-    const db = JSON.parse(localStorage.getItem(key));
-    // `labels` は `skip_serializing_if = "Vec::is_empty"` なので 0 本なら欄ごと無い
-    return db.exercises.find((e) => e.name === 'ベンチプレス').labels ?? [];
-  }, STORAGE_KEY);
-  expect(stored.map((l) => l.name), '前後の空白が保存されている').toEqual(['P']);
+  expect(await storedLabels(page), '前後の空白が保存されている').toEqual(['P']);
 
   // 「高重量 低レップ」のような**中の**空白は落とさない（1 セル = 1 名前）
   await sheet.getByTestId('label-add').click();
@@ -630,4 +638,41 @@ test('ラベル名は前後の空白を落として保存する', async ({ page 
   const card = await addExercise(page, 'ベンチプレス');
   await expect(chip(card, 'P')).toHaveCount(1);
   await expect(chip(card, '高重量 低レップ')).toHaveCount(1);
+});
+
+test('名前を空にしても定義は消えない（✕ が唯一の削除経路）', async ({ page }) => {
+  // ★ ✕ の削除には確認の `warn-box` があり、文言に「同じ名前で作り直しても過去の
+  //   記録には戻りません」という不可逆性の警告まで入っている。**入力欄を空にして
+  //   blur するだけで同じ破壊が警告なしに起きてはいけない** — 全選択して打ち直そうと
+  //   して手が滑る、IME を確定せずに blur する、といった普通の操作で到達する。
+  const sheet = await openExerciseEditor(page, '胸', 'ベンチプレス');
+  await addLabels(page, sheet, ['P', 'S']);
+  expect(await storedLabels(page)).toEqual(['P', 'S']);
+
+  // ① 空にして blur → 確認も出ないし `Db` も変わらない
+  const p = sheet.getByTestId('label-name').nth(0);
+  await p.fill('');
+  await p.blur();
+  await expect(sheet.getByTestId('label-delete-confirm')).toHaveCount(0);
+  expect(await storedLabels(page), '空にしただけで定義が消えた').toEqual(['P', 'S']);
+
+  // ② ★ **空にした行を放置したまま別の行を直しても消えない。**
+  //    `commit_labels` は `label_rows` の全行を送るので、ここが穴になりやすい
+  const other = sheet.getByTestId('label-name').nth(1);
+  await other.fill('T');
+  await other.blur();
+  expect(await storedLabels(page), '別の行を直したときに空欄の行が消えた').toEqual(['P', 'T']);
+
+  // ③ シートを閉じて開き直しても残っている（打ち直せる状態で戻る）
+  await backToRecord(page);
+  const again = await openExerciseEditor(page, '胸', 'ベンチプレス');
+  await expect(again.getByTestId('label-name')).toHaveCount(2);
+  await expect(again.getByTestId('label-name').nth(0)).toHaveValue('P');
+  expect(await storedLabels(page)).toEqual(['P', 'T']);
+
+  // ④ 削除できるのは ✕ → 確認 → 「削除する」の経路だけ
+  await again.getByTestId('label-remove').nth(0).click();
+  await expect(again.getByTestId('label-delete-confirm')).toBeVisible();
+  await again.getByTestId('label-delete-yes').click();
+  expect(await storedLabels(page)).toEqual(['T']);
 });

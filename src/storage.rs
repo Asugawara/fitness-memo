@@ -400,6 +400,26 @@ struct UiState {
     ///   丸めは `core::history_count`（ホストのテストが届く側）に任せる
     #[serde(default)]
     history: Option<i64>,
+    /// ドロップセットの落とし幅（%）。`None` は既定（`core::DEFAULT_DROP_PCT`）。
+    ///
+    /// ★ 小数点以下 1 桁まで自由入力なので `f64` で受ける。丸めと `clamp` は
+    ///   `core::drop_pct`（ホストのテストが届く側）でやる。`lang` / `history` と同じ
+    ///   「寛容に受けて `core` で既定に寄せる」形。
+    #[serde(default)]
+    drop_pct: Option<f64>,
+    /// 推移タブがドロップセットを集計に入れるか。`0` = 入れない / `1` = 入れる。
+    /// `None` は「まだ選んでいない」で既定（入れない）に倒れる。
+    ///
+    /// ★ `Option<bool>` ではなく `Option<i64>` で持つ。`lang` / `history` と同じ理由で、
+    ///   `bool` は**このファイルで最も狭い型**になる — `1` や `"include"`（手で編集された /
+    ///   将来 3 値になった版が書いた）が入ると deserialize が失敗し、**`UiState` 全体の
+    ///   パースが落ちて `lang` と `history` まで巻き添えで消える**。
+    ///
+    /// ★ ただし `i64` でも `true` や `"include"` では落ちる。**本当の保険は「このキーを
+    ///   書くのはこのアプリだけ」であること**で、型の幅はその上の一段でしかない。
+    ///   解釈は `core::drops_setting`（ホストのテストが届く側）に任せる。
+    #[serde(default)]
+    drops: Option<i64>,
     /// 推移タブで最後に見ていた部位 / 種目。**このキーで唯一 `Db` の ID を持つ**
     /// （adr/storage/db-ids-in-ui-state-behind-a-fallback.md）。
     ///
@@ -434,6 +454,25 @@ fn ui_state() -> UiState {
         .unwrap_or_default()
 }
 
+/// `UI_KEY` の 1 フィールドだけを差し替える。**この読み書きはここ 1 箇所。**
+///
+/// ★ **`UiState { .. }` のリテラルを書かない。** 読んでから差し替えないと、増えた
+/// フィールドの既存値を黙って消す。設定ごとに手で書くと、次に足す設定が 7 度目の
+/// 機会を得る（`e2e/history.spec.mjs` / `e2e/drop.spec.mjs` の「巻き添えで消えない」は
+/// この事故だけを見張っている）。
+///
+/// クリックのたびに 1 回きりなので debounce しない（`Db` 側の `save_debounced` と違う）。
+fn update_ui(f: impl FnOnce(&mut UiState)) {
+    let Some(store) = store() else {
+        return;
+    };
+    let mut next = ui_state();
+    f(&mut next);
+    if let Ok(json) = serde_json::to_string(&next) {
+        let _ = store.set_item(UI_KEY, &json);
+    }
+}
+
 /// ホーム画面追加の案内を利用者が閉じたか。
 pub fn install_hint_dismissed() -> bool {
     ui_state().install_hint_dismissed
@@ -448,15 +487,9 @@ pub fn saved_lang() -> Option<Lang> {
 ///
 /// クリックのたびに 1 回きりなので debounce しない（`dismiss_install_hint` と同じ）。
 pub fn save_lang(lang: Lang) {
-    let Some(store) = store() else {
-        return;
-    };
-    // ★ 読んでから 1 フィールドだけ差し替える（`dismiss_install_hint` と同じ理由）
-    let mut next = ui_state();
-    next.lang = Some(lang.tag().to_string());
-    if let Ok(json) = serde_json::to_string(&next) {
-        let _ = store.set_item(UI_KEY, &json);
-    }
+    update_ui(|u| {
+        u.lang = Some(lang.tag().to_string());
+    });
 }
 
 /// 種目カードに出す過去の記録の件数。**必ず `1..=core::MAX_HISTORY`**（未設定は既定）。
@@ -468,15 +501,33 @@ pub fn history_count() -> usize {
 ///
 /// クリックのたびに 1 回きりなので debounce しない（`save_lang` と同じ）。
 pub fn save_history(n: usize) {
-    let Some(store) = store() else {
-        return;
-    };
-    // ★ 読んでから 1 フィールドだけ差し替える（`save_lang` と同じ理由）
-    let mut next = ui_state();
-    next.history = Some(n as i64);
-    if let Ok(json) = serde_json::to_string(&next) {
-        let _ = store.set_item(UI_KEY, &json);
-    }
+    update_ui(|u| {
+        u.history = Some(n as i64);
+    });
+}
+
+/// 推移タブがドロップセットを集計に入れるか。**未設定は「入れない」。**
+pub fn drops() -> core::Drops {
+    core::drops_setting(ui_state().drops)
+}
+
+/// その設定を保存する。クリックのたびに 1 回きりなので debounce しない。
+pub fn save_drops(d: core::Drops) {
+    update_ui(|u| {
+        u.drops = Some(i64::from(d == core::Drops::Include));
+    });
+}
+
+/// ドロップセットの落とし幅（%）。**未設定は既定の 20%。**
+pub fn drop_pct() -> f32 {
+    core::drop_pct(ui_state().drop_pct)
+}
+
+/// その落とし幅を保存する。
+pub fn save_drop_pct(pct: f32) {
+    update_ui(|u| {
+        u.drop_pct = Some(f64::from(pct));
+    });
 }
 
 /// 推移タブで最後に見ていた対象の**生の保存値** `(部位, 種目)`。
@@ -496,32 +547,18 @@ pub fn saved_progress_pick() -> (Option<String>, Option<String>) {
 ///   読む → 差し替える → 書き戻す を 2 回やる間に、`Pick` の不変条件が破れた組
 ///   （別の部位の種目）が `localStorage` に残る瞬間ができる。
 pub fn save_progress_pick(p: core::Pick) {
-    let Some(store) = store() else {
-        return;
-    };
-    // ★ 読んでから該当フィールドだけ差し替える（`save_lang` と同じ理由）
-    let mut next = ui_state();
-    (next.progress_group, next.progress_exercise) = p.ids();
-    if let Ok(json) = serde_json::to_string(&next) {
-        let _ = store.set_item(UI_KEY, &json);
-    }
+    update_ui(|u| {
+        (u.progress_group, u.progress_exercise) = p.ids();
+    });
 }
 
 /// ホーム画面追加の案内を今後出さない。
 ///
 /// クリック 1 回きりなので debounce しない（`save_debounced` と違って連打されない）。
 pub fn dismiss_install_hint() {
-    let Some(store) = store() else {
-        return;
-    };
-    // ★ 読んでから 1 フィールドだけ差し替える。`UiState { install_hint_dismissed: true }`
-    //   と書くとフィールドが増えたときに既存値を黙って消す。`..ui_state()` を足す形は
-    //   フィールドが 1 つの間 clippy::needless_update に当たるので、この形にしておく
-    let mut next = ui_state();
-    next.install_hint_dismissed = true;
-    if let Ok(json) = serde_json::to_string(&next) {
-        let _ = store.set_item(UI_KEY, &json);
-    }
+    update_ui(|u| {
+        u.install_hint_dismissed = true;
+    });
 }
 
 /// 既読の最大お知らせ番号。**未設定なら `None`**（呼び側の `whatsnew::bootstrap` が

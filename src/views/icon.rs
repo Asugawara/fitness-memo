@@ -39,6 +39,15 @@ pub const DOWNLOAD: &str = include_str!("../../assets/icons/download.svg");
 /// 「このメニューから外す」で種目そのものは 1 つも消えないので、trash にすると
 /// 押した人には**種目を消した**ように読める。
 pub const TRASH_2: &str = include_str!("../../assets/icons/trash-2.svg");
+/// **メインセットの行**でドロップセットを始める。下向き矢印 + 幅の減る横線で
+/// 「重量を落として続ける」を絵にする。★ 素の `arrow-down` にしない — あれは
+/// [`DOWNLOAD`] と 20px で紛れるし、「落とす」だけで「段が積まれる」が出ない。
+pub const ARROW_DOWN_WIDE_NARROW: &str =
+    include_str!("../../assets/icons/arrow-down-wide-narrow.svg");
+/// **ドロップの行**で段をもう 1 つ足す。★ [`ARROW_DOWN_WIDE_NARROW`] と絵を分ける
+/// のは役割が違うから — あちらは「ドロップを始める」、こちらは「同じドロップに
+/// 段を継ぎ足す」。同じ絵にすると、押した結果が同じだと読めてしまう。
+pub const PLUS: &str = include_str!("../../assets/icons/plus.svg");
 
 /// アイコン 1 個。
 ///

@@ -155,6 +155,30 @@ function expectWeights(card, values) {
 }
 
 /**
+ * ハンドルの上にポインタを置き、その座標を返す。**押す前は必ずここを通す。**
+ *
+ * ★ `scrollIntoViewIfNeeded()` + `boundingBox()` では足りない。2 つの穴がある:
+ *   - 画面外の要素は座標だけ取れて**別の要素を掴む**（タブを往復するとスクロールが
+ *     戻るので、往復後のカードは高確率で画面外にいる）
+ *   - 要素が viewport の下端に少しだけかかっていると「最寄りの縁」に揃えられ、
+ *     `position: fixed` のタブバー（56px）の**真下**に来る。座標は取れるが pointerdown は
+ *     タブバーに吸われて lift が立たない
+ *   `hover()` は actionability の hit-target 検査を通る。覆われていれば `end → center →
+ *   start` の順にスクロール位置を変えて取り直し、それでも解消しなければ timeout で
+ *   **赤くなる**。つまり「座標だけ取れてタブバーを押す」が無くなり、成功するか
+ *   はっきり落ちるかのどちらかになる。
+ *   実測: Pixel 7（412×839）でカレンダーが 5 行の月に、タブ往復後のカードがタブバーの
+ *   真下に落ちて再現した（6 行の月は完全に画面外になり中央へ scroll されるので出ない）。
+ * ★ 位置決めだけが目的なら戻り値は捨ててよい（`hover()` がポインタを要素の中心へ動かす）。
+ */
+async function pointAt(handle) {
+  await handle.hover();
+  const box = await handle.boundingBox();
+  expect(box, 'ハンドルが画面に出ていること').not.toBeNull();
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+/**
  * ハンドルを掴んで dy だけ動かして離す。
  *
  * ★ 固定の待ち時間を入れない。`data-drag="lift"` が付くのを待てば、カードの長押し
@@ -162,14 +186,7 @@ function expectWeights(card, values) {
  *   指が 1px も動かないので、slop（10px）で捨てられることもない。
  */
 async function dragBy(page, handle, lifted, dy) {
-  // ★ 測る前に画面へ入れる。boundingBox() はスクロールしないので、画面外の要素の
-  //   座標をそのまま mouse へ渡すと**別の要素を掴む**（タブを往復するとスクロールが
-  //   戻るので、往復後のカードは高確率で画面外にいる）
-  await handle.scrollIntoViewIfNeeded();
-  const box = await handle.boundingBox();
-  expect(box, 'ハンドルが画面に出ていること').not.toBeNull();
-  const x = box.x + box.width / 2;
-  const y = box.y + box.height / 2;
+  const { x, y } = await pointAt(handle);
 
   await page.mouse.move(x, y);
   await page.mouse.down();
@@ -275,12 +292,11 @@ test('★ ドラッグ中も番号は上から 1,2,3 で、掴んだ行は落ち
   const tops = () => rows.evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
   const before = await tops();
 
-  await card.getByTestId('set-handle').nth(0).scrollIntoViewIfNeeded();
-  const box = await card.getByTestId('set-handle').nth(0).boundingBox();
   const rowHeight = (await rows.nth(0).boundingBox()).height;
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const { x, y } = await pointAt(card.getByTestId('set-handle').nth(0));
+  await page.mouse.move(x, y);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + rowHeight, { steps: 6 });
+  await page.mouse.move(x, y + rowHeight, { steps: 6 });
 
   // ★ DOM の並びはドラッグ中も変わらない（transform で見せているだけ）。掴んだ行は
   //   DOM の 1 番目のまま「2」を表示し、押しのけられた行が「1」になる。
@@ -310,13 +326,11 @@ test('★ 押しのけられる行にトランジションが効いていて、�
   //   （実際にコメントの閉じ忘れで丸ごと無効になっていた）
   const card = await benchWithThreeSets(page);
   const rows = card.getByTestId('set-row');
-  await card.getByTestId('set-handle').nth(0).scrollIntoViewIfNeeded();
-  const box = await card.getByTestId('set-handle').nth(0).boundingBox();
   const rowHeight = (await rows.nth(0).boundingBox()).height;
-
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const { x, y } = await pointAt(card.getByTestId('set-handle').nth(0));
+  await page.mouse.move(x, y);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + rowHeight, { steps: 4 });
+  await page.mouse.move(x, y + rowHeight, { steps: 4 });
 
   const transitions = await rows.evaluateAll((els) =>
     els.map((e) => getComputedStyle(e).transitionProperty),
@@ -528,11 +542,7 @@ test('見出しをタップしただけ / 素早くフリックしただけで�
   await fillSet(push, 0, { reps: 20 });
   await blurActive(page);
 
-  const head = push.getByTestId('card-handle');
-  await head.scrollIntoViewIfNeeded();
-  const box = await head.boundingBox();
-  const x = box.x + box.width / 2;
-  const y = box.y + box.height / 2;
+  const { x, y } = await pointAt(push.getByTestId('card-handle'));
 
   // タップ
   await page.mouse.move(x, y);
@@ -548,6 +558,15 @@ test('見出しをタップしただけ / 素早くフリックしただけで�
   await page.mouse.up();
 
   await expectCards(page, ['ベンチプレス', 'プッシュアップ']);
+
+  // ★ 同じ座標で待てば掴めることを見る。これが無いと、掴めない場所（タブバーの下など）
+  //   を押していただけでも上の 2 つが通る（smoke.spec.mjs のメニュー側と同じ作法）
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await expect(push).toHaveAttribute('data-drag', 'lift');
+  await page.mouse.up();
+  await expectCards(page, ['ベンチプレス', 'プッシュアップ']);
+
   await flushToStorage(page);
   expect(await savedOrder(page)).toEqual(['ベンチプレス', 'プッシュアップ']);
 });
@@ -592,10 +611,7 @@ test('★ 掴んだままタブを切り替えてもアプリが落ちない', a
   await blurActive(page);
 
   // (1) 長押しの待ち時間の途中で切り替える（タイマーだけが生き残る経路）
-  const head = push.getByTestId('card-handle');
-  await head.scrollIntoViewIfNeeded();
-  let box = await head.boundingBox();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await pointAt(push.getByTestId('card-handle'));
   await page.mouse.down();
   await page.getByTestId('tab-settings').dispatchEvent('click');
   await expect(page.getByTestId('screen-settings')).toBeVisible();
@@ -605,9 +621,7 @@ test('★ 掴んだままタブを切り替えてもアプリが落ちない', a
   await expectCards(page, ['ベンチプレス', 'プッシュアップ']);
 
   // (2) 掴んだ状態で切り替える（rAF ループが生き残る経路）
-  await push.getByTestId('card-handle').scrollIntoViewIfNeeded();
-  box = await push.getByTestId('card-handle').boundingBox();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await pointAt(push.getByTestId('card-handle'));
   await page.mouse.down();
   await expect(push).toHaveAttribute('data-drag', 'lift');
   await page.getByTestId('tab-settings').dispatchEvent('click');

@@ -668,8 +668,9 @@ h3 {
 /* ── セットメモ（adr/ux/exercise-and-set-notes-behind-one-toggle.md）───────────
    .warn と同じ手（flex-basis で 1 行占有して 2 行目に落とす）。左を 23px 空けるのは
    .set-no（1.4em @12px = 16.8px）+ gap 6px = 22.8px で決まる重量欄の左端に合わせるため。
-   ★ 薄字と入力欄で同じ値を使うので、開閉しても文字の左端が動かない。em にしないのは
-   入力欄が 16px 固定（iOS のズーム閾値）で 1.9em が 30.4px になり薄字と揃わないから。 */
+   ★ 薄字と入力欄で同じ値を使うので、開閉しても文字の左端が動かない（e2e が両者の x を
+   1px 以内で固定している）。em にしないのは入力欄が 16px 固定（iOS のズーム閾値）で
+   1.9em が 30.4px になり薄字と揃わないから。 */
 .set-note-read,
 .set-row .set-note {
   flex-basis: calc(100% - 23px);
@@ -694,6 +695,53 @@ h3 {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--bg);
+}
+
+/* ── ドロップセットの段（adr/ux/drop-sets-as-a-box-under-the-main-set.md）─────
+   ★ 段を足す口は**1 行目の余白**に置く。iPhone 幅（390px）で回数欄の右端から
+     ✕ の左端まで 94px 空いているので、44px + gap 6px が収まって**縦は 1px も
+     増えない**。メモのトグルに相乗りさせないのは、メモを開かずに段を足せる必要が
+     あるため。
+   ★ 絵は 2 つに分ける。メインセット行は `arrow-down-wide-narrow`（ドロップを始める）、
+     段の行は `plus`（同じドロップに段を継ぎ足す）。同じ絵にすると押した結果が同じだと
+     読めてしまう。
+   ★ `.icon-btn` を継ぐので当たり判定は 44px。ただし ✕ の
+     `margin-left: auto` / 区切り線 / 内側余白は打ち消す — あれは「削除を右端へ
+     逃がす」ための装飾で、＋ は回数欄の隣に居てほしい（auto を残すと右端へ飛んで
+     ✕ と隣り合う）。 */
+.set-row .icon-btn.drop-add {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: none;
+  color: var(--muted);
+}
+
+/* 段の入力欄。**段があるときだけ出る**ので、この 1 行ぶんの縦は実際の中身が払う。
+   ★ **1 段 = 1 行。** メインセットの行と同じ組み方（重量 kg × 回数 ＋ …… ✕）にして、
+     `.set-row .icon-btn` の margin-left:auto をそのまま効かせる。これで **✕ が
+     メインセットの ✕ と縦 1 列に並ぶ**（横に流して折り返す形だと、✕ が段ごとに
+     違う x に来てどの行のものか読めない）。
+   ★ 字下げは 44px。セットメモ（23px）より深くして、メインセットの下に**入っている**
+     ことを位置で読ませる（23px だとメインセットの重量欄と左端が揃って、
+     番号の無いもう 1 本のセット行に見える）。
+   ★ ラベル文字を持たない。段だと分かる手掛かりは 3 つあって足りている — 回数欄の隣の
+     ＋、メインセットより狭い入力欄、セット番号を持たないこと。 */
+.drop-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-basis: calc(100% - 44px);
+  margin-left: 44px;
+}
+
+/* ★ **枠は `.set-row .num` を継ぐ。** `.drop-row` は `.set-row` の**中**にあるので
+   同詳細度で既に当たっており、ここに書くのは差分だけでよい（枠・角丸・地色・
+   tabular-nums・44px を書き直すと、入力欄の見た目が 2 箇所で決まる）。
+   ★ 狭くするのは、字下げ 44px のぶん右に寄るので 4.2em だと iPhone 幅で
+   ＋ と ✕ が押し出されるから。 */
+.drop-row .num {
+  width: 3.4em;
+  padding: 4px 6px;
 }
 
 .add-set-wrap {
@@ -738,7 +786,9 @@ h3 {
 /* ── マシンのピン（adr/ux/machine-pins-on-the-exercise.md）───────────────────
    マシンのシート高・バー位置。種目メモの**真上**、セット行群の下に置く
    （DOM もその順）。開閉は種目メモと同じトグル 1 つに相乗りしていて、
-   カード内に新しい 44px のタップ標的は 1 つも増えていない。 */
+   カード内に新しい 44px のタップ標的は 1 つも増えていない。
+   ★ ドロップの段を足す `↓`（.drop-add）だけは標的を持つが、**1 行目の余白に入るので
+     行の高さは変わらない**（adr/ux/drop-sets-as-a-box-under-the-main-set.md 決定 1）。 */
 
 /* 閉じていても読める薄字。`.ex-note-read` と同じ 12px + --muted の段
    （.last-row と同じ「本文ではない利用者のデータ」）。
@@ -778,7 +828,8 @@ h3 {
      サイズだけで、当たり判定ではない
      （adr/ux/destructive-affordance-quiet-at-rest.md）。 */
 .pin-num,
-.interval-num {
+.interval-num,
+.pct-box .num {
   width: 2.9em;
   min-height: 44px;
   padding: 4px 8px;
@@ -789,6 +840,11 @@ h3 {
   /* ラベルの --muted を継がせない（`.ex-note input` と同じ事情） */
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+
+/* 落とし幅は `12.5` の 4 文字が入る。2.9em だと右端が切れる */
+.pct-box .num {
+  width: 5em;
 }
 
 /* 「＋」。カードでいちばん彩度の高い色を、めったに使わない追加に与えない
@@ -811,8 +867,13 @@ h3 {
 }
 
 /* ラベル・入力欄・単位の 1 行。`.pin-box` と同値だが、あちらはチップが折り返す前提の
-   flex-wrap を持つ。こちらは 3 要素固定なので折り返さない。 */
-.interval-box {
+   flex-wrap を持つ。こちらは 3 要素固定なので折り返さない。
+   ★ 設定タブの落とし幅（`.pct-box`）も同じ 3 要素の 1 行なので共有する。設定タブの
+     他の節は `.segmented` だが、刻みは人によって違う（10 / 12.5 / 20 …）ので
+     選択肢を先に決めると必ず外れる。自由入力にした
+     （adr/ux/drop-sets-as-a-box-under-the-main-set.md 決定 4）。 */
+.interval-box,
+.pct-box {
   display: flex;
   align-items: center;
   gap: 10px;

@@ -128,6 +128,8 @@ pub struct S {
     pub day: Day,
     /// `views/help.rs` — ホーム画面への追加の案内
     pub help: Help,
+    /// `views/manual.rs` — 設定タブの使い方マニュアル
+    pub manual: Manual,
     /// `views/backup.rs` — エクスポート / インポート
     pub backup: Backup,
     /// `views/whatsnew.rs` — 新機能のお知らせバナーとシート。お知らせ本文自体は
@@ -145,6 +147,7 @@ const JA: S = S {
     routine: JA_ROUTINE,
     day: JA_DAY,
     help: JA_HELP,
+    manual: JA_MANUAL,
     backup: JA_BACKUP,
     releases: JA_RELEASES,
 };
@@ -159,6 +162,7 @@ const EN: S = S {
     routine: EN_ROUTINE,
     day: EN_DAY,
     help: EN_HELP,
+    manual: EN_MANUAL,
     backup: EN_BACKUP,
     releases: EN_RELEASES,
 };
@@ -957,6 +961,242 @@ const EN_HELP: Help = Help {
     already_where: "While still in the Safari tab,",
     already_body: "open the Settings tab, save a file with Export, then load it with Import in the home-screen app.",
     already_order: "Exporting after you add it to the home screen achieves nothing — that side is empty. The order matters.",
+};
+
+// ── views/manual.rs ─────────────────────────────────────────────────────────
+
+/// マニュアルの 1 章の文言。**章の骨格（順序・図の有無）は `manual.rs` の
+/// [`crate::manual::Chapter`] / [`crate::manual::MANUAL_CHAPTERS`] が持つ。**
+///
+/// ★ **`fig` は言語別。** クリップは要素の外接矩形なので内容依存で、同じ章でも
+///   ja / en で寸法が違いうる（`adr/architecture/manual-figures-as-served-screenshots.md`）。
+pub struct ChapterText {
+    pub title: &'static str,
+    /// 段落 3〜5。**図が無くても本文だけで手順が完結すること**
+    /// （図はオフラインでは出ないので、あくまで補助）。
+    pub body: &'static [&'static str],
+    /// 図の alt。**1 行に収まる短いラベル**（iOS Safari は折り返さないので
+    ///   長いと描かれない）。このコミットでは全章空。
+    pub fig_alt: &'static str,
+    /// 図の宣言寸法。このコミットでは全章 `None`（撮影はコミット #4）。
+    pub fig: Option<(u32, u32)>,
+}
+
+/// 使い方マニュアル全体の文言。
+///
+/// ★ **設定タブの節として持つ**（シートにしない）理由と、記録タブに出す
+///   `hint_*` の排他条件・配置は `adr/ux/manual-as-a-settings-section-with-one-open-chapter.md`
+///   に書く。
+pub struct Manual {
+    /// 設定タブの行ラベル。マニュアル節の `<h1>` にも使う。
+    pub row_label: &'static str,
+    /// 節の先頭に置く導入文。上から順に読む必要が無いことを断る。
+    pub intro: &'static str,
+    /// 圏外では図が出ないことを先に言う。「黙って欠ける」を作らない
+    pub offline_note: &'static str,
+    /// 図はライトテーマの画面であることを断る（ダークテーマ利用者への注記）
+    pub light_note: &'static str,
+    /// ホーム画面追加は `help.rs` の手順シートが説明済みなので、重複させず 1 行で誘導する
+    pub see_install_help: &'static str,
+    /// 記録タブに初回だけ出す手掛かり（`install_hint` と同じ 3 点セット）の本文
+    pub hint_body: &'static str,
+    pub hint_cta: &'static str,
+    /// ✕ の `aria-label`（見た目は ✕ でも支援技術には言葉で届く）
+    pub hint_dismiss: &'static str,
+    /// [`crate::manual::MANUAL_CHAPTERS`] と同じ順・同じ長さ
+    pub chapters: &'static [ChapterText],
+}
+
+const JA_MANUAL: Manual = Manual {
+    row_label: "使い方",
+    intro: "気づきにくい操作をまとめました。上から順に読む必要はありません。気になる章だけ開いてください。",
+    offline_note: "圏外では図が表示されません。文章だけで手順が分かるようにしてあります。",
+    light_note: "図はライトテーマの画面です。ダークテーマで使っていても配置は同じです。",
+    see_install_help: "ホーム画面への追加は「ホーム画面への追加のしかた」を見てください。",
+    hint_body: "このアプリには気づきにくい機能がいくつかあります。設定タブの「使い方」でまとめて確認できます。",
+    hint_cta: "使い方を見る ›",
+    hint_dismiss: "この案内を今後表示しない",
+    chapters: &[
+        ChapterText {
+            title: "推移タブの絞り込み",
+            body: &[
+                "推移タブには「部位」と「種目」の2つのセレクタがあります。部位を選ぶと、その部位に属する種目だけが種目セレクタの候補になります。",
+                "種目のほうを直接選ぶと、部位セレクタはその種目が属する部位に自動で切り替わります。逆に部位を「すべて」に戻すと、種目の選択も一緒に外れます — 「部位はすべて、種目はベンチプレス」のような食い違った組み合わせにはなりません。",
+                "部位・種目のどちらも「すべて」のままだと、絞り込みが足りないためグラフは出ません。どちらか一方を選ぶとグラフが表示されます。最後に選んだ組み合わせは端末に残り、次にタブを開いたときも引き継がれます。",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "グラフの読み取り欄",
+            body: &[
+                "グラフの下の読み取り欄は常に表示されていて、既定では一番新しい点の日付と数値を示します。グラフ上のどこかをタップすると、読み取り欄はタップした点へ動きます — タップは値を変えるのではなく、読む点を移動する操作です。",
+                "指標が「ボリューム」のとき、重量を入力しなかったセットは重量1kgとして計算されます。自重種目では実質「総レップ数」に、時間で数える種目では「総秒数」になります。",
+                "期間を「全期間」にすると、日ごとの点が週単位にまとめられます。指標（ボリューム・セット数・回数）は週の合計、体重だけは週の平均です。同じグラフに乗せる以上どちらも週単位で揃えていますが、まとめ方が違います。",
+                "体重の第2軸は、指標のグラフが実際に表示されているときだけ重ねて出ます。指標側に記録が無い期間では、体重の記録があっても第2軸は出ません。",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "前回をコピー",
+            body: &[
+                "「前回をコピー」ボタンは、その種目のその日のセットがまだ空のときだけ出ます。押すと直近1回分の記録が読み込まれます。表示件数の設定（1〜3件）を増やしても、コピーされるのは常に一番新しい1回分だけです。",
+                "種目メモは今日の欄が空のときだけコピーで埋まります。すでに何か書いてあれば上書きしません。セットごとのメモは、今日その行にすでに書いた内容があればそちらを優先し、空の行にだけ前回のメモが入ります。",
+                "体重やその日の体調メモはコピーの対象に含まれません。持ち込まれるのはセットの数値とメモだけです。",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "「＋ メモ」で開く4つ",
+            body: &[
+                "種目カードの「＋ メモ」を押すと、ピン・インターバル（秒）・種目メモ・セット行ごとのメモ欄の4つが一度に開きます。閉じるときも「－ メモ」で4つまとめて畳まれます。",
+                "ピンとインターバルは種目そのものに貼り付く設定で、その日限りではなく日をまたいで残ります。マシンの設定値を毎回打ち直さずに済むための項目です。",
+                "閉じているあいだも、何か入力済みなら薄い字で読めます。ピン・インターバル・種目メモ・セットメモのいずれも、確認するためだけに毎回開き直す必要はありません。インターバルはあくまで参考の秒数の表示で、カウントダウンはありません。",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "空の日から始める",
+            body: &[
+                "候補リストは、その日にまだ1枚もカードが無いときだけ出ます。1種目でもカードを追加すると候補は消え、未来の日には最初から出ません。",
+                "「最近の記録から」の候補は、直近180日以内・最大4件まで遡って出ます。種目名まで表示されるので、同じ部位の日が複数あっても見分けられます。",
+                "候補を選ぶとその日は「実施済み」として扱われ、カレンダーのドット・月末の集計・グラフに反映されます。「最近の記録から」はセット付きの記録をそのままコピーするので必ず実施済みになりますが、保存したメニューを展開する場合は少し違います — メニューの種目のうち履歴がまだ1つも無いものは空のカードだけが出て記録は入らず、全種目に履歴が無ければその日は実施済みになりません。",
+                "選んだあとにやらなかった種目があれば、そのカードの「この日から外す」でその種目だけを取り消せます。",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "部位の折りたたみ",
+            body: &[
+                "部位ごとに折りたためる一覧は3か所にありますが、同時に開いておける数がそれぞれ違います。設定タブの「種目」節と、記録タブの「種目を追加」シートは、どちらも一度に1つの部位しか開けません。",
+                "一方、トレーニングメニューを編集するシートの「選択中」だけは複数の部位を同時に開けます。1本のメニューを組む間に胸と脚を行き来するような使い方を想定しているためです。",
+                "メニューを作る入口は2つあります。記録タブの「＋ この日をメニューにする」は、その日に実際にセット付きの記録があるときだけ表示されます。空のカードを追加しただけでは出ません。",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "並び替え",
+            body: &[
+                "並び替えは3か所で掴む場所と待ち時間が違います。種目カードの見出し行と、メニュー編集シートの行は、掴んでから250ミリ秒待つと並び替えが始まります。",
+                "セット行だけは違い、左端のセット番号を掴んだ瞬間に動き始めます。待ち時間はありません。指を置いてすぐ動くので、番号のところだけをつまむようにしてください。",
+                "見出し行やメニューの行が待つのは、指を置いた瞬間に動き出すと縦のフリックスクロールと区別できず、スクロールしたつもりで順番が変わってしまうためです。キーボードでの並び替えはAlt+↑/↓で行えます（矢印キーだけだと入力欄のカーソル移動と衝突します）。",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "書き出しと読み込み",
+            body: &[
+                "設定タブの「エクスポート / インポート」でTSV形式のファイルを書き出せます。表計算ソフトでそのまま開けます。iOSでは共有シートから「ファイルに保存」を選んでください。",
+                "読み込みは基本的に追加だけです。同じ日・同じ種目でセットの内容が食い違っている場合は、「セット数 → ボリューム → 各セットの中身」の順で比べて、多いほうが残ります。ファイル側が多ければ今ある記録が入れ替わり、確認画面に「入れ替わる記録があります」と出ます。逆に今ある記録のほうが多ければ何も起きず、「新しく取り込むものはありません」と出ます — この場合ファイルの内容は捨てられます。",
+                "取り込んだ直後なら「元に戻す」で戻せます。誤操作を防ぐため、押すと1度目は確認の表示に変わり、もう一度押すと実際に戻ります。シートを閉じるとその「元に戻す」の機会も失われます。",
+                "TSVには種目のID・色・並び順・アーカイブ状態は含まれません。記録された時刻の列は書き出されますが、読み込み時には使われません。",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+    ],
+};
+
+const EN_MANUAL: Manual = Manual {
+    row_label: "How to use",
+    intro: "This collects the parts of the app that are easy to miss. You do not need to read it in order — open only the chapter you need.",
+    offline_note: "Offline, the figures do not load. The text alone is enough to follow each step.",
+    light_note: "The figures show the light theme. The layout is the same if you use the dark theme.",
+    see_install_help: "See \"How to add it to your home screen\" for adding this app to your home screen.",
+    hint_body: "This app has a few features that are easy to miss. See \"How to use\" in the Settings tab for a rundown.",
+    hint_cta: "See how to use it ›",
+    hint_dismiss: "Do not show this again",
+    chapters: &[
+        ChapterText {
+            title: "Filtering on the Progress tab",
+            body: &[
+                "The Progress tab has two selectors: muscle group and exercise. Choosing a group narrows the exercise selector to only the exercises in that group.",
+                "Choosing an exercise directly switches the group selector to that exercise's group automatically. Conversely, setting the group back to \"All\" also clears the exercise — you never end up with a mismatched pair like \"group: All, exercise: Bench Press.\"",
+                "If both selectors are left on \"All,\" the chart does not appear because nothing has been narrowed down; picking either one shows it. The last combination you picked stays on the device and is still selected the next time you open the tab.",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "Reading the chart",
+            body: &[
+                "The readout line under the chart is always visible. By default it shows the date and value of the most recent point. Tapping anywhere on the chart moves the readout to the point you tapped — tapping does not change a value, it only moves which point you are reading.",
+                "When the metric is Volume, a set with no weight entered counts as 1kg. For bodyweight exercises this effectively becomes \"total reps\"; for exercises measured in time it becomes \"total seconds.\"",
+                "Setting the period to \"All\" groups the daily points by week. The metric (volume, sets, or reps) becomes a weekly sum, while body weight becomes a weekly average. Both are aggregated by the same week so they can share one chart, but the way they are aggregated differs.",
+                "The body-weight second axis only overlays when the metric chart actually has something to show. In a period with no metric records, the second axis does not appear even if body weight was logged.",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "Copy last time",
+            body: &[
+                "The \"Copy last time\" button only appears while today's sets for that exercise are still empty. Tapping it loads the single most recent record. Even if you raise the history display count to 2 or 3 in settings, copying always brings in just the newest one.",
+                "The exercise note is filled in only when today's note is still empty; it never overwrites something you already typed. For each set's note, whatever you already typed in that row today takes priority — the previous note only fills rows that are still empty.",
+                "Body weight and the day's condition note are not part of what gets copied. Only the set values and their notes are carried over.",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "The four things \"+ Note\" opens",
+            body: &[
+                "Tapping \"+ Note\" on an exercise card opens four things at once: pins, interval (in seconds), the exercise note, and a note field for each set row. \"- Note\" folds all four back up together.",
+                "Pins and interval are attached to the exercise itself, not just to today — they carry over from day to day. They exist so you don't have to retype a machine's settings every time.",
+                "Even while closed, anything already filled in is still visible in dim text. You never need to reopen pins, interval, the exercise note, or a set's note just to check them. The interval is only a reference number of seconds — there is no countdown.",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "Starting from an empty day",
+            body: &[
+                "The candidate list only appears on a day that has no cards yet. As soon as one card is added, the candidates disappear, and they never appear on a future date to begin with.",
+                "\"From recent records\" candidates look back up to 180 days and show at most 4 of them. Exercise names are shown too, so two days for the same muscle group can still be told apart.",
+                "Picking a candidate marks that day as trained, which shows up on the calendar dot, the month's footer totals, and the chart. \"From recent records\" always carries actual sets, so it always counts as trained. Expanding a saved routine is a little different: any of its exercises with no history anywhere get only an empty card and no numbers, and if none of the routine's exercises have history, the day is not marked as trained at all.",
+                "If an exercise you did not actually do ends up on the day, use \"Remove from this day\" on that card to take just that one back out.",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "Collapsing by muscle group",
+            body: &[
+                "There are three places with a fold-by-muscle-group list, and each allows a different number to stay open at once. Both the \"Exercises\" section in Settings and the \"Add exercise\" sheet on the Record tab allow only one group open at a time.",
+                "The routine-editing sheet's \"Selected\" list is the exception — it allows several groups open at once, since building one routine often means jumping back and forth between, say, chest and legs.",
+                "There are two entry points for creating a routine. \"+ Save this day as a routine\" on the Record tab only appears once the day actually has logged sets — adding an empty card alone is not enough to show it.",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "Reordering",
+            body: &[
+                "The three places you can drag to reorder differ in where you grab and how long you wait. Both an exercise card's header row and a row in the routine-editing sheet start reordering only after you hold for 250 milliseconds.",
+                "Set rows are the exception — grabbing the set number at the left edge starts moving it the instant you touch it, with no wait at all. Since it reacts immediately, be sure to grab the number itself.",
+                "Header rows and routine rows wait because starting to move the instant you touch them would be indistinguishable from a vertical scroll flick, reordering things when you only meant to scroll. From a keyboard, reorder with Alt+↑/↓ — plain arrow keys are reserved for moving the cursor inside the input.",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "Export and import",
+            body: &[
+                "\"Export / Import\" in the Settings tab writes out a TSV file, which opens directly in a spreadsheet app. On iOS, choose \"Save to Files\" from the share sheet.",
+                "Importing only ever adds. When the same day and exercise have sets that disagree, they are compared in order — set count, then volume, then the contents of each set — and the larger one wins. If the file has more, it replaces what you already have, and the confirmation screen says so. If what you already have is larger, nothing happens and the screen says there is nothing new to import — in that case the file's version is discarded.",
+                "Right after an import, \"Undo\" can reverse it. To guard against a stray tap, the first press only arms a confirmation, and a second press actually undoes it. Closing the sheet gives up that chance to undo.",
+                "A TSV file does not include an exercise's ID, color, sort order, or archived state. The time-of-day column is written on export but is not read back on import.",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+    ],
 };
 
 // ── views/backup.rs ─────────────────────────────────────────────────────────
@@ -1840,6 +2080,68 @@ mod tests {
         }
     }
 
+    /// マニュアルの章数・見出し・本文が日英とも `MANUAL_CHAPTERS` と揃っていること、
+    /// および `has_fig` / `fig` / `fig_alt` の 3 者が食い違っていないことを見る。
+    #[test]
+    fn every_language_has_the_same_manual_chapters() {
+        let want = crate::manual::MANUAL_CHAPTERS.len();
+        assert_eq!(
+            JA_MANUAL.chapters.len(),
+            want,
+            "日本語の章数が MANUAL_CHAPTERS と食い違う"
+        );
+        assert_eq!(
+            EN_MANUAL.chapters.len(),
+            want,
+            "英語の章数が MANUAL_CHAPTERS と食い違う"
+        );
+
+        for (lang, _) in Lang::CHOICES {
+            let m = &lang.strings().manual;
+            for (skeleton, text) in crate::manual::MANUAL_CHAPTERS.iter().zip(m.chapters) {
+                assert!(
+                    !text.title.is_empty(),
+                    "{lang:?} の {} に空の見出し",
+                    skeleton.id
+                );
+                assert!(
+                    !text.body.is_empty(),
+                    "{lang:?} の {} に本文が無い",
+                    skeleton.id
+                );
+                for p in text.body {
+                    assert!(
+                        !p.is_empty(),
+                        "{lang:?} の {} に空の段落がある",
+                        skeleton.id
+                    );
+                }
+                assert_eq!(
+                    skeleton.has_fig,
+                    text.fig.is_some(),
+                    "{lang:?} の {} で has_fig と fig の有無が食い違う",
+                    skeleton.id
+                );
+                assert_eq!(
+                    text.fig.is_some(),
+                    !text.fig_alt.is_empty(),
+                    "{lang:?} の {} で fig と fig_alt の有無が食い違う",
+                    skeleton.id
+                );
+                // ★ このコミットでは図がまだ無い（撮影はコミット #4）ので、px 幅ベースの
+                //   言語別上限（ja ≈ 29 字 / en ≈ 55〜70 字、実測して #4 で決める）ではなく
+                //   「空であること」だけを見ている。上の 2 つの assert_eq! が
+                //   `has_fig == fig.is_some() == !fig_alt.is_empty()` を already 保証するので、
+                //   これは意図の確認（今はまだ 1 枚も無いはず）を兼ねる。
+                assert!(
+                    text.fig_alt.is_empty(),
+                    "{lang:?} の {} の fig_alt はこのコミットでは空のはず",
+                    skeleton.id
+                );
+            }
+        }
+    }
+
     /// 新しい順で id が厳密減少する（`core::unseen_releases` が prefix 切り出しの前提にしている）。
     #[test]
     fn release_ids_run_strictly_downward() {
@@ -1879,5 +2181,21 @@ mod tests {
             Lang::Ja.whatsnew_banner(2).replace('2', "N"),
             "日本語で数字以外が変わっている"
         );
+    }
+    /// 段落数の日英ずれを検出する（片方だけ 1 段落増えるのがドリフトの典型）。
+    #[test]
+    fn the_manual_paragraph_counts_match_across_languages() {
+        for ((skeleton, ja), en) in crate::manual::MANUAL_CHAPTERS
+            .iter()
+            .zip(JA_MANUAL.chapters)
+            .zip(EN_MANUAL.chapters)
+        {
+            assert_eq!(
+                ja.body.len(),
+                en.body.len(),
+                "{} の段落数が日英で食い違う",
+                skeleton.id
+            );
+        }
     }
 }

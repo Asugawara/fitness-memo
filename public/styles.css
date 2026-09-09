@@ -323,6 +323,65 @@ h3 {
   font-weight: 600;
 }
 
+/* ── 新機能のお知らせバナー ─────────────────────────────────────────────── */
+
+/* ★ .notice / .install-hint と規則を共有しない（styles.css 冒頭の判断と同じ理由。
+   .lbl-* が .opt を共有しなかったのもこれ）。前者は「閉じられる一時通知」で
+   ベタ塗り、後者は「常駐する警告」で --warn の枠線。こちらは警告でも一時通知でも
+   ない「お知らせ」なので、色もトーンも別に持つ。.install-hint を出発点に
+   トーンだけ差し替えてある。 */
+.whatsnew {
+  display: flex;
+  align-items: center;
+  /* ★ 幅は .screen の列に揃える: max-width 640px + auto で中央寄せ。.notice の
+     margin（10px 14px 0、全幅）をそのまま真似ると PC で「全幅の帯の下に 640px の
+     列」という不揃いになる。.notice は例外時にしか出ないので今まで誰も気にして
+     いないが、こちらは全利用者が次のリリースで必ず見る */
+  max-width: 640px;
+  margin: 10px auto 0;
+  padding: 4px 4px 4px 10px;
+  /* ★ --warn ではなく --surface 地 + --accent の左罫線にする。警告ではなくお知らせ
+     なので警告色を使うと意味を読み違えられる。「薄い accent 地」に使える既存
+     トークンは無い（--chip-0..3 は経過濃淡の意味を持ち、color-mix はファイル内
+     0 件）ので、地色は既存の --surface に任せ、意味は罫線だけに持たせる */
+  background: var(--surface);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 10px 10px 0;
+  font-size: 13px;
+}
+
+.whatsnew-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  /* ★ min-width: 0 が無いと flex item は内容の幅より縮まないので、
+     .whatsnew-text の text-overflow: ellipsis が効かない */
+  min-width: 0;
+  /* ★ 高さは 1 行に固定する。件数や文言の長さでバナーの高さが変わると、記録タブの
+     縦を必要以上に食う（他タブより記録タブでの縦の余白が貴重なため優先した） */
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+}
+
+.whatsnew-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.whatsnew-cta {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* ── 記録タブ（選択日の入力欄） ─────────────────────────────────────────── */
 
 /* カレンダーと入力欄の境。上に月フッタ、下に日付見出しが来る */

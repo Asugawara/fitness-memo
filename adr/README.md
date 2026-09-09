@@ -114,6 +114,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [推移タブの対象を「部位 + 種目」の 2 セレクタにする](ux/progress-target-as-group-plus-exercise-selects.md) | 採用 |
 | [記録タブの「種目を追加」シートを部位のアコーディオンにし、1 つだけ開く](ux/record-add-sheet-groups-as-single-open-accordion.md) | 採用 |
 | [ドロップセットの段はメインセットの下の箱に出し、推移では既定で外す](ux/drop-sets-as-a-box-under-the-main-set.md) | 採用 |
+| [新機能のお知らせバナーを画面最上段に置く](ux/whats-new-banner-above-the-screen.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

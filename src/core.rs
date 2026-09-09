@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{Datelike, NaiveDate, TimeDelta};
 
-use crate::i18n::Lang;
+use crate::i18n::{Lang, ReleaseNote};
 use crate::model::{
     Db, DropStage, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, MAX_DROPS,
     MAX_INTERVAL_SEC, MAX_PIN_LEN, MAX_PINS, Routine, RoutineId, SCHEMA, Session, SetEntry,
@@ -1546,6 +1546,32 @@ pub fn recency_class(e: Option<Elapsed>) -> &'static str {
         4..=6 => "stale",
         _ => "old",
     }
+}
+
+// ── お知らせ（新機能バナー） ────────────────────────────────────────────────
+
+/// 未読のお知らせ。`notes` は新しい順、`last_seen` は `UiState.release_seen` の生値。
+///
+/// ★ `None`（未設定）は「全部既読」に倒す。新規利用者にも、この機能が乗る前からの
+///   利用者にも過去分を出さないため（基準値を書くのは `whatsnew::bootstrap`）。
+///
+/// 引数を `&'static` にしていない。呼出側が `i18n::RELEASES` を渡せば省略記法で
+/// `'static` が返るので、この形のほうがテストからローカルの配列を渡せて素直になる。
+pub fn unseen_releases(notes: &[ReleaseNote], last_seen: Option<i64>) -> &[ReleaseNote] {
+    let Some(last_seen) = last_seen else {
+        return &[];
+    };
+    // notes は新しい順なので、未読は先頭からの連続 prefix
+    let n = notes
+        .iter()
+        .take_while(|r| i64::from(r.id) > last_seen)
+        .count();
+    &notes[..n]
+}
+
+/// 最新のお知らせ番号。`notes` が空なら `None`。
+pub fn latest_release_id(notes: &[ReleaseNote]) -> Option<u32> {
+    notes.first().map(|r| r.id)
 }
 
 // ── 復元 ────────────────────────────────────────────────────────────────────
@@ -6321,6 +6347,61 @@ mod tests {
         assert_eq!(recency_class(Some(Elapsed::days_only(4))), "stale");
         assert_eq!(recency_class(Some(Elapsed::days_only(6))), "stale");
         assert_eq!(recency_class(Some(Elapsed::days_only(7))), "old");
+    }
+
+    // ── unseen_releases / latest_release_id ─────────────────────────────────
+
+    /// 生値の異常系をここで全部潰す。`UiState.release_seen` は `Option<i64>` で
+    /// 範囲を絞らずに受けているので、ここが唯一の検証地点になる。
+    #[test]
+    fn unseen_releases_handles_every_raw_last_seen_value() {
+        // 新しい順（id は 5..=1）。本文はテストに関係ないのでダミーで揃える
+        let notes: Vec<ReleaseNote> = (1..=5)
+            .rev()
+            .map(|id| ReleaseNote {
+                id,
+                date: "2026-01-01",
+                ja: &["x"],
+                en: &["x"],
+            })
+            .collect();
+
+        assert_eq!(unseen_releases(&notes, None).len(), 0, "未設定は空");
+        assert_eq!(unseen_releases(&notes, Some(5)).len(), 0, "最新と同値は空");
+        assert_eq!(
+            unseen_releases(&notes, Some(4)).len(),
+            1,
+            "1 つ古いなら 1 件"
+        );
+        assert_eq!(
+            unseen_releases(&notes, Some(2)).len(),
+            3,
+            "3 つ古いなら 3 件"
+        );
+        assert_eq!(unseen_releases(&notes, Some(-1)).len(), 5, "負値は全件");
+        assert_eq!(
+            unseen_releases(&notes, Some(i64::MAX)).len(),
+            0,
+            "桁溢れしない"
+        );
+        assert_eq!(
+            unseen_releases(&notes, Some(100)).len(),
+            0,
+            "未来の番号（最新より大きい）は空"
+        );
+        assert_eq!(unseen_releases(&[], Some(0)).len(), 0, "notes が空なら空");
+    }
+
+    #[test]
+    fn latest_release_id_is_the_first_entry_or_none() {
+        let notes = [ReleaseNote {
+            id: 7,
+            date: "2026-01-01",
+            ja: &["x"],
+            en: &["x"],
+        }];
+        assert_eq!(latest_release_id(&notes), Some(7));
+        assert_eq!(latest_release_id(&[]), None);
     }
 
     // ── migrate ─────────────────────────────────────────────────────────────

@@ -112,6 +112,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [前回までの記録を日付で出し、何回分出すかを表示設定にする](ux/past-records-by-date-with-a-count-setting.md) | 採用 |
 | [推移タブの対象を「部位 + 種目」の 2 セレクタにする](ux/progress-target-as-group-plus-exercise-selects.md) | 採用 |
 | [記録タブの「種目を追加」シートを部位のアコーディオンにし、1 つだけ開く](ux/record-add-sheet-groups-as-single-open-accordion.md) | 採用 |
+| [新機能のお知らせバナーを画面最上段に置く](ux/whats-new-banner-above-the-screen.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 

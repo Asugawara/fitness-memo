@@ -364,6 +364,12 @@ fn cancel_pending_timer() {
 //
 // ★ このキーは失われても害がない。読めなければ案内がもう一度出るだけなので、
 //   移行（`LEGACY_KEYS`）も退避（`.bak-`）も持たせない。
+//
+// ★ **`release_seen` だけは向きが逆。** 失われると案内が復活するのではなく、
+//   **そのとき未読だったお知らせが二度と出なくなる**（起動時に「今の最新」が基準値
+//   として書き直されるため）。次のリリース以降は普通に出る（`release_seen` の
+//   doc comment を参照）。それでも退避を持たせないのは、害の大きさが他の 4 つと
+//   同じ「軽微な体験の欠落」の範囲に収まるため（データは 1 バイトも失われない）。
 
 /// UI の状態を持つキー。`Db` とは分ける。
 const UI_KEY: &str = "fitness-memo/ui/v1";
@@ -410,6 +416,15 @@ struct UiState {
     progress_group: Option<String>,
     #[serde(default)]
     progress_exercise: Option<String>,
+    /// 既読の最大お知らせ番号。`None` は「まだ何も記録していない」。
+    ///
+    /// ★ `Option<u32>` ではなく `Option<i64>` で持つ。`lang` / `history` とまったく
+    ///   同じ理由で、範囲外の値が入っていると `u32` の deserialize が失敗し、
+    ///   **`UiState` 全体のパースが落ちて `install_hint_dismissed` まで巻き添えで消える**。
+    ///   整数なら何でも受けて、切り出しは `core::unseen_releases`（ホストのテストが
+    ///   届く側）に任せる。
+    #[serde(default)]
+    release_seen: Option<i64>,
 }
 
 fn ui_state() -> UiState {
@@ -504,6 +519,27 @@ pub fn dismiss_install_hint() {
     //   フィールドが 1 つの間 clippy::needless_update に当たるので、この形にしておく
     let mut next = ui_state();
     next.install_hint_dismissed = true;
+    if let Ok(json) = serde_json::to_string(&next) {
+        let _ = store.set_item(UI_KEY, &json);
+    }
+}
+
+/// 既読の最大お知らせ番号。**未設定なら `None`**（呼び側の `whatsnew::bootstrap` が
+/// 「まだ一度も基準値を書いていない」と区別して使う）。
+pub fn release_seen() -> Option<i64> {
+    ui_state().release_seen
+}
+
+/// 既読の最大お知らせ番号を保存する。
+///
+/// クリック 1 回きりなので debounce しない（`save_lang` と同じ）。
+pub fn save_release_seen(id: u32) {
+    let Some(store) = store() else {
+        return;
+    };
+    // ★ 読んでから 1 フィールドだけ差し替える（`save_lang` と同じ理由）
+    let mut next = ui_state();
+    next.release_seen = Some(i64::from(id));
     if let Ok(json) = serde_json::to_string(&next) {
         let _ = store.set_item(UI_KEY, &json);
     }

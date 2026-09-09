@@ -1167,6 +1167,28 @@ impl Lang {
         }
     }
 
+    /// 上限に達していて取り込めなかったラベル定義の警告。
+    ///
+    /// ★ **`Conflict` としては出さない。** あちらは「記録の食い違い」の型で、
+    /// 確認画面が `conflicts.is_empty()` で「入れ替わる記録があります」に分岐するので、
+    /// 記録が 1 件も入れ替わらないこの事象を積むと確認画面が嘘をつく。
+    ///
+    /// ★ **責めずに「何が起きたか」と「何をすれば直るか」を書く**
+    /// （`Day::weight_missing` の「回数を入れると保存されます」と同じ作法）。
+    /// 落ちた定義を指す記録は消えていない — 「指定なし」で見られる。
+    pub fn dropped_labels(self, n: usize) -> String {
+        match self {
+            Lang::Ja => format!(
+                "{n} 件のラベルは、その種目のラベルが上限に達していたため取り込みませんでした。記録は消えていないので「指定なし」で見られます。使わないラベルを設定タブで消してから取り込み直すと入ります"
+            ),
+            Lang::En => format!(
+                "{n} label {} {} not imported — that exercise is already at its label limit. No records were lost; they are still visible under Any. Delete a label you no longer use under Settings, then import again.",
+                plural(n, "definition", "definitions"),
+                plural(n, "was", "were"),
+            ),
+        }
+    }
+
     /// 確認画面の 1 行目（増えるものがあるとき）。
     pub fn will_add(self, added: &str) -> String {
         match self {

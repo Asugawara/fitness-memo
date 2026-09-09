@@ -1668,6 +1668,60 @@ fn fill_interval(existing: &mut Exercise, incoming: &Exercise) {
     }
 }
 
+/// 既存の種目に取り込み側のラベル定義を足す。**足すだけ。既存は上書きしない。**
+/// （[`merge_db`] から呼ぶ）
+///
+/// ★ 落とし穴は [`fill_pins`] とまったく同じで、**被害はこちらのほうが大きい。**
+/// プリセットは固定 ID を持つので新品端末への復元は必ず「ID 一致」の枝を通り、その枝は
+/// 取り込み側の `Exercise` を丸ごと捨てる。手当てしないと**記録は全部戻るのにラベル
+/// 定義だけ落ち、ログには宙に浮いた `label` が残る**（履歴が全部「どのラベルにも
+/// 属さない」になる最悪の形）。
+///
+/// 判定は**種目とまったく同じ梯子**: ID 一致（何もしない）→ 同名がちょうど 1 件
+/// （`alias` に積む。これが「2 台で独立に定義した `P` を寄せたい」という名前側の
+/// 利点の回収点。「ちょうど 1 件」なのは [`resolve_exercise`] と同じ理由 — 曖昧なら
+/// 新規に倒す）→ 新規追加（[`crate::model::MAX_LABELS`] まで）。
+///
+/// ★ **写像のキーは `(写像後の ExerciseId, LabelId)`。** `LabelId` 単独にすると、
+/// 同じ `LabelId` が取り込み側の 2 種目に居る場合（手編集 JSON、または
+/// [`clean_labels`] が種目内の重複しか再採番しないので種目をまたぐ重複は生き残る）に
+/// 後の `insert` が前を上書きし、**種目 A のログが種目 B のラベルへ張り替わって
+/// 宙に浮く**。キーを組にすればこの経路が構造的に消える。
+///
+/// ★ `Conflict` は積まない（[`fill_pins`] と同じ粒度）。
+///
+/// 返すのは `(追加した数, MAX_LABELS で落とした数)`。落とした数を数えるのは、落ちると
+/// そのログは取り込み直しても二度と生き返らない dangling になるのに、数も `Conflict` も
+/// 出ないと気づけないため。
+fn merge_labels(
+    existing: &mut Exercise,
+    incoming: &Exercise,
+    alias: &mut HashMap<(ExerciseId, LabelId), LabelId>,
+) -> (usize, usize) {
+    let ex_id = existing.id;
+    let mut added = 0;
+    let mut dropped = 0;
+    for l in &incoming.labels {
+        // 1. ID 一致。何もしない（写像も要らない）
+        if existing.labels.iter().any(|x| x.id == l.id) {
+            continue;
+        }
+        // 2. 同名がちょうど 1 件なら寄せる。曖昧（0 件 / 2 件以上）なら新規に倒す
+        if let Some(only) = exactly_one(existing.labels.iter().filter(|x| x.name == l.name)) {
+            alias.insert((ex_id, l.id), only.id);
+            continue;
+        }
+        // 3. 新規追加
+        if existing.labels.len() >= MAX_LABELS {
+            dropped += 1;
+            continue;
+        }
+        existing.labels.push(l.clone());
+        added += 1;
+    }
+    (added, dropped)
+}
+
 /// `f32` で表せない重量を捨てる。**取り込み境界で必ず通すこと。**
 ///
 /// ★ ここが無いと、1 回の取り込みで**次回起動から永久に読めなくなる**:
@@ -3114,6 +3168,23 @@ pub struct MergeReport {
     pub notes_added: usize,
     /// 追加したトレーニングメニューの本数。
     pub routines_added: usize,
+    /// 増えたラベル（**定義の追加とログへの付与の合算**。`notes_added` が既に
+    /// 異種混合の先例）。
+    ///
+    /// ★ これが無いと、ラベルだけが増えたマージで [`MergeReport::is_noop`] が真になり、
+    /// 画面が「新しく取り込むものはありませんでした」と嘘をつく。ラベルは `conflicts` に
+    /// 出ないのに**チップが増えて履歴の見え方が変わる**ので、数える以外に見る手段が無い。
+    pub labels_added: usize,
+    /// [`crate::model::MAX_LABELS`] を超えて取り込めなかったラベル定義の数。
+    ///
+    /// ★ **[`MergeReport::is_noop`] には入れない**（何も増えていないので）。代わりに
+    /// `views::backup` の警告文に出す — 落ちたラベルを指すログは取り込み直しても
+    /// 二度と生き返らない dangling になるのに、数も `Conflict` も出ないと気づけない。
+    ///
+    /// ★ `conflicts` に積まないのは、確認画面が `conflicts.is_empty()` で
+    /// 「入れ替わる記録があります」に分岐するため。記録は 1 件も入れ替わらないので、
+    /// 積むと確認画面が嘘をつく。
+    pub labels_dropped: usize,
     pub conflicts: Vec<Conflict>,
 }
 
@@ -3130,6 +3201,7 @@ impl MergeReport {
             && self.logs_added == 0
             && self.notes_added == 0
             && self.routines_added == 0
+            && self.labels_added == 0
     }
 }
 
@@ -3222,6 +3294,8 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
 
     // ── 種目 ──
     let mut exercise_alias: HashMap<ExerciseId, ExerciseId> = HashMap::new();
+    // ★ キーは `(写像後の ExerciseId, LabelId)`（[`merge_labels`] の ★）
+    let mut label_alias: HashMap<(ExerciseId, LabelId), LabelId> = HashMap::new();
     for e in theirs.exercises {
         if let Some(existing) = mine.exercises.iter_mut().find(|x| x.id == e.id) {
             if existing.name != e.name {
@@ -3233,6 +3307,9 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             }
             fill_pins(existing, &e);
             fill_interval(existing, &e);
+            let (added, dropped) = merge_labels(existing, &e, &mut label_alias);
+            report.labels_added += added;
+            report.labels_dropped += dropped;
             exercise_alias.insert(e.id, e.id);
             continue;
         }
@@ -3240,6 +3317,12 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             exercise_alias.insert(e.id, existing.id);
             fill_pins(existing, &e);
             fill_interval(existing, &e);
+            // ★ **同名寄せの枝でも呼ぶ。** 忘れると名前で寄せた種目のラベルだけが
+            //   落ちる（一番踏みやすいミス）。3 つ目の新規追加枝は `..e` なので
+            //   `labels` が自動で乗る
+            let (added, dropped) = merge_labels(existing, &e, &mut label_alias);
+            report.labels_added += added;
+            report.labels_dropped += dropped;
             report.conflicts.push(Conflict::NameMatched {
                 name: e.name.clone(),
             });
@@ -3319,12 +3402,20 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
         let mapped: Vec<ExerciseLog> = session
             .logs
             .into_iter()
-            .map(|l| ExerciseLog {
-                exercise_id: exercise_alias
+            .map(|l| {
+                let ex_id = exercise_alias
                     .get(&l.exercise_id)
                     .copied()
-                    .unwrap_or(l.exercise_id),
-                ..l
+                    .unwrap_or(l.exercise_id);
+                ExerciseLog {
+                    exercise_id: ex_id,
+                    // ★ **写像後の種目 ID で引く。** 種目が寄ったのにラベルが元の
+                    //   種目のキーで引かれると張り替えが起きない
+                    label: l
+                        .label
+                        .map(|id| label_alias.get(&(ex_id, id)).copied().unwrap_or(id)),
+                    ..l
+                }
             })
             .collect();
         // ★ 写像は単射とは限らない。取り込み先で改名済みの種目と、取り込む側の
@@ -3362,6 +3453,13 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             //   `*existing = log` が取り込み先のメモを取り込む側のもので上書きして消す
             if append_note(&mut existing.note, &log.note) {
                 report.notes_added += 1;
+            }
+            // ★ ラベルは**空のときだけ埋める**（`mine` 優先。
+            //   adr/storage/import-is-merge-only.md の「足すだけ」）。**あとに回しては
+            //   いけない** — 下の `*existing = log` が上書きして消す
+            if existing.label.is_none() && log.label.is_some() {
+                existing.label = log.label;
+                report.labels_added += 1;
             }
             // ★ `==` ではなく `same_sets`。メモだけの違いを食い違い扱いにすると、
             //   rank が同点なので下の分岐にも入れず、取り込む側のセットメモが
@@ -3409,7 +3507,16 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
                 //   1 セット足したファイルを取り込むだけで**実施時刻が消える**。
                 //   取り込む側が時刻を持っているならそちらを優先する
                 let at = log.at.or(existing.at);
-                *existing = ExerciseLog { note, at, ..log };
+                // ★ ラベルも持ち越す。`..log` に任せると**勝った側で上書きされる** —
+                //   上で `mine` 優先で埋めたはずの値が、セットが負けただけで
+                //   取り込む側のものに入れ替わる（`note` / `at` と同じ理由）
+                let label = existing.label.or(log.label);
+                *existing = ExerciseLog {
+                    note,
+                    at,
+                    label,
+                    ..log
+                };
             }
         }
 
@@ -9823,5 +9930,356 @@ mod tests {
         };
         dedupe_logs(&mut s);
         assert_eq!(s.logs[0].label, Some(lb(1)));
+    }
+
+    // ── ラベルのマージ ──────────────────────────────────────────────────────
+
+    /// ラベル付きのプリセット Db。ベンチプレスに指定の定義を入れる。
+    fn preset_db_with_labels(labels: Vec<Label>) -> Db {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        if let Some(x) = db.exercises.iter_mut().find(|x| x.id == bench) {
+            x.labels = labels;
+        }
+        db
+    }
+
+    fn bench_labels(db: &Db) -> Vec<(LabelId, String)> {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        db.exercise(bench)
+            .expect("種目")
+            .labels
+            .iter()
+            .map(|l| (l.id, l.name.clone()))
+            .collect()
+    }
+
+    /// ★ **プリセットは固定 ID を持つので新品端末への復元は必ず「ID 一致」の枝を
+    /// 通り、その枝は取り込み側の `Exercise` を丸ごと捨てる。** 手当てしないと
+    /// 記録は全部戻るのにラベル定義だけ落ち、ログには宙に浮いた `label` が残る。
+    /// `fill_pins` の ★ と同型で、被害はこちらのほうが大きい。
+    #[test]
+    fn merging_into_a_fresh_device_keeps_the_labels() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut theirs = preset_db_with_labels(vec![label(1, "H"), label(2, "P")]);
+        theirs.sessions.insert(
+            date_key(d(2026, 8, 8)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: bench,
+                    label: Some(lb(2)),
+                    ..log(0, &[(100.0, 3)], None)
+                }],
+                ..Session::default()
+            },
+        );
+
+        let mut fresh = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let report = merge_db(&mut fresh, theirs);
+
+        assert_eq!(
+            bench_labels(&fresh),
+            vec![(lb(1), "H".into()), (lb(2), "P".into())],
+            "ID 一致の枝でラベル定義が落ちた"
+        );
+        assert_eq!(report.labels_added, 2);
+        // 履歴が「どのラベルにも属さない」にならない
+        assert_eq!(
+            last_logs_before_with(&fresh, bench, d(2026, 8, 9), 3, LabelFilter::Only(lb(2))).len(),
+            1
+        );
+    }
+
+    /// ★ **同名寄せの枝でも `merge_labels` を呼んでいる。** 忘れると名前で寄せた
+    /// 種目のラベルだけが落ちる（一番踏みやすいミス）。
+    #[test]
+    fn merge_fills_the_labels_on_the_name_matched_branch_too() {
+        let chest = crate::presets::preset_group_id("胸").expect("プリセット");
+        let make = |id: u64, labels: Vec<Label>| {
+            let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+            db.exercises.push(Exercise {
+                id: ExerciseId::from_bits(id),
+                name: "ペックフライ".into(),
+                group_id: chest,
+                order: 9,
+                archived: false,
+                pins: Vec::new(),
+                interval_sec: None,
+                labels,
+            });
+            db
+        };
+        // ID は違うが同名 → 「同名寄せ」の枝を通る
+        let mut mine = make(0xAAA1, Vec::new());
+        let theirs = make(0xBBB1, vec![label(1, "H")]);
+
+        let report = merge_db(&mut mine, theirs);
+
+        let got = mine
+            .exercises
+            .iter()
+            .find(|e| e.name == "ペックフライ")
+            .expect("同名に寄っている");
+        assert_eq!(
+            got.labels
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect::<Vec<_>>(),
+            ["H"],
+            "同名寄せの枝でラベルが落ちた"
+        );
+        assert_eq!(report.labels_added, 1);
+    }
+
+    /// 同名がちょうど 1 件なら寄せ、**ログの `label` が写像で張り替わる**。
+    /// これが「2 台で独立に定義した `P` を寄せたい」という名前側の利点の回収点。
+    #[test]
+    fn merge_maps_a_log_label_onto_the_locally_named_label() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut mine = preset_db_with_labels(vec![label(1, "P")]);
+        // 別 ID・同名。ログはあちらの ID を指している
+        let mut theirs = preset_db_with_labels(vec![label(7, "P")]);
+        theirs.sessions.insert(
+            date_key(d(2026, 8, 8)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: bench,
+                    label: Some(lb(7)),
+                    ..log(0, &[(100.0, 3)], None)
+                }],
+                ..Session::default()
+            },
+        );
+
+        merge_db(&mut mine, theirs);
+
+        assert_eq!(bench_labels(&mine).len(), 1, "同名は 2 本に増やさない");
+        assert_eq!(
+            mine.sessions[&date_key(d(2026, 8, 8))].logs[0].label,
+            Some(lb(1)),
+            "ログのラベルが写像で張り替わっていない"
+        );
+    }
+
+    /// ★ **写像のキーが `(ExerciseId, LabelId)` の組であることの主張。**
+    /// `LabelId` 単独だと後の `insert` が前を上書きし、**種目 A のログが種目 B の
+    /// ラベルへ張り替わって宙に浮く**。
+    #[test]
+    fn merge_does_not_confuse_the_same_label_id_used_by_two_exercises() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let squat = crate::presets::preset_exercise_id("スクワット").expect("プリセット");
+        // 取り込み先: 2 種目それぞれに別 ID で同名の "P"
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        for (ex, id) in [(bench, 1), (squat, 2)] {
+            if let Some(x) = mine.exercises.iter_mut().find(|x| x.id == ex) {
+                x.labels = vec![label(id, "P")];
+            }
+        }
+        // 取り込む側: **同じ `LabelId`(7)** を 2 種目で使い回している
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        for ex in [bench, squat] {
+            if let Some(x) = theirs.exercises.iter_mut().find(|x| x.id == ex) {
+                x.labels = vec![label(7, "P")];
+            }
+        }
+        theirs.sessions.insert(
+            date_key(d(2026, 8, 8)),
+            Session {
+                logs: vec![
+                    ExerciseLog {
+                        exercise_id: bench,
+                        label: Some(lb(7)),
+                        ..log(0, &[(100.0, 3)], None)
+                    },
+                    ExerciseLog {
+                        exercise_id: squat,
+                        label: Some(lb(7)),
+                        ..log(0, &[(120.0, 5)], None)
+                    },
+                ],
+                ..Session::default()
+            },
+        );
+
+        merge_db(&mut mine, theirs);
+
+        let logs = &mine.sessions[&date_key(d(2026, 8, 8))].logs;
+        let of = |ex| {
+            logs.iter()
+                .find(|l| l.exercise_id == ex)
+                .expect("ログがある")
+                .label
+        };
+        assert_eq!(
+            of(bench),
+            Some(lb(1)),
+            "ベンチのログが別種目のラベルを指した"
+        );
+        assert_eq!(
+            of(squat),
+            Some(lb(2)),
+            "スクワットのログが別種目のラベルを指した"
+        );
+    }
+
+    /// ログの `label` は**空のときだけ**埋める（`mine` 優先）。
+    #[test]
+    fn merge_fills_a_log_label_only_when_it_is_empty() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let build = |label_id: Option<u64>| {
+            let mut db = preset_db_with_labels(vec![label(1, "H"), label(2, "P")]);
+            db.sessions.insert(
+                date_key(d(2026, 8, 8)),
+                Session {
+                    logs: vec![ExerciseLog {
+                        exercise_id: bench,
+                        label: label_id.map(lb),
+                        ..log(0, &[(100.0, 3)], None)
+                    }],
+                    ..Session::default()
+                },
+            );
+            db
+        };
+
+        // 空いている側は埋まる
+        let mut mine = build(None);
+        let report = merge_db(&mut mine, build(Some(2)));
+        assert_eq!(
+            mine.sessions[&date_key(d(2026, 8, 8))].logs[0].label,
+            Some(lb(2))
+        );
+        assert_eq!(report.labels_added, 1);
+
+        // 入っている側は上書きしない
+        let mut mine = build(Some(1));
+        let report = merge_db(&mut mine, build(Some(2)));
+        assert_eq!(
+            mine.sessions[&date_key(d(2026, 8, 8))].logs[0].label,
+            Some(lb(1)),
+            "古いファイル 1 枚で自分の選択を巻き戻してはいけない"
+        );
+        assert_eq!(report.labels_added, 0);
+    }
+
+    /// ★ **ラベルの差だけで「食い違い」の枝に落ちてはいけない。** 落ちると
+    /// `log_rank` が同点なので差し替えの分岐にも入らず、**取り込む側のセットメモが
+    /// `Conflict` も出さずに黙って捨てられる**
+    /// （adr/data-model/notes-on-logs-and-sets.md 決定 8 の ★ そのもの）。
+    #[test]
+    fn a_label_difference_alone_is_not_a_set_conflict() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let build = |label_id: u64, set_note: &str| {
+            let mut db = preset_db_with_labels(vec![label(1, "H"), label(2, "P")]);
+            db.sessions.insert(
+                date_key(d(2026, 8, 8)),
+                Session {
+                    logs: vec![ExerciseLog {
+                        exercise_id: bench,
+                        label: Some(lb(label_id)),
+                        sets: vec![SetEntry {
+                            weight: 100.0,
+                            reps: 3,
+                            note: set_note.to_string(),
+                        }],
+                        at: None,
+                        note: String::new(),
+                    }],
+                    ..Session::default()
+                },
+            );
+            db
+        };
+
+        let mut mine = build(1, "");
+        let report = merge_db(&mut mine, build(2, "あちらのメモ"));
+
+        assert!(
+            report.conflicts.is_empty(),
+            "ラベルの差を食い違いにしてはいけない: {:?}",
+            report.conflicts
+        );
+        assert_eq!(
+            mine.sessions[&date_key(d(2026, 8, 8))].logs[0].sets[0].note,
+            "あちらのメモ",
+            "セットメモが黙って捨てられた"
+        );
+    }
+
+    /// ★ セットが負けた枝でもラベルを持ち越す。`..log` に任せると勝った側で
+    /// 上書きされ、`mine` 優先で埋めたはずの値が入れ替わる。
+    #[test]
+    fn merge_keeps_my_label_even_when_my_sets_lose() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let build = |label_id: u64, sets: &[(f32, u32)]| {
+            let mut db = preset_db_with_labels(vec![label(1, "H"), label(2, "P")]);
+            db.sessions.insert(
+                date_key(d(2026, 8, 8)),
+                Session {
+                    logs: vec![ExerciseLog {
+                        exercise_id: bench,
+                        label: Some(lb(label_id)),
+                        ..log(0, sets, None)
+                    }],
+                    ..Session::default()
+                },
+            );
+            db
+        };
+
+        // 取り込む側のほうがセットが多い → `log_rank` の勝ち枝を通る
+        let mut mine = build(1, &[(100.0, 3)]);
+        merge_db(&mut mine, build(2, &[(100.0, 3), (100.0, 3), (100.0, 3)]));
+
+        let got = &mine.sessions[&date_key(d(2026, 8, 8))].logs[0];
+        assert_eq!(got.sets.len(), 3, "強いほうのセットを採る");
+        assert_eq!(got.label, Some(lb(1)), "自分のラベルが上書きされた");
+    }
+
+    #[test]
+    fn merging_the_same_labels_twice_adds_nothing_the_second_time() {
+        let theirs = || preset_db_with_labels(vec![label(1, "H"), label(2, "P")]);
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+
+        let first = merge_db(&mut mine, theirs());
+        let second = merge_db(&mut mine, theirs());
+
+        assert_eq!(first.labels_added, 2);
+        assert_eq!(second.labels_added, 0, "カウンタが冪等でない");
+        assert_eq!(bench_labels(&mine).len(), 2, "同じラベルが 2 本に増えた");
+    }
+
+    /// ★ ラベルだけが増えたマージは `conflicts` に出ないのに**チップが増えて履歴の
+    /// 見え方が変わる**。数えないと画面が「新しく取り込むものはありませんでした」と
+    /// 嘘をつく。
+    #[test]
+    fn a_merge_that_only_adds_labels_is_not_a_noop() {
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let report = merge_db(&mut mine, preset_db_with_labels(vec![label(1, "H")]));
+
+        assert_eq!(report.labels_added, 1);
+        assert!(!report.is_noop(), "ラベルだけ増えたときも noop ではない");
+    }
+
+    /// ★ 落ちた定義を指すログは取り込み直しても二度と生き返らない dangling になる。
+    /// **`is_noop()` には入れない**（何も増えていない）が、数は出す。
+    #[test]
+    fn labels_over_the_cap_are_counted_as_dropped() {
+        let full: Vec<Label> = (0..MAX_LABELS as u64)
+            .map(|i| label(i, &format!("L{i}")))
+            .collect();
+        let mut mine = preset_db_with_labels(full);
+        let report = merge_db(
+            &mut mine,
+            preset_db_with_labels(vec![label(99, "はみ出し")]),
+        );
+
+        assert_eq!(report.labels_dropped, 1);
+        assert_eq!(report.labels_added, 0);
+        assert_eq!(bench_labels(&mine).len(), MAX_LABELS, "上限を超えて入った");
+        assert!(
+            report.is_noop(),
+            "何も増えていないので is_noop は真。落ちたことは labels_dropped が言う"
+        );
     }
 }

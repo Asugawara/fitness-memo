@@ -975,10 +975,20 @@ pub struct ChapterText {
     /// 段落 3〜5。**図が無くても本文だけで手順が完結すること**
     /// （図はオフラインでは出ないので、あくまで補助）。
     pub body: &'static [&'static str],
-    /// 図の alt。**1 行に収まる短いラベル**（iOS Safari は折り返さないので
-    ///   長いと描かれない）。このコミットでは全章空。
+    /// 図の alt。**1 行に収まる短いラベル**にすること。説明は `body` が持つ。
+    ///
+    /// ★ **WebKit は alt を折り返さない。** `RenderImage::paintMissingImageState` →
+    ///   `hasRoomForAltText` が alt 全文を 1 本の `TextRun` として測り、幅に収まらなければ
+    ///   **何も描かない**。Blink は折り返して出すので Chrome で見ても気づけないが、
+    ///   主対象は iPhone なので、長い alt は圏外で**図の代わりに何も出ない**ことになる。
+    ///   上限は `every_language_has_the_same_manual_chapters` が言語別に固定している。
     pub fig_alt: &'static str,
-    /// 図の宣言寸法。このコミットでは全章 `None`（撮影はコミット #4）。
+    /// 図の宣言寸法（デバイスピクセル）。`<img width height>` に出してレイアウトシフトを
+    /// 防ぐ値で、`manual::tests::every_manual_figure_exists_with_the_declared_size` が
+    /// `public/manual/<lang>/<id>.webp` の実ファイルと突き合わせる。
+    ///
+    /// ★ 撮り直して寸法が動いたらここを手で直す。放っておくと E2E（配信物の
+    ///   `<img>` と実ファイルの比較）が落ちる。`.githooks/pre-commit` のコメント参照。
     pub fig: Option<(u32, u32)>,
 }
 
@@ -1035,8 +1045,8 @@ const JA_MANUAL: Manual = Manual {
                 "期間を「全期間」にすると、日ごとの点が週単位にまとめられます。指標（ボリューム・セット数・回数）は週の合計、体重だけは週の平均です。同じグラフに乗せる以上どちらも週単位で揃えていますが、まとめ方が違います。",
                 "体重の第2軸は、指標のグラフが実際に表示されているときだけ重ねて出ます。指標側に記録が無い期間では、体重の記録があっても第2軸は出ません。",
             ],
-            fig_alt: "",
-            fig: None,
+            fig_alt: "グラフと下の読み取り欄",
+            fig: Some((734, 438)),
         },
         ChapterText {
             title: "前回をコピー",
@@ -1045,8 +1055,8 @@ const JA_MANUAL: Manual = Manual {
                 "種目メモは今日の欄が空のときだけコピーで埋まります。すでに何か書いてあれば上書きしません。セットごとのメモは、今日その行にすでに書いた内容があればそちらを優先し、空の行にだけ前回のメモが入ります。",
                 "体重やその日の体調メモはコピーの対象に含まれません。持ち込まれるのはセットの数値とメモだけです。",
             ],
-            fig_alt: "",
-            fig: None,
+            fig_alt: "空のカードと「前回をコピー」",
+            fig: Some((762, 618)),
         },
         ChapterText {
             title: "「＋ メモ」で開く4つ",
@@ -1055,8 +1065,8 @@ const JA_MANUAL: Manual = Manual {
                 "ピンとインターバルは種目そのものに貼り付く設定で、その日限りではなく日をまたいで残ります。マシンの設定値を毎回打ち直さずに済むための項目です。",
                 "閉じているあいだも、何か入力済みなら薄い字で読めます。ピン・インターバル・種目メモ・セットメモのいずれも、確認するためだけに毎回開き直す必要はありません。インターバルはあくまで参考の秒数の表示で、カウントダウンはありません。",
             ],
-            fig_alt: "",
-            fig: None,
+            fig_alt: "一斉に開いた4つの入力欄",
+            fig: Some((718, 1024)),
         },
         ChapterText {
             title: "空の日から始める",
@@ -1066,8 +1076,8 @@ const JA_MANUAL: Manual = Manual {
                 "候補を選ぶとその日は「実施済み」として扱われ、カレンダーのドット・月末の集計・グラフに反映されます。「最近の記録から」はセット付きの記録をそのままコピーするので必ず実施済みになりますが、保存したメニューを展開する場合は少し違います — メニューの種目のうち履歴がまだ1つも無いものは空のカードだけが出て記録は入らず、全種目に履歴が無ければその日は実施済みになりません。",
                 "選んだあとにやらなかった種目があれば、そのカードの「この日から外す」でその種目だけを取り消せます。",
             ],
-            fig_alt: "",
-            fig: None,
+            fig_alt: "空の日に出る候補リスト",
+            fig: Some((762, 734)),
         },
         ChapterText {
             title: "部位の折りたたみ",
@@ -1076,8 +1086,8 @@ const JA_MANUAL: Manual = Manual {
                 "一方、トレーニングメニューを編集するシートの「選択中」だけは複数の部位を同時に開けます。1本のメニューを組む間に胸と脚を行き来するような使い方を想定しているためです。",
                 "メニューを作る入口は2つあります。記録タブの「＋ この日をメニューにする」は、その日に実際にセット付きの記録があるときだけ表示されます。空のカードを追加しただけでは出ません。",
             ],
-            fig_alt: "",
-            fig: None,
+            fig_alt: "1つだけ開く種目の追加シート",
+            fig: Some((786, 1030)),
         },
         ChapterText {
             title: "並び替え",
@@ -1131,8 +1141,8 @@ const EN_MANUAL: Manual = Manual {
                 "Setting the period to \"All\" groups the daily points by week. The metric (volume, sets, or reps) becomes a weekly sum, while body weight becomes a weekly average. Both are aggregated by the same week so they can share one chart, but the way they are aggregated differs.",
                 "The body-weight second axis only overlays when the metric chart actually has something to show. In a period with no metric records, the second axis does not appear even if body weight was logged.",
             ],
-            fig_alt: "",
-            fig: None,
+            fig_alt: "A chart with the readout line below it",
+            fig: Some((734, 438)),
         },
         ChapterText {
             title: "Copy last time",
@@ -1141,8 +1151,8 @@ const EN_MANUAL: Manual = Manual {
                 "The exercise note is filled in only when today's note is still empty; it never overwrites something you already typed. For each set's note, whatever you already typed in that row today takes priority — the previous note only fills rows that are still empty.",
                 "Body weight and the day's condition note are not part of what gets copied. Only the set values and their notes are carried over.",
             ],
-            fig_alt: "",
-            fig: None,
+            fig_alt: "An empty card with Copy last time",
+            fig: Some((762, 618)),
         },
         ChapterText {
             title: "The four things \"+ Note\" opens",
@@ -1151,8 +1161,8 @@ const EN_MANUAL: Manual = Manual {
                 "Pins and interval are attached to the exercise itself, not just to today — they carry over from day to day. They exist so you don't have to retype a machine's settings every time.",
                 "Even while closed, anything already filled in is still visible in dim text. You never need to reopen pins, interval, the exercise note, or a set's note just to check them. The interval is only a reference number of seconds — there is no countdown.",
             ],
-            fig_alt: "",
-            fig: None,
+            fig_alt: "The four fields opened at once",
+            fig: Some((718, 1024)),
         },
         ChapterText {
             title: "Starting from an empty day",
@@ -1162,8 +1172,8 @@ const EN_MANUAL: Manual = Manual {
                 "Picking a candidate marks that day as trained, which shows up on the calendar dot, the month's footer totals, and the chart. \"From recent records\" always carries actual sets, so it always counts as trained. Expanding a saved routine is a little different: any of its exercises with no history anywhere get only an empty card and no numbers, and if none of the routine's exercises have history, the day is not marked as trained at all.",
                 "If an exercise you did not actually do ends up on the day, use \"Remove from this day\" on that card to take just that one back out.",
             ],
-            fig_alt: "",
-            fig: None,
+            fig_alt: "The candidate list on an empty day",
+            fig: Some((762, 734)),
         },
         ChapterText {
             title: "Collapsing by muscle group",
@@ -1172,8 +1182,8 @@ const EN_MANUAL: Manual = Manual {
                 "The routine-editing sheet's \"Selected\" list is the exception — it allows several groups open at once, since building one routine often means jumping back and forth between, say, chest and legs.",
                 "There are two entry points for creating a routine. \"+ Save this day as a routine\" on the Record tab only appears once the day actually has logged sets — adding an empty card alone is not enough to show it.",
             ],
-            fig_alt: "",
-            fig: None,
+            fig_alt: "The Add exercise sheet, one group open",
+            fig: Some((786, 994)),
         },
         ChapterText {
             title: "Reordering",
@@ -2128,15 +2138,27 @@ mod tests {
                     "{lang:?} の {} で fig と fig_alt の有無が食い違う",
                     skeleton.id
                 );
-                // ★ このコミットでは図がまだ無い（撮影はコミット #4）ので、px 幅ベースの
-                //   言語別上限（ja ≈ 29 字 / en ≈ 55〜70 字、実測して #4 で決める）ではなく
-                //   「空であること」だけを見ている。上の 2 つの assert_eq! が
-                //   `has_fig == fig.is_some() == !fig_alt.is_empty()` を already 保証するので、
-                //   これは意図の確認（今はまだ 1 枚も無いはず）を兼ねる。
+                // ★ **上限は px 幅で決まるので言語別。** WebKit は alt を折り返さず、
+                //   1 行に収まらなければ何も描かない（`ChapterText::fig_alt` の doc 参照）。
+                //   `.man-fig img` は 12px で、幅は `.man-fig` の max-width 365px が上限だが、
+                //   狭い端末では `.screen` の左右 padding 14px を引いた値になる。320px 幅なら
+                //   365px には届かず 292px、`missingImageBorderWidth` の 2px を引いて 290px。
+                //   全角は 12px/字なので ja ≈ 24 字、ラテン文字は 6px/字前後なので en ≈ 48 字。
+                //   実機の WebKit が同じ計算とは限らないので、そこから 2 割ほど余らせる。
+                // ★ **`chars().count()` で測る。** `len()` はバイト数なので、全角では
+                //   3 倍に数えて上限が実質 1/3 になる。
+                let limit = match lang {
+                    Lang::Ja => 20,
+                    Lang::En => 45,
+                };
+                let n = text.fig_alt.chars().count();
                 assert!(
-                    text.fig_alt.is_empty(),
-                    "{lang:?} の {} の fig_alt はこのコミットでは空のはず",
-                    skeleton.id
+                    n <= limit,
+                    "{lang:?} の {} の fig_alt が長すぎる（{n} 字 > {limit} 字）。\
+                     iOS Safari は 1 行に収まらない alt を**描かない**ので、\
+                     説明は body へ移して名詞句にすること: {}",
+                    skeleton.id,
+                    text.fig_alt
                 );
             }
         }

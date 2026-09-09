@@ -13,12 +13,18 @@ pub struct Chapter {
     pub id: &'static str,
     /// この章が図を持つか。
     ///
-    /// ★ **このコミットでは全章 `false`。** 撮影がまだ無いので図を持たせられない
-    ///   （`.githooks/pre-commit` の `cargo test` が毎コミット走るため、`fig: None` の
-    ///   まま `has_fig: true` にすると `ChapterText` 側との不一致で即座にテストが落ちる）。
-    ///   図とその実測寸法はコミット #4 で足す。そのとき `chart-readout` / `copy-last` /
-    ///   `exercise-memo` / `empty-day` / `accordions` の 5 章が `true` に変わり、
-    ///   `progress-target` / `reorder` / `backup` の 3 章は `false` のまま残る。
+    /// ★ **`true` にするなら `public/manual/{ja,en}/{id}.webp` が実在し、`ChapterText`
+    ///   の `fig` / `fig_alt` が両言語とも埋まっていること。** 3 つは
+    ///   `every_language_has_the_same_manual_chapters`（`i18n.rs`）と
+    ///   [`tests::every_manual_figure_exists_with_the_declared_size`] が揃って固定する。
+    ///
+    /// ★ **寸法（`fig`）は言語非依存にできない**ので、ここには持たせずに `ChapterText`
+    ///   側へ置いてある。クリップが要素の外接矩形なので内容依存で、実際に `accordions`
+    ///   は ja 786×1030 / en 786×994 と高さが違う（部位名の折り返し行数の差）。
+    ///
+    /// 図を持たない 3 章（`progress-target` / `reorder` / `backup`）が `false` なのは、
+    /// 静止画で伝わらない（`reorder`）か、閉じた `<select>` しか写らない
+    /// （`progress-target`）か、文章で足りる（`backup`）ため。
     pub has_fig: bool,
 }
 
@@ -31,23 +37,23 @@ pub const MANUAL_CHAPTERS: &[Chapter] = &[
     },
     Chapter {
         id: "chart-readout",
-        has_fig: false,
+        has_fig: true,
     },
     Chapter {
         id: "copy-last",
-        has_fig: false,
+        has_fig: true,
     },
     Chapter {
         id: "exercise-memo",
-        has_fig: false,
+        has_fig: true,
     },
     Chapter {
         id: "empty-day",
-        has_fig: false,
+        has_fig: true,
     },
     Chapter {
         id: "accordions",
-        has_fig: false,
+        has_fig: true,
     },
     Chapter {
         id: "reorder",
@@ -73,7 +79,8 @@ fn u24_le(b0: u8, b1: u8, b2: u8) -> u32 {
 /// 無ければ `VP8L`（lossless）/ `"VP8 "`（lossy）のビットストリームヘッダを読む。
 /// `quality` の指定でどちらを吐くか変わるので両方を扱う。
 ///
-/// **コミット #4 のテスト（`every_manual_figure_exists_with_the_declared_size`）が使う。**
+/// 下の [`tests::every_manual_figure_exists_with_the_declared_size`] と
+/// `e2e/manual.spec.mjs`（配信物側の担当）が同じ読み方をする。
 /// `include_bytes!` は使わない — 非 cfg モジュールなので使うと図が wasm に埋まる。
 /// 呼び側は `std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/public/manual/…"))` で読む。
 pub fn webp_size(bytes: &[u8]) -> Option<(u32, u32)> {
@@ -127,4 +134,130 @@ pub fn webp_size(bytes: &[u8]) -> Option<(u32, u32)> {
         pos = data_end + (size & 1);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::i18n::Lang;
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+
+    /// `public/manual` の絶対パス。
+    ///
+    /// ★ `include_bytes!` を使わない理由は [`webp_size`] の doc のとおり（このモジュールは
+    ///   非 cfg なので、埋め込むと**図がそのまま wasm に入る**）。テストはホストでしか
+    ///   走らないので、コンパイル時に決まるのはパスだけにして中身は実行時に読む。
+    fn manual_root() -> PathBuf {
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/public/manual"))
+    }
+
+    /// 宣言した図が実在し、**宣言寸法が実ファイルと言語ごとに一致**していること。
+    /// 逆向き（どの章からも参照されていない図が残っていないこと）も見る。
+    ///
+    /// ★ **これが `src/i18n.rs` の `fig` を実物に縛る唯一の仕組み。** `fig` は
+    ///   `<img width height>` に出てレイアウトシフトを防ぐ値なので、実ファイルとずれると
+    ///   図だけが縦に伸び縮みして表示される（見た目では気づけない）。
+    ///
+    /// ★ **逆向きを見るのは、章を消して図を消し忘れても誰も気づかないから。** 参照されない
+    ///   `.webp` は `copy-dir` でそのまま配信物に載り続け、`stamp-sw.sh` の除外にも
+    ///   引っかからないまま Pages に残る。
+    ///
+    /// ★ クリップ寸法が変わる UI 変更をすると**このテストは撮影前の古い図に対して通り**、
+    ///   そのあと `.githooks/pre-commit` が撮り直した図で E2E 側が落ちる。直し方は
+    ///   `src/i18n.rs` の `fig` を新しい寸法へ書き換えること（hook のコメントに同じ説明がある）。
+    #[test]
+    fn every_manual_figure_exists_with_the_declared_size() {
+        let root = manual_root();
+        let mut referenced: HashSet<PathBuf> = HashSet::new();
+
+        for (lang, _) in Lang::CHOICES {
+            let dir = root.join(lang.tag());
+            let texts = lang.strings().manual.chapters;
+            assert_eq!(
+                texts.len(),
+                MANUAL_CHAPTERS.len(),
+                "{lang:?} の章数が MANUAL_CHAPTERS と食い違う"
+            );
+
+            for (chapter, text) in MANUAL_CHAPTERS.iter().zip(texts) {
+                let path = dir.join(format!("{}.webp", chapter.id));
+                let Some(declared) = text.fig else {
+                    assert!(
+                        !chapter.has_fig,
+                        "{lang:?} の {} は has_fig なのに fig が無い",
+                        chapter.id
+                    );
+                    assert!(
+                        !path.exists(),
+                        "図を持たない章の画像が残っている: {}",
+                        path.display()
+                    );
+                    continue;
+                };
+                assert!(
+                    chapter.has_fig,
+                    "{lang:?} の {} は fig を持つのに has_fig が false",
+                    chapter.id
+                );
+
+                let bytes = std::fs::read(&path)
+                    .unwrap_or_else(|e| panic!("{} が読めない: {e}", path.display()));
+                let actual = webp_size(&bytes)
+                    .unwrap_or_else(|| panic!("{} の WebP ヘッダが読めない", path.display()));
+                assert_eq!(
+                    actual,
+                    declared,
+                    "{} の実寸法 {actual:?} が宣言 {declared:?} と食い違う。\
+                     `node scripts/shots.mjs --only=manual` で撮り直したなら \
+                     src/i18n.rs の fig を実測値へ直すこと",
+                    path.display()
+                );
+                referenced.insert(path);
+            }
+        }
+
+        // ── 逆向き: 孤児が残っていないこと ──────────────────────────────────
+        let langs: HashSet<&str> = Lang::CHOICES.iter().map(|(l, _)| l.tag()).collect();
+        for lang_dir in read_dir_sorted(&root) {
+            let name = lang_dir
+                .file_name()
+                .expect("public/manual の直下")
+                .to_string_lossy()
+                .into_owned();
+            // ★ ドットファイルは飛ばす。`.DS_Store` で `cargo test` が落ちると
+            //   pre-commit ごと止まる。配信物から落とす担当は `stamp-sw.sh` の
+            //   `shell_files()`（`! -name '.*'`）で、こちらの責務ではない。
+            if name.starts_with('.') {
+                continue;
+            }
+            assert!(
+                langs.contains(name.as_str()),
+                "public/manual/{name} はどの言語にも対応しない"
+            );
+            for fig in read_dir_sorted(&lang_dir) {
+                if fig
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+                {
+                    continue;
+                }
+                assert!(
+                    referenced.contains(&fig),
+                    "{} はどの章からも参照されていない（章を消したら図も消すこと）",
+                    fig.display()
+                );
+            }
+        }
+    }
+
+    /// `read_dir` は順序を約束しないので、失敗メッセージが run ごとに変わらないよう並べる。
+    fn read_dir_sorted(dir: &Path) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("{} が読めない: {e}", dir.display()))
+            .map(|e| e.expect("ディレクトリの走査").path())
+            .collect();
+        paths.sort();
+        paths
+    }
 }

@@ -489,6 +489,48 @@ h3 {
   color: var(--muted);
 }
 
+/* ── 種目ごとのラベル（adr/ux/label-chips-switch-the-history-and-the-copy.md）──
+   チップ行は `.card-head` の直後・`.last-rows` の直前。定義が 0 本の種目では
+   Rust 側がブロックごと描かないので、既存カードの幾何は 1px も動かない。
+
+   ★ **接頭辞は `.lbl-*` で、`.opt` のクラス名は共有しない。** `.opt` は設定シートの
+   部位選択専用で、3 つ目の画面で共有すると将来の設定側の変更がカードを黙って壊す
+   （`.rtn-*` が「あの画面固有」として存在する規約に倣う）。
+
+   ★ **折り返す**（横スクロールにしない）。隠れているチップがあることが静止時に
+   読めないので、`overflow-x` は採らない。行数はラベル名の長さで振れる
+   （`MAX_LABELS` の doc）。 */
+.lbl-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* `.opt` との差分は 2 つだけ。
+   - `min-width: 44px`: 1 文字ラベル `H` は `padding: 0 12px` だけでは 44px を割る
+     （タップ標的の下限。判定は E2E が丸めて見る）
+   - `font-size: 13px`: `.opt` は指定を持たず 15px を継ぐ。カードの中の副次的な
+     操作なので 1 段落とす */
+.lbl {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 13px;
+}
+
+/* 選択中。★ **`.opt.on` のトークンを 1 文字も変えない** —
+   「選択中」がアプリ全体で同じ絵に見えることが読みやすさそのもの */
+.lbl.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
 /* ★ **3 列を全エントリで揃える。** 日付は "8/3 (月)" と "8/17 (月)" で幅が違うので、
    エントリごとに flex で組むとセット列の開始位置が行ごとにずれ、
    **縦に数字を読む**という履歴の目的が崩れる（日付表記にしたのはそのためだった）。
@@ -528,6 +570,32 @@ h3 {
 .last-row .metric {
   justify-self: end;
   font-variant-numeric: tabular-nums;
+}
+
+/* 履歴のラベル列。**定義がある種目だけ 4 列にする**（属性セレクタなので詳細度が
+   勝つ。`data-labels` が無いあいだは gutter が 2 本のままで、定義 0 の種目は 1px も
+   動かない）。ラベル名を `.when` と同じ span に入れると日付列の `max-content` が
+   ラベル名で決まってセット列の開始位置がずれ、past-records ADR 決定 6（subgrid で
+   桁を縦に揃える）が無効になる。独立した 4 列目にすればラベル列の幅は全エントリの
+   ラベル名で 1 回決まり、日付列は日付だけで決まるので**桁は縦に揃ったまま**。
+
+   ★ `data-labels` の有無と `<span class="label">` の描画は Rust 側で同じ
+   `has_labels` Memo 1 本から出している。subgrid 軸に implicit track は無いので、
+   列数とセル数がずれると行が崩れる。 */
+.last-rows[data-labels] {
+  grid-template-columns: max-content max-content 1fr max-content;
+}
+
+/* ★ **列幅を cap する。** ラベル列は**表示中の全行の最長ラベル**で決まるので、
+   「指定なし」で 12 文字のラベルが 1 本混ざると `.sets` に残る幅が 234px → 80px に
+   なり、`100×3` が 2 本で折り返して「数字を縦に読む」（決定 6）が薄れる。
+   6em で列を 72px 以下に抑えると `.sets` が 152px 以上残り、`100×3` 4 本 /
+   `100×10` 3 本が 1 行に収まる。全名はチップ行に常に出ているので文脈は失われない。 */
+.last-row .label {
+  max-width: 6em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .copy {

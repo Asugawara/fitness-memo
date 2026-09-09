@@ -22,7 +22,7 @@ The app speaks **English and Japanese**. It follows your browser's language on f
 
 ## Screens
 
-There are three tabs: **Record / Progress / Settings**. The Record tab puts a month calendar and the selected day's editor on one screen — tap a day cell and the editor below becomes that day's ([Make the Record tab a single screen: calendar plus day editor](adr/ux/record-tab-calendar-with-day-editor.md)). The Settings tab is a list of sections — **Export / Import, Routines, Exercises, Sessions shown, Drop sets, Language, and how to add the app to your home screen** — and tapping one takes you into it ([Make the Settings tab a list of sections and push the contents one level down](adr/ux/settings-as-a-list-of-sections.md)).
+There are three tabs: **Record / Progress / Settings**. The Record tab puts a month calendar and the selected day's editor on one screen — tap a day cell and the editor below becomes that day's ([Make the Record tab a single screen: calendar plus day editor](adr/ux/record-tab-calendar-with-day-editor.md)). The Settings tab is a list of sections — **Export / Import, Routines, Exercises, Sessions shown, Drop sets, how to add the app to your home screen, an in-app manual, and Language** — and tapping one takes you into it ([Make the Settings tab a list of sections and push the contents one level down](adr/ux/settings-as-a-list-of-sections.md)).
 
 | Record | Progress | Settings |
 |---|---|---|
@@ -31,7 +31,23 @@ There are three tabs: **Record / Progress / Settings**. The Record tab puts a mo
 Retake the screenshots with `trunk build && node scripts/shots.mjs`. The device (an iPhone 15 Pro), standalone launch, locale and the seeded records are all fixed, so after a UI change all three can be refreshed under identical conditions.
 
 > [!NOTE]
-> The screenshots currently show the Japanese UI. `scripts/shots.mjs` pins `locale: 'ja-JP'` — without it the seed data, which looks exercises up by their Japanese names, cannot be found and the run fails. Switch that line to `en-US` (and translate the seed) to shoot the English UI.
+> The screenshots above show the Japanese UI. That's a deliberate choice now, not a technical limit — `scripts/shots.mjs` feeds the same seed data into every language context (preset IDs don't change between languages; only the displayed name follows the UI language, via `ex_name` / `grp_name`), so no translation step is needed to shoot the English UI either. The README just settles on one representative language rather than keeping two synchronized copies of every screenshot. English screenshots do exist: the in-app manual is shot in both languages, under `public/manual/en/` (see "In-app manual" below).
+
+## In-app manual
+
+Settings has a new row, **How to use**, right after the home-screen walkthrough and just before Language. It opens as a section rather than a sheet — switching tabs and back does not lose your place — and lists eight chapters as a one-open-at-a-time accordion, the same pattern the Exercises list already uses ([Make the in-app manual a settings section with one open chapter](adr/ux/manual-as-a-settings-section-with-one-open-chapter.md)): filtering on the Progress tab, reading the chart, copying last time, the four things "+ Note" opens, starting from an empty day, collapsing by muscle group, reordering, and export/import. The Record tab also shows a small hint the first time only, pointing at the manual — it stays out of the way of the install-guide notice, so only one of the two ever shows at once.
+
+Five of the eight chapters carry a screenshot of the real screen, in both languages — ten `.webp` files under `public/manual/{ja,en}/`, always shot in the **light theme** ([Serve the manual's figures as real screenshots of the app, not hand-drawn diagrams](adr/architecture/manual-figures-as-served-screenshots.md)). The other three (filtering, reordering, export/import) go without: a still image of two closed `<select>`s or a drag gesture would not show anything useful, and the export/import chapter is already complete in words. Retaking a figure is safe any time — the clock and time zone are pinned in `scripts/shots.mjs`, so reshooting months later never moves "today", and produces byte-identical output when nothing actually changed:
+
+```sh
+node scripts/shots.mjs                     # everything: README's 3 + the manual's 10
+node scripts/shots.mjs --only=manual       # just the manual's 10 (what pre-commit runs)
+node scripts/shots.mjs --only=readme       # just README's 3 (run by hand once the UI settles)
+node scripts/shots.mjs --only=manual:<id>  # one chapter, both languages, e.g. --only=manual:copy-last
+node scripts/shots.mjs --check             # shoot to a scratch dir and byte-compare; exits 1 on drift
+```
+
+`.githooks/pre-commit` only ever calls `--only=manual`, and only for a commit that touches a UI-affecting path — README's three are a deliberately manual, occasional job, and `scripts/release.sh`'s `--check` is meant to catch a forgotten reshoot before a release ships ([Reshoot the manual's figures in pre-commit, but only for commits that touch a UI-affecting path](adr/deploy/screenshots-in-pre-commit-on-ui-paths.md)). The figures add up to about 190KB but are never in the Service Worker's offline shell: offline, the manual says so and falls back to its text, so nobody who never opens it should pay for it on every install.
 
 ## Icons and share images
 
@@ -123,7 +139,9 @@ npx playwright test --project=chromium  # the light E2E pass
 npx playwright test                     # every project (Chromium / iPhone 15 Pro (WebKit) / Pixel 7)
 ```
 
-`.githooks/pre-commit` first guards against `docs/` sneaking into `main`, then runs `cargo fmt --all -- --check` → `cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings` → `cargo test` → `trunk build` → `npx playwright test --project=chromium --project=harness`. In an emergency, `SKIP_HOOKS=1 git commit` skips it.
+`.githooks/pre-commit` first guards against `docs/` sneaking into `main`, then runs `cargo fmt --all -- --check` → `cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings` → `cargo test` → `trunk build` → (on a commit that touches a UI-affecting path) `node scripts/shots.mjs --only=manual` → `npx playwright test --project=chromium --project=harness`. In an emergency, `SKIP_HOOKS=1 git commit` skips the whole hook; `SHOTS=0 git commit` is narrower and skips only the reshoot, leaving fmt / clippy / test / build / E2E running — use it when the screenshots themselves are broken or you want to commit the code and the figures separately.
+
+While iterating on one manual chapter's figure, `node scripts/shots.mjs --only=manual:<id>` (e.g. `--only=manual:copy-last`) reshoots just that chapter, both languages, instead of walking all ten.
 
 `playwright.config.mjs` pins `locale: 'ja-JP'` so the existing specs keep exercising the Japanese UI; `e2e/i18n.spec.mjs` switches to `en-US` for the English one.
 
@@ -189,7 +207,7 @@ From Settings → Export / Import:
 
 ## Design decisions
 
-How the project ended up like this, and which alternatives were rejected, is recorded in [`adr/README.md`](adr/README.md) — around 70 ADRs, one per decision, grouped by category.
+How the project ended up like this, and which alternatives were rejected, is recorded in [`adr/README.md`](adr/README.md) — around 90 ADRs, one per decision, grouped by category.
 
 > [!NOTE]
 > **The ADRs are written in Japanese.** They are the project's working notes and get updated on nearly every change, so they are deliberately kept in one language rather than maintained as a second translation that would go stale. The inline links throughout this README point straight at them.

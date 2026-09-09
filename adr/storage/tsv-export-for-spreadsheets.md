@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-15
 - **カテゴリ**: storage
-- **関連**: [localStorage の単一キーに JSON 全体を持つ](localstorage-single-key-json.md)（「保存形式 = 書き出し形式」を上書き）, [書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない](share-sheet-over-download.md)（運び方は変えない）, [取り込みは「足すだけ」に固定する](import-is-merge-only.md), [ID を 60 bit 乱数にし、プリセットには固定 ID を与える](../data-model/random-ids-for-safe-merge.md)（外に出た形式は永久にサポートする）
+- **関連**: [localStorage の単一キーに JSON 全体を持つ](localstorage-single-key-json.md)（「保存形式 = 書き出し形式」を上書き）, [書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない](share-sheet-over-download.md)（運び方は変えない）, [取り込みは「足すだけ」に固定する](import-is-merge-only.md), [ID を 60 bit 乱数にし、プリセットには固定 ID を与える](../data-model/random-ids-for-safe-merge.md)（外に出た形式は永久にサポートする）, [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](../data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)（15 列目と、未使用定義が落ちる非対称）
 
 ## 背景
 
@@ -53,6 +53,10 @@
 埋め方は 3 つ:
 
 1. **落ちるものを「名前から作り直せるもの」だけに限った。** 色と並び順は見た目、`archived` は表示設定。ID は[名前とプリセット固定 ID から引き当てる](#idの引き当て)
+
+   ★ **未使用のラベル定義もこの基準で落とした**（[ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](../data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)）。`ラベル` 列（15 列目）は記録行にしか出ないので、1 度も使っていない定義は書き出しに現れない。基準を満たすのは、未使用ラベルが**打ち直せば完全に戻り、ぶら下がる記録が 0 件**だから。使ったラベルは各ログ行が名前を運ぶので必ず復元され、履歴も繋がる。JSON バックアップは定義も全部運ぶ。
+
+   ★ **この帰結として、種目マスタ行のプリセット除外判定に `labels.is_empty()` を足さない。** ピンとインターバルはマスタ行自身のセルが値を運ぶので、記録もメニューも無いプリセットに付けた設定を守るために判定へ入っている。ラベルはマスタ行が運べない（日ごとの列なので）ため、足しても**空のマスタ行が 1 本増えるだけで何も守れない**。対称性のために無意味な行を出さない。
 2. **往復をテストで固定した。** `cargo test` の `tsv_round_trips_every_record_except_the_clock` が「`at` 以外は一致する」を主張し、`importing_the_same_tsv_twice_adds_nothing` が冪等性を数で見る。「書き出したファイルが読み戻せない」は**静かには起きず、テストが落ちる**
 3. **JSON の取り込みを永久に残す。** [ID を 60 bit 乱数にし、プリセットには固定 ID を与える](../data-model/random-ids-for-safe-merge.md) が「一度ユーザーの手元に出たファイル形式はアプリの寿命の間サポートし続ける必要がある」と書いているとおり。加えて `.pre-` 退避が保存形式（JSON）なので、機能的にも外せない
 

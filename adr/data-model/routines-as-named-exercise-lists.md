@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-15
 - **カテゴリ**: data-model
-- **関連**: [保存したメニューから始める](../ux/start-from-a-saved-routine.md) / [1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](../ux/copy-whole-day-menu.md) / [「1日1種目1ログ」を不変条件にする](one-log-per-exercise-per-day.md) / [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](notes-on-logs-and-sets.md) / [保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す](../storage/storage-key-per-schema-generation.md) / [ID を 60 bit 乱数にし、プリセットには固定 ID を与える](random-ids-for-safe-merge.md)
+- **関連**: [保存したメニューから始める](../ux/start-from-a-saved-routine.md) / [1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](../ux/copy-whole-day-menu.md) / [「1日1種目1ログ」を不変条件にする](one-log-per-exercise-per-day.md) / [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](notes-on-logs-and-sets.md) / [保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す](../storage/storage-key-per-schema-generation.md) / [ID を 60 bit 乱数にし、プリセットには固定 ID を与える](random-ids-for-safe-merge.md) / [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](labels-on-the-exercise-and-a-mark-on-the-log.md)（宙に浮いた参照を残す規則を継いだ相手）
 
 ## 背景
 
@@ -94,6 +94,10 @@ pub struct Routine {
 - 消すのは不可逆（メニューから 1 種目が黙って減る）。残しても被害は「候補に出ない / 編集画面に出ない」だけで可逆
 
 「押しても何も起きない死んだボタンを作らない」責任は、読み出し側の `expandable` が全部持つ（`copyable` が `recent_menus` と `copy_day` の両方を通っているのと同じ形）。
+
+★ **種目ごとのラベルもこの規則を継いだ**（[ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](labels-on-the-exercise-and-a-mark-on-the-log.md)）。`ExerciseLog.label` が指す定義を設定タブで削除しても、`normalize` は `label` を**消さない**。ラベルでは上の 3 つの理由がさらに強く当たる — **記録そのものが完全に無傷で可視**（「指定なし」で見える）なので、残しても被害が「そのラベルの履歴に出ない」だけに収まる。だから `Label` に `archived` を持たせず物理削除にした。門番は読み出し側（`views::day` の `filter` Memo が定義に無い ID を `Any` に落として「指定なし」を点灯させる）。
+
+★ **ID 重複の再採番も同じ形**（上の 4 番）。`clean_labels` は種目内で重複した `LabelId` だけを採り直す（`<For key=id>` の重複キーは wasm で panic するので放置できない）。**それ以外の ID は必ず保持する** — 改名で ID が変わると数か月ぶんの履歴が外れるため。ここが `Routine` との差で、あちらは名前を打ち直せば済むが、ラベルはログがぶら下がっている。
 
 ID の重複だけは放置できない。画面が `<For key=id>` に使うので重複キーは keyed diff を壊し（wasm では panic = アプリが死ぬ）、削除は `retain(|r| r.id != id)` なので**片方を消すと両方消える**。捨てずに採番し直すのは、名前を付けて組んだリストを黙って失わないため。
 

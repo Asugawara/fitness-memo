@@ -39,12 +39,13 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [「1日1種目1ログ」を不変条件にする](data-model/one-log-per-exercise-per-day.md) | 採用 |
 | [部位別の指標を volume ではなくセット数にする](data-model/group-metric-is-set-count.md) | 置換済み → [指標を種目の属性ではなくグラフの表示設定にする](data-model/metric-is-a-view-setting.md) |
 | [ID を `next_id` の連番にし uuid を使わない](data-model/sequential-ids-no-uuid.md) | 置換済み → [ID を 60 bit 乱数にし、プリセットには固定 ID を与える](data-model/random-ids-for-safe-merge.md) |
-| [ID を 60 bit 乱数にし、プリセットには固定 ID を与える](data-model/random-ids-for-safe-merge.md) | 採用 |
+| [ID を 60 bit 乱数にし、プリセットには固定 ID を与える](data-model/random-ids-for-safe-merge.md) | 採用（合流の梯子を 1 階層下でなぞった相手は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)） |
 | [指標を種目の属性ではなくグラフの表示設定にする](data-model/metric-is-a-view-setting.md) | 採用 |
 | [経過日数をローカル暦の日差にし、時刻粒度を同じ日の中だけに閉じる](data-model/elapsed-in-local-calendar-days.md) | 採用 |
 | [テキスト取り込みは「足すだけ」に固定し、部位を増やさず `at` を書かない](data-model/text-import-is-merge-only.md) | 破棄（[取り込みごと撤去](ux/migrate-by-ocr-paste.md)） |
-| [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](data-model/notes-on-logs-and-sets.md) | 採用（決定 7 のコピーの規則は [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](ux/copy-carries-the-notes.md) で改訂） |
-| [トレーニングメニューを「名前 + 種目 ID の並び」だけのデータにする](data-model/routines-as-named-exercise-lists.md) | 採用 |
+| [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](data-model/notes-on-logs-and-sets.md) | 採用（決定 7 のコピーの規則は [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](ux/copy-carries-the-notes.md) で改訂。粒度の 3 つ目の軸は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)） |
+| [トレーニングメニューを「名前 + 種目 ID の並び」だけのデータにする](data-model/routines-as-named-exercise-lists.md) | 採用（宙に浮いた参照を残す規則を継いだ相手は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)） |
+| [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md) | 採用（画面側は [チップでラベルを選ぶと履歴とコピーが切り替わる](ux/label-chips-switch-the-history-and-the-copy.md)） |
 
 ### storage — 永続化
 
@@ -56,7 +57,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [JSON エクスポート/インポートを v1 に入れない](storage/defer-export-import.md) | 履行済み → [書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない](storage/share-sheet-over-download.md) |
 | [保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す](storage/storage-key-per-schema-generation.md) | 採用 |
 | [書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない](storage/share-sheet-over-download.md) | 採用（textarea の常設は撤回） |
-| [書き出しを TSV にし、保存形式（JSON）と分ける](storage/tsv-export-for-spreadsheets.md) | 採用 |
+| [書き出しを TSV にし、保存形式（JSON）と分ける](storage/tsv-export-for-spreadsheets.md) | 採用（15 列目と「未使用のラベル定義は載らない」非対称は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)） |
 | [取り込みは「足すだけ」に固定する](storage/import-is-merge-only.md) | 採用 |
 | [同一オリジン内の多層バックアップを採用しない](storage/no-same-origin-redundancy.md) | 採用 |
 | [UI の状態を `Db` に入れず別キーに置く](storage/ui-state-in-separate-key.md) | 採用（`Db` の ID を置く条件は [UI の状態に `Db` の ID を置いてよい条件を決める（寛容な受け口と既定への受け皿）](storage/db-ids-in-ui-state-behind-a-fallback.md) で改訂） |
@@ -79,7 +80,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 
 | タイトル | 状態 |
 |---|---|
-| [「前回をコピー」はセットが空のときだけ出す](ux/copy-button-only-when-empty.md) | 採用（「前回 —」の表記は [前回までの記録を日付で出し、何回分出すかを表示設定にする](ux/past-records-by-date-with-a-count-setting.md) で改訂。コピーの挙動は変わらない） |
+| [「前回をコピー」はセットが空のときだけ出す](ux/copy-button-only-when-empty.md) | 採用（「前回 —」の表記は [前回までの記録を日付で出し、何回分出すかを表示設定にする](ux/past-records-by-date-with-a-count-setting.md) で改訂。コピーの挙動は変わらない。3 問題が「フォールバックしない」根拠になったのは [チップでラベルを選ぶと履歴とコピーが切り替わる](ux/label-chips-switch-the-history-and-the-copy.md)） |
 | [トレ前情報とトレ中情報を排他表示にする](ux/pre-workout-and-in-workout-exclusive.md) | 置換済み → [記録タブをカレンダー + 選択日エディタの単一画面にする](ux/record-tab-calendar-with-day-editor.md) |
 | [数値入力に `type="number"` を使わない](ux/text-input-not-number.md) | 採用 |
 | [カレンダーの空日からも記録を追加できるようにする](ux/calendar-add-from-empty-day.md) | 採用（導線は [記録タブをカレンダー + 選択日エディタの単一画面にする](ux/record-tab-calendar-with-day-editor.md) で改訂） |
@@ -104,13 +105,14 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [書き出し / 読み込みを 1 画面に畳み、逃げ道 UI を常設しない](ux/one-screen-export-import.md) | 採用 |
 | [`<input type="file">` を視覚的に隠し、ボタンから `click()` する](ux/hidden-file-input-behind-a-button.md) | 採用 |
 | [メニュー編集シートの「選択中」をドラッグで並べ替え、種目ピッカーを複数開けるアコーディオンにする](ux/routine-editor-drag-and-accordion.md) | 採用 |
-| [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](ux/machine-pins-on-the-exercise.md) | 採用 |
-| [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](ux/copy-carries-the-notes.md) | 採用 |
+| [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](ux/machine-pins-on-the-exercise.md) | 採用（決定 9 の隣人だが逆の判断をしたのは [チップでラベルを選ぶと履歴とコピーが切り替わる](ux/label-chips-switch-the-history-and-the-copy.md)） |
+| [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](ux/copy-carries-the-notes.md) | 採用（決定 4 の 4 つ目の適用先は [チップでラベルを選ぶと履歴とコピーが切り替わる](ux/label-chips-switch-the-history-and-the-copy.md)） |
 | [言語はブラウザに従い、選んだらそれを優先する](ux/language-follows-the-browser-then-the-setting.md) | 採用 |
 | [プリセット名は表示時に言語へ追従させ、改名したものだけ据え置く](ux/preset-names-follow-the-ui-language.md) | 採用 |
 | [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](ux/interval-seconds-on-the-exercise.md) | 採用 |
-| [前回までの記録を日付で出し、何回分出すかを表示設定にする](ux/past-records-by-date-with-a-count-setting.md) | 採用 |
+| [前回までの記録を日付で出し、何回分出すかを表示設定にする](ux/past-records-by-date-with-a-count-setting.md) | 採用（決定 6 を守ったうえで 4 列目を足し、決定 4 の `first()` 規則を強めたのは [チップでラベルを選ぶと履歴とコピーが切り替わる](ux/label-chips-switch-the-history-and-the-copy.md)） |
 | [推移タブの対象を「部位 + 種目」の 2 セレクタにする](ux/progress-target-as-group-plus-exercise-selects.md) | 採用 |
+| [チップでラベルを選ぶと履歴とコピーが切り替わる](ux/label-chips-switch-the-history-and-the-copy.md) | 採用（データ側は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)） |
 
 ### deploy — 配信とブランチ運用
 

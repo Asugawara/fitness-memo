@@ -365,35 +365,25 @@ pub fn fmt_metric(v: f64) -> String {
 pub use crate::core::{fmt_weight, parse_reps, parse_weight};
 
 /// 1 セットの表示。重量ありなら "60×10"、重量なしなら "12"。
+/// `d` が `Drops::Include` なら、続けて段を `↓` 区切りで並べる（`60×6↓50×5`）。
 ///
 /// 単位（回 / 秒）は添えない。プランクの 60 に「回」と付くほうが嘘になるし、
 /// それが秒だと分かるのは種目名からで、表記から読むものではない。
-pub fn fmt_set(s: &SetEntry) -> String {
-    if s.weight > 0.0 {
-        format!("{}×{}", fmt_weight(s.weight), s.reps)
-    } else {
-        format!("{}", s.reps)
-    }
-}
-
-/// 1 セットの表示。ドロップセットの段を続けて出すかを選べる版。
 ///
-/// 段は `↓` を挟んで並べる（`60×6↓50×5↓40×4`）。★ 段の前に空白を入れない —
-/// セット同士は 2 スペースで区切る（`views::progress` / `views::day`）ので、
-/// 空白を入れると「どこまでが 1 セットか」が読めなくなる。
+/// ★ **段の前に空白を入れない。** セット同士は 2 スペースで区切る
+/// （`views::progress` / `views::day`）ので、空白を入れると「どこまでが 1 セットか」が
+/// 読めなくなる。
 ///
-/// ★ [`fmt_set`] は**変えない**。記録タブの「前回の記録」行は段を出さないと決めた
-/// （adr/ux/drop-sets-as-a-box-under-the-main-set.md）ので、そのまま使う口が要る。
-pub fn fmt_set_with(s: &SetEntry, d: crate::core::Drops) -> String {
-    let mut out = fmt_set(s);
+/// ★ 既定を持つラッパを作らない。記録タブの「前回の記録」行は段を出さないと決めた
+/// （adr/ux/drop-sets-as-a-box-under-the-main-set.md）が、それを関数名に隠すと
+/// `core::log_value`（段を**数える**側の既定）と逆向きの既定が 2 つ並んで読めなくなる。
+/// 呼び出し側で `Drops::Exclude` と書く。
+pub fn fmt_set(s: &SetEntry, d: crate::core::Drops) -> String {
+    let mut out = crate::core::fmt_wr(s.weight, s.reps);
     if d == crate::core::Drops::Include {
         for stage in &s.drops {
             out.push('↓');
-            if stage.weight > 0.0 {
-                out.push_str(&format!("{}×{}", fmt_weight(stage.weight), stage.reps));
-            } else {
-                out.push_str(&stage.reps.to_string());
-            }
+            out.push_str(&crate::core::fmt_wr(stage.weight, stage.reps));
         }
     }
     out

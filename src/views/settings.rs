@@ -600,16 +600,19 @@ pub fn Settings() -> impl IntoView {
                                 data-testid="drop-pct"
                                 on:focusin=move |_| kb_focus(kb)
                                 on:focusout=move |_| kb_blur(kb)
-                                on:input=move |ev| {
+                                // ★ **`on:input` ではなく `on:change`。** 保存は
+                                //   `localStorage` の read-modify-write（同期・ディスク
+                                //   backed）なので、打鍵ごとに走らせると `12.5` の 4 打鍵で
+                                //   4 往復する。この節以外の設定は全部クリック 1 回きりで、
+                                //   `storage` 側の doc もそれを前提に debounce を持たない
+                                on:change=move |ev| {
                                     let raw = event_target_value(&ev);
                                     // ★ 空欄は既定へ戻す。0 と空欄は違う（0 は
                                     //   「落とさない」という有効な選択）
                                     let next = if raw.trim().is_empty() {
                                         crate::core::DEFAULT_DROP_PCT
                                     } else {
-                                        crate::core::drop_pct(Some(
-                                            parse_weight(&raw) as f64,
-                                        ))
+                                        crate::core::drop_pct(Some(parse_weight(&raw) as f64))
                                     };
                                     storage::save_drop_pct(next);
                                     drop_pct.set(next);

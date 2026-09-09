@@ -96,19 +96,29 @@ pub enum Drops {
 /// ★ `max(1.0)` にするのは単調性のため。0.5kg を 0.5 倍で扱うと
 /// 「重量を足したのに指標が下がる」が起きて、グラフの上下が負荷の増減を表さなくなる。
 ///
-/// ★ **メインセットぶんだけを返す。** 落とした段は [`drop_volume`] が別に数える。
-/// ここに段を足し込むと、推移タブから段を外す設定が効かなくなる（`Metric::Sets` が
-/// `sets` の本数を数えるので、値を 0 にするやり方では成立しない）。
+/// ★ **メインセットぶんだけを返す。** 落とした段は [`log_value_of`] が
+/// [`counted_drops`] を通して別に数える。ここに段を足し込むと、推移タブから段を外す
+/// 設定が効かなくなる（`Metric::Sets` が `sets` の本数を数えるので、値を 0 にする
+/// やり方では成立しない）。
 pub fn set_volume(s: &SetEntry) -> f64 {
-    f64::from(s.weight).max(1.0) * f64::from(s.reps)
+    volume(s.weight, s.reps)
 }
 
-/// そのセットにぶら下がる段のボリューム合計。式は [`set_volume`] と同じ。
-pub fn drop_volume(s: &SetEntry) -> f64 {
-    s.drops
-        .iter()
-        .map(|d| f64::from(d.weight).max(1.0) * f64::from(d.reps))
-        .sum()
+/// 重量 × 回数のボリューム。**メインセットも段もこの 1 本を通す。**
+///
+/// ★ 式を 2 つ書かない。`max(1.0)`（[`set_volume`] の doc にある単調性の理由）を
+/// 片方だけ直すと、自重の段が古い規則のまま残る。
+fn volume(weight: f32, reps: u32) -> f64 {
+    f64::from(weight).max(1.0) * f64::from(reps)
+}
+
+/// 集計に数える段。`Drops::Exclude` なら空。
+///
+/// ★ **「段を数えるか」の分岐をここ 1 箇所に閉じる。** [`log_value_of`] の 3 つの腕が
+/// それぞれ `if` を持つと、腕を 1 つ足したときに片方だけ段を数え忘れられる —
+/// それがまさに doc で防ごうとしている食い違い。
+fn counted_drops(s: &SetEntry, d: Drops) -> &[DropStage] {
+    if d == Drops::Include { &s.drops } else { &[] }
 }
 
 /// 1 ログ（= その日のその種目）の指標。**段も数える。**
@@ -122,39 +132,29 @@ pub fn log_value(m: Metric, l: &ExerciseLog) -> f64 {
 ///
 /// ★ **3 指標すべてで段の扱いを揃える。** `Sets` だけ段を数えない、のような食い違いを
 /// 作ると、同じ設定で「ボリュームは増えたのにセット数は変わらない」が起きて、
-/// 利用者は設定が効いているのか壊れているのか区別できない。
+/// 利用者は設定が効いているのか壊れているのか区別できない。分岐を
+/// [`counted_drops`] に畳んであるので、腕はどれも「メインセット + 段」の同じ形になる。
 pub fn log_value_of(m: Metric, l: &ExerciseLog, d: Drops) -> f64 {
-    let with_drops = d == Drops::Include;
-    match m {
-        Metric::Volume => l
-            .sets
-            .iter()
-            .map(|s| set_volume(s) + if with_drops { drop_volume(s) } else { 0.0 })
-            .sum(),
-        Metric::Sets => l
-            .sets
-            .iter()
-            .map(|s| {
-                1.0 + if with_drops {
-                    s.drops.len() as f64
-                } else {
-                    0.0
-                }
-            })
-            .sum(),
-        Metric::Reps => l
-            .sets
-            .iter()
-            .map(|s| {
+    l.sets
+        .iter()
+        .map(|s| match m {
+            Metric::Volume => {
+                volume(s.weight, s.reps)
+                    + counted_drops(s, d)
+                        .iter()
+                        .map(|x| volume(x.weight, x.reps))
+                        .sum::<f64>()
+            }
+            Metric::Sets => 1.0 + counted_drops(s, d).len() as f64,
+            Metric::Reps => {
                 f64::from(s.reps)
-                    + if with_drops {
-                        s.drops.iter().map(|x| f64::from(x.reps)).sum()
-                    } else {
-                        0.0
-                    }
-            })
-            .sum(),
-    }
+                    + counted_drops(s, d)
+                        .iter()
+                        .map(|x| f64::from(x.reps))
+                        .sum::<f64>()
+            }
+        })
+        .sum()
 }
 
 // ── 数値の整形 / パース ─────────────────────────────────────────────────────
@@ -214,10 +214,20 @@ pub fn parse_interval(s: &str) -> Option<u32> {
 /// 「同じセットか」を問うときは必ずここを通すこと。`==` を使ってよいのは
 /// 「メモまで含めてまったく同じか」を問うときだけ。
 fn same_sets(a: &[SetEntry], b: &[SetEntry]) -> bool {
-    a.len() == b.len()
-        && a.iter()
-            .zip(b)
-            .all(|(x, y)| x.weight == y.weight && x.reps == y.reps)
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same_set(x, y))
+}
+
+/// セット 1 本の同一性。**重量と回数だけ**を見る。
+///
+/// ★ [`same_sets`] の doc が言う「必ずここを通す」の実体。要素単位で問う場所
+/// （[`merge_set_notes_unordered`] / [`merge_set_drops_unordered`]）が式を書き直すと、
+/// 「メモも段も同一性に入らない」という [`SetEntry::drops`] の不変条件が
+/// 手書きの式の数だけ増える。
+///
+/// 重量は `to_bits` で比べる。`==` は NaN を不一致にするので、
+/// [`drop_unrepresentable_weights`] が先に走る前提が崩れた瞬間に挙動が分かれる。
+fn same_set(a: &SetEntry, b: &SetEntry) -> bool {
+    a.weight.to_bits() == b.weight.to_bits() && a.reps == b.reps
 }
 
 /// 並びを無視したセット列の一致。**メモは見ない。**
@@ -257,9 +267,7 @@ fn merge_set_notes_unordered(mine: &mut [SetEntry], theirs: &[SetEntry]) -> usiz
         let found = mine
             .iter()
             .enumerate()
-            .find(|(i, m)| {
-                !used[*i] && m.weight.to_bits() == t.weight.to_bits() && m.reps == t.reps
-            })
+            .find(|(i, m)| !used[*i] && same_set(m, t))
             .map(|(i, _)| i);
         if let Some(i) = found {
             used[i] = true;
@@ -296,16 +304,13 @@ fn merge_set_notes_unordered(mine: &mut [SetEntry], theirs: &[SetEntry]) -> usiz
 fn merge_set_drops_unordered(mine: &mut [SetEntry], theirs: &[SetEntry]) -> usize {
     let mut used = vec![false; mine.len()];
     let mut filled = 0;
-    let same =
-        |m: &SetEntry, t: &SetEntry| m.weight.to_bits() == t.weight.to_bits() && m.reps == t.reps;
-    let incoming: Vec<&SetEntry> = theirs.iter().filter(|t| !t.drops.is_empty()).collect();
     // 第 1 段: 同じ段を既に持っている相手に寄せる（何も変えないので数えない）
     let mut leftover = Vec::new();
-    for t in incoming {
+    for t in theirs.iter().filter(|t| !t.drops.is_empty()) {
         let found = mine
             .iter()
             .enumerate()
-            .find(|(i, m)| !used[*i] && m.drops == t.drops && same(m, t))
+            .find(|(i, m)| !used[*i] && m.drops == t.drops && same_set(m, t))
             .map(|(i, _)| i);
         match found {
             Some(i) => used[i] = true,
@@ -317,7 +322,7 @@ fn merge_set_drops_unordered(mine: &mut [SetEntry], theirs: &[SetEntry]) -> usiz
         let found = mine
             .iter()
             .enumerate()
-            .find(|(i, m)| !used[*i] && m.drops.is_empty() && same(m, t))
+            .find(|(i, m)| !used[*i] && m.drops.is_empty() && same_set(m, t))
             .map(|(i, _)| i);
         if let Some(i) = found {
             used[i] = true;
@@ -380,8 +385,7 @@ fn fold_ws(s: &str) -> String {
 fn prune_empty_drops(s: &mut Session) {
     for log in &mut s.logs {
         for set in &mut log.sets {
-            set.drops.retain(|d| d.reps > 0);
-            set.drops.truncate(MAX_DROPS);
+            set.drops = clean_drops(std::mem::take(&mut set.drops));
         }
     }
 }
@@ -715,7 +719,7 @@ struct Seed {
 impl Seed {
     /// コピー元のログから**運んでよいものだけ**を取り出す。**コピーの規則はここ 1 箇所。**
     ///
-    /// 運ぶのはセット（重量・回数・セットメモ・ドロップの印）と種目メモ。`at` は運ばない
+    /// 運ぶのはセット（重量・回数・セットメモ・ドロップの段）と種目メモ。`at` は運ばない
     /// （呼び出し側が渡す）。体重と体調メモは [`Session`] の側なのでここには届かない。
     fn carry(src: &ExerciseLog) -> Self {
         // ★ **分解して受ける。** フィールドで読むと、`ExerciseLog` に足した新しい
@@ -1231,21 +1235,30 @@ pub fn pick_series(
     }
 }
 
-/// その対象・期間に**集計から外したドロップセットがあるか**。
+/// その対象・期間に**ドロップセットの段があるか**。
 ///
 /// 推移タブの注記に使う。外したことを黙っていると、記録タブの合計と食い違う理由が
 /// どこにも出ないまま「グラフが実際より低い」ように見える。
 ///
-/// ★ `Drops::Include` のときは常に偽（何も外していない）。呼び出し側で分岐せずに
-/// 済むよう、判定をここに閉じる。
-pub fn has_hidden_drops(db: &Db, p: Pick, from: NaiveDate, to: NaiveDate, d: Drops) -> bool {
-    if d == Drops::Include {
+/// ★ **`Drops` を受け取らない。** 「段が在るか」はデータの事実で、それを注記に
+/// するかどうかは画面の設定。`Period` を `(from, to)` に解いて渡すのと同じ線で、
+/// 合成は `views::progress` 側でやる。
+///
+/// ★ 部位の ID 集合は `sessions_in` の**外**で 1 回だけ引く。`Db::exercise_ids_of_group`
+/// は毎回 `Vec` を作るので、ログごとに呼ぶと 2 年ぶんで千回単位の確保になる
+/// （[`group_series`] が同じ理由で外に出している）。
+pub fn any_drops_in_scope(db: &Db, p: Pick, from: NaiveDate, to: NaiveDate) -> bool {
+    if !p.is_set() {
         return false;
     }
-    let in_scope = |log: &ExerciseLog| match (p.exercise, p.group) {
+    let ids = p
+        .exercise
+        .is_none()
+        .then(|| p.group.map(|g| db.exercise_ids_of_group(g)));
+    let in_scope = |log: &ExerciseLog| match (p.exercise, ids.as_ref()) {
         (Some(ex), _) => log.exercise_id == ex,
-        (None, Some(g)) => db.exercise_ids_of_group(g).contains(&log.exercise_id),
-        (None, None) => false,
+        (None, Some(Some(ids))) => ids.contains(&log.exercise_id),
+        _ => false,
     };
     sessions_in(db, from, to).any(|(_, session)| {
         session
@@ -1693,6 +1706,27 @@ fn normalize_exercises(db: &mut Db) {
 /// 消さないと「1 日 1 種目 1 ログ」が破れる）。
 ///
 /// ★ 並べ替えない。`Vec` の順が「上から下へ触る順」そのもの。
+/// ドロップの段の正規化。**「段が在る」を決めるのはここ 1 箇所。**
+///
+/// ★ [`clean_pins`] / [`clean_interval`] と**同じ理由で共有する**。画面（`views::day` の
+/// `commit`）・取り込み（`parse_drops_cell` → [`normalize`]）・読み込み
+/// （[`prune_empty_drops`]）の 3 経路が別々に規則を持つと、「画面から打てるのに取り込みで
+/// 丸められる」「取り込みで残るのに画面で消える」が起きる。
+///
+/// 落とすのは 3 つ:
+///
+/// - **回数 0**。挙げていないものは段ではない
+/// - **`f32` で表せない重量**。残すと `"weight":null` が保存され、次回起動の `Db` の
+///   パースが丸ごと落ちる（メインセットで潰した経路と同型）
+/// - **[`MAX_DROPS`] を超えた分**
+fn clean_drops(drops: Vec<DropStage>) -> Vec<DropStage> {
+    drops
+        .into_iter()
+        .filter(|d| d.reps > 0 && d.weight.is_finite() && d.weight >= 0.0)
+        .take(MAX_DROPS)
+        .collect()
+}
+
 fn clean_pins(pins: Vec<String>) -> Vec<String> {
     pins.iter()
         .flat_map(|p| p.split_whitespace())
@@ -1784,14 +1818,10 @@ fn fill_interval(existing: &mut Exercise, incoming: &Exercise) {
 /// ここが発火するのは `3.5e38` のような壊れた取り込みだけで、UI からは入らない。
 fn drop_unrepresentable_weights(s: &mut Session) {
     for log in &mut s.logs {
+        // ★ 段の重量は [`clean_drops`] が同じ門を通す（[`prune_empty_drops`] 経由）。
+        //   ここで二重に書くと「段が在る」の規則が 2 本に割れる
         log.sets
             .retain(|set| set.weight.is_finite() && set.weight >= 0.0);
-        // ★ 段も同じ門を通す。落とさないと `"weight":null` が保存され、次回起動の
-        //   `Db` のパースが丸ごと落ちる（メインセットで潰した経路と同型）
-        for set in &mut log.sets {
-            set.drops
-                .retain(|d| d.weight.is_finite() && d.weight >= 0.0);
-        }
     }
     if !s.body_weight.is_some_and(|w| w.is_finite() && w > 0.0) {
         s.body_weight = None;
@@ -2098,7 +2128,8 @@ const TSV_HEADER_JA: [&str; 15] = [
     "回数",
     // ★ 同じく後から足した列。**セット単位**の列なので回数の隣に置く（種目単位の
     //   「ピン」「インターバル秒」と混ざると、シートで縦に読んだときに意味の階層が崩れる）。
-    //   セルは `1` か空。位置が変わっても取り込みは `tsv_header` が名前で引くので壊れない
+    //   セルは `50×5 40×4` のように段を半角空白で並べる（「ピン」列と同じ流儀）。
+    //   位置が変わっても取り込みは `tsv_header` が名前で引くので壊れない
     "ドロップ",
     "体重kg",
     "セットメモ",
@@ -2723,6 +2754,19 @@ fn parse_cell_count(s: &str) -> Option<u32> {
     Some(v.round() as u32)
 }
 
+/// 「重量×回数」の 1 セット分の表記。**重量が入っていなければ回数だけ。**
+///
+/// ★ 表示（`views::fmt_set`）と書き出し（[`drops_cell`]）で同じ 1 本を通す。
+/// `×` の綴りと「重量 0 = 重量なし」の約束は [`set_volume`] と共有する規範なので、
+/// 書き分けると片方だけ直る。
+pub fn fmt_wr(weight: f32, reps: u32) -> String {
+    if weight > 0.0 {
+        format!("{}×{}", fmt_weight(weight), reps)
+    } else {
+        reps.to_string()
+    }
+}
+
 /// 段の並びを 1 セルに落とす。`50×5 40×4` のように**半角空白区切り**。
 ///
 /// ★ `ピン` 列と同じ流儀（1 セル 1 要素にせず空白で並べる）。段は 1 セットに
@@ -2735,8 +2779,10 @@ fn drops_cell(s: &SetEntry) -> String {
         .iter()
         .map(|d| {
             if d.weight > 0.0 {
-                format!("{}×{}", fmt_weight(d.weight), d.reps)
+                fmt_wr(d.weight, d.reps)
             } else {
+                // ★ 自重の段は `×5`。回数だけにすると `parse_drops_cell` が
+                //   区切りと区別できず往復が閉じない（表示側の `fmt_wr` と違う点）
                 format!("×{}", d.reps)
             }
         })
@@ -2749,6 +2795,10 @@ fn drops_cell(s: &SetEntry) -> String {
 /// ★ 区切りは空白 / 読点 / カンマを受け、掛け算記号は `×` `x` `X` `*` を受ける。
 /// スプレッドシートで手で書き足す人が居るので、綴りは書き出しより広く取る。
 /// 回数は [`parse_cell_count`] と同じ寛容さ（`5.0` を受ける）。
+///
+/// ★ **ここで [`MAX_DROPS`] を切らない。** 上限は [`clean_drops`] の仕事で、
+/// [`parse_tsv`] は最後に必ず [`normalize`] を通る。ここで別に切ると規則が 2 本に割れる
+/// （`parse_interval` が上限で丸めないのと同じ理由）。
 fn parse_drops_cell(cell: &str) -> Vec<DropStage> {
     cell.split([' ', '\t', '、', ',', ';'])
         .filter(|part| !part.trim().is_empty())
@@ -2763,7 +2813,6 @@ fn parse_drops_cell(cell: &str) -> Vec<DropStage> {
                 reps: parse_cell_count(r)?,
             })
         })
-        .take(MAX_DROPS)
         .collect()
 }
 
@@ -3821,12 +3870,29 @@ mod tests {
     /// ★ 段はメインセットにぶら下がるので、`set_volume` は**メインセットぶんだけ**を
     ///   返さなければならない。ここに足し込むと `Metric::Sets` に効かせられない。
     #[test]
-    fn set_volume_excludes_the_stages_and_drop_volume_has_them() {
+    fn set_volume_excludes_the_stages() {
         let s = drop_set(60.0, 6, &[(50.0, 5), (40.0, 4)]);
         assert_eq!(set_volume(&s), 360.0);
-        assert_eq!(drop_volume(&s), 410.0);
+
+        let l = ExerciseLog {
+            exercise_id: e(10),
+            sets: vec![s],
+            at: None,
+            note: String::new(),
+        };
+        // 段のぶんは 50×5 + 40×4 = 410
+        assert_eq!(log_value_of(Metric::Volume, &l, Drops::Include), 770.0);
         // 段のほうも「重量なし = 重量 1」が効く（自重の段）
-        assert_eq!(drop_volume(&drop_set(60.0, 6, &[(0.0, 8)])), 8.0);
+        let bodyweight = ExerciseLog {
+            exercise_id: e(10),
+            sets: vec![drop_set(60.0, 6, &[(0.0, 8)])],
+            at: None,
+            note: String::new(),
+        };
+        assert_eq!(
+            log_value_of(Metric::Volume, &bodyweight, Drops::Include),
+            368.0
+        );
     }
 
     /// ★ 既定は「入れない」。ここが逆に倒れると、設定を触っていない利用者の
@@ -5612,16 +5678,17 @@ mod tests {
     }
 
     /// ★ 外したことを黙ると、記録タブの合計と食い違う理由が画面のどこにも出ない。
+    ///   「段が在るか」はデータの事実なので、設定との合成は画面側が持つ。
     #[test]
-    fn has_hidden_drops_answers_only_when_something_was_dropped() {
+    fn any_drops_in_scope_answers_only_when_a_stage_is_there() {
         let mut db = test_db();
         put(&mut db, d(2026, 8, 1), vec![log(10, &[(60.0, 10)], None)]);
         let range = (d(2026, 8, 1), d(2026, 8, 2));
         let p = Pick::default().with_exercise(&db, Some(e(10)));
 
         assert!(
-            !has_hidden_drops(&db, p, range.0, range.1, Drops::Exclude),
-            "印が 1 つも無いのに注記を出している"
+            !any_drops_in_scope(&db, p, range.0, range.1),
+            "段が 1 つも無いのに注記を出している"
         );
 
         db.sessions.insert(
@@ -5629,41 +5696,28 @@ mod tests {
             Session {
                 logs: vec![ExerciseLog {
                     exercise_id: e(10),
-                    sets: vec![set(60.0, 10), drop_set(50.0, 5, &[(50.0, 5)])],
+                    sets: vec![set(60.0, 10), drop_set(60.0, 6, &[(50.0, 5)])],
                     at: None,
                     note: String::new(),
                 }],
                 ..Session::default()
             },
         );
-        assert!(has_hidden_drops(&db, p, range.0, range.1, Drops::Exclude));
-        assert!(
-            !has_hidden_drops(&db, p, range.0, range.1, Drops::Include),
-            "含める設定なのに「外した」と言っている"
-        );
-        // 対象外の種目の印は数えない
+        assert!(any_drops_in_scope(&db, p, range.0, range.1));
+
+        // 対象外の種目の段は数えない
         let other = Pick::default().with_exercise(&db, Some(e(20)));
-        assert!(!has_hidden_drops(
-            &db,
-            other,
-            range.0,
-            range.1,
-            Drops::Exclude
-        ));
-        // 期間外の印も数えない
-        assert!(!has_hidden_drops(
-            &db,
-            p,
-            d(2026, 8, 1),
-            d(2026, 8, 1),
-            Drops::Exclude
-        ));
+        assert!(!any_drops_in_scope(&db, other, range.0, range.1));
+        // 期間外の段も数えない
+        assert!(!any_drops_in_scope(&db, p, d(2026, 8, 1), d(2026, 8, 1)));
         // 部位で選んでいても効く
         let grp = Pick {
             group: Some(g(1)),
             exercise: None,
         };
-        assert!(has_hidden_drops(&db, grp, range.0, range.1, Drops::Exclude));
+        assert!(any_drops_in_scope(&db, grp, range.0, range.1));
+        // 何も選んでいなければ偽
+        assert!(!any_drops_in_scope(&db, Pick::default(), range.0, range.1));
     }
 
     #[test]
@@ -6600,7 +6654,7 @@ mod tests {
     /// ★ 印を識別に入れると、印の差だけで `merge_db` が食い違い扱いになり、
     ///   rank が同点なので差し替えの分岐にも入れず、負けた側のセットメモが消える。
     #[test]
-    fn same_sets_and_log_rank_ignore_the_drop_marks() {
+    fn same_sets_and_log_rank_ignore_the_drop_stages() {
         let plain = vec![set(60.0, 10), set(50.0, 5)];
         let marked = vec![set(60.0, 10), drop_set(50.0, 5, &[(50.0, 5)])];
         assert!(
@@ -7583,11 +7637,13 @@ mod tests {
                 reps: 8
             }]
         );
-        // ★ 上限を超えた段は切る（`prune_empty_drops` と同じ上限）
-        assert_eq!(parse_drops_cell("1×1 2×1 3×1 4×1 5×1").len(), MAX_DROPS);
+        // ★ 上限はここで切らない（`clean_drops` の仕事）。`parse_tsv` は最後に
+        //   `normalize` を通るので、取り込み結果としては 4 段に収まる
+        assert_eq!(parse_drops_cell("1×1 2×1 3×1 4×1 5×1").len(), 5);
     }
 
     /// ★ 回数 0 の段が `drops` を非空にすると、何も外していないのに推移タブの注記が出る。
+    ///   上限も同じ 1 箇所（`clean_drops`）が切ることを一緒に固定する。
     #[test]
     fn normalize_prunes_stages_that_cannot_be_a_set() {
         let mut db = test_db();
@@ -7613,6 +7669,33 @@ mod tests {
                 reps: 4
             }],
             "回数 0 の段が残っている"
+        );
+    }
+
+    /// ★ 上限を切るのも `clean_drops` の 1 箇所。取り込みのパーサ側で切らないので、
+    ///   ここが唯一の門になる。
+    #[test]
+    fn normalize_caps_the_stages_at_the_limit() {
+        let many: Vec<(f32, u32)> = (1..=MAX_DROPS as u32 + 2).map(|n| (10.0, n)).collect();
+        let mut db = test_db();
+        db.sessions.insert(
+            date_key(d(2026, 8, 1)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: e(10),
+                    sets: vec![drop_set(60.0, 6, &many)],
+                    at: None,
+                    note: String::new(),
+                }],
+                ..Session::default()
+            },
+        );
+
+        normalize(&mut db, &mut ids());
+
+        assert_eq!(
+            db.sessions["2026-08-01"].logs[0].sets[0].drops.len(),
+            MAX_DROPS
         );
     }
 
@@ -9670,8 +9753,6 @@ mod tests {
         );
     }
 
-    /// ピンの列位置を見出しから引く（テストが列順に依存しないように）。
-
     /// 毎行書くとシートで同じ文字列が縦に伸び、行数ぶん容量も増える。
     /// 体重・種目メモと同じ「まとまりの先頭 1 行だけ」。
     #[test]
@@ -10010,8 +10091,6 @@ mod tests {
             "0 秒を未設定として扱っている"
         );
     }
-
-    /// インターバルの列位置を見出しから引く（テストが列順に依存しないように）。
 
     /// ピンと同じ「その種目が最初に現れた行にだけ書く」。毎行書くとシートで同じ
     /// 数字が縦に伸び、行数ぶん容量も増える。

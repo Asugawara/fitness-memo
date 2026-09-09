@@ -121,36 +121,36 @@ async function seedPastLogs(page, entries) {
   await expect(page.getByTestId('screen-record')).toBeVisible();
 }
 
-/** 設定タブでドロップセットの扱いを選ぶ（`exclude` / `include`）。 */
-async function setDrops(page, which) {
-  await blurActive(page);
-  await page.getByTestId('tab-settings').click();
-  // ★ 既に別の節に入っていることがある（`SettingsPageCtx` はタブ往復で戻らない）
-  const back = page.getByTestId('settings-back');
-  if (await back.isVisible()) await back.click();
-  await page.getByTestId('settings-row-drop-sets').click();
-  await page.getByTestId('drop-sets-btn').and(page.locator(`[data-drops="${which}"]`)).click();
-  await page.getByTestId('settings-back').click();
-  // ★ 記録タブへ戻る。設定タブに居たまま次の操作へ進むと `add-exercise` が無い
-  //   （history.spec.mjs の `setHistoryCount` と同じ作法）
-  await page.getByTestId('tab-record').click();
-  await expect(page.getByTestId('screen-record')).toBeVisible();
-}
-
-/** 設定タブで落とし幅（%）を入れる。 */
-async function setDropPct(page, pct) {
+/**
+ * 設定タブのドロップセットの節に入り、`act` を実行して記録タブへ戻る。
+ *
+ * ★ 既に別の節に入っていることがある（`SettingsPageCtx` はタブ往復で戻らない）。
+ * ★ 記録タブへ戻す — 設定タブに居たまま次の操作へ進むと `add-exercise` が無い
+ *   （history.spec.mjs の `setHistoryCount` と同じ作法）。
+ */
+async function inDropSettings(page, act) {
   await blurActive(page);
   await page.getByTestId('tab-settings').click();
   const back = page.getByTestId('settings-back');
   if (await back.isVisible()) await back.click();
   await page.getByTestId('settings-row-drop-sets').click();
-  await page.getByTestId('drop-pct').fill(String(pct));
+  await act();
   // ★ 入力欄にフォーカスが残ると `.kb-open` でタブ帯が隠れる
   await blurActive(page);
   await page.getByTestId('settings-back').click();
   await page.getByTestId('tab-record').click();
   await expect(page.getByTestId('screen-record')).toBeVisible();
 }
+
+/** 推移に含めるかを選ぶ（`exclude` / `include`）。 */
+const setDrops = (page, which) =>
+  inDropSettings(page, () =>
+    page.getByTestId('drop-sets-btn').and(page.locator(`[data-drops="${which}"]`)).click(),
+  );
+
+/** 落とし幅（%）を入れる。 */
+const setDropPct = (page, pct) =>
+  inDropSettings(page, () => page.getByTestId('drop-pct').fill(String(pct)));
 
 async function openProgress(page) {
   await blurActive(page);
@@ -167,13 +167,12 @@ async function cardWithOneSet(page) {
   await row.getByTestId('set-weight').fill('60');
   await row.getByTestId('set-reps').fill('10');
   await blurActive(page);
-  return card;
+  return { card, row };
 }
 
 test('1. ★ メモを開かずに段を足して打てる', async ({ page }) => {
   // ★ この機能の要。`↓` は常に 1 行目に出ていて、押すと段の入力欄がその場で開く
-  const card = await cardWithOneSet(page);
-  const row = card.getByTestId('set-row').nth(0);
+  const { card, row } = await cardWithOneSet(page);
 
   await expect(card.getByTestId('note-toggle')).toHaveAttribute('aria-expanded', 'false');
   await row.getByTestId('drop-add').click();
@@ -199,8 +198,7 @@ test('2. 段の無いセットの保存 JSON にキーが増えない', async ({
 });
 
 test('3. 段を消すと保存 JSON からキーが消える', async ({ page }) => {
-  const card = await cardWithOneSet(page);
-  const row = card.getByTestId('set-row').nth(0);
+  const { card, row } = await cardWithOneSet(page);
   await row.getByTestId('drop-add').click();
   await row.getByTestId('drop-reps').fill('5');
   await row.getByTestId('drop-remove').click();
@@ -213,8 +211,7 @@ test('4. ★ `＋` は 1 行目に乗り、行の高さを変えない', async (
   // ★ 44px の標的を 1 つ増やしたので、「縦は 1px も増えていない」が言えなければ
   //   adr/ux/exercise-and-set-notes-behind-one-toggle.md 決定 1 を覆した根拠が消える。
   //   iPhone 幅で回数欄の右端から ✕ の左端まで 94px 空いているのが前提
-  const card = await cardWithOneSet(page);
-  const row = card.getByTestId('set-row').nth(0);
+  const { card, row } = await cardWithOneSet(page);
 
   const add = await row.getByTestId('drop-add').boundingBox();
   const x = await row.getByTestId('remove-set').boundingBox();
@@ -233,7 +230,7 @@ test('4. ★ `＋` は 1 行目に乗り、行の高さを変えない', async (
 test('5. `＋` は 44px より小さくならない', async ({ page }) => {
   // ★ 静かにするのは色と文字サイズだけで、当たり判定ではない
   //   （adr/ux/destructive-affordance-quiet-at-rest.md。note-toggle と同じ検査）
-  const card = await cardWithOneSet(page);
+  const { card, row } = await cardWithOneSet(page);
   const box = await card.getByTestId('drop-add').nth(0).boundingBox();
   expect(box.height).toBeGreaterThanOrEqual(44);
   expect(box.width).toBeGreaterThanOrEqual(44);
@@ -242,7 +239,7 @@ test('5. `＋` は 44px より小さくならない', async ({ page }) => {
 test('6. 段があるときだけ行が出る', async ({ page }) => {
   // ★ 空の行を常に出すと `44px × セット行数` ぶんカードが伸びる。
   //   やらない日のほうが多い操作にその縦を払わない
-  const card = await cardWithOneSet(page);
+  const { card, row } = await cardWithOneSet(page);
   await expect(card.getByTestId('drop-row')).toHaveCount(0);
 
   await card.getByTestId('set-row').nth(0).getByTestId('drop-add').click();
@@ -251,8 +248,7 @@ test('6. 段があるときだけ行が出る', async ({ page }) => {
 
 test('7. ★ 段の ✕ はメインセットの ✕ と縦 1 列に並ぶ', async ({ page }) => {
   // ★ 横に流して折り返す形だと ✕ が段ごとに違う x に来て、どの行のものか読めない
-  const card = await cardWithOneSet(page);
-  const row = card.getByTestId('set-row').nth(0);
+  const { card, row } = await cardWithOneSet(page);
   // ★ ＋ はメインセット行と段の行の両方に出る。**先頭**（メインセット行）を押す
   await row.getByTestId('drop-add').first().click();
   await row.getByTestId('drop-add').first().click();
@@ -271,8 +267,7 @@ test('7. ★ 段の ✕ はメインセットの ✕ と縦 1 列に並ぶ', asy
 
 test('8. メモを開いても段の入力欄は変わらない', async ({ page }) => {
   // ★ 段の入力欄は `note_open` を見ない（足せるのに打てない状態を作らない）
-  const card = await cardWithOneSet(page);
-  const row = card.getByTestId('set-row').nth(0);
+  const { card, row } = await cardWithOneSet(page);
   await row.getByTestId('drop-add').click();
   await row.getByTestId('drop-reps').fill('5');
 
@@ -294,8 +289,7 @@ test('9. 段だけ足して回数が空の行は、落ちる理由が行に出�
 });
 
 test('10. 段はリロードしても残る', async ({ page }) => {
-  const card = await cardWithOneSet(page);
-  const row = card.getByTestId('set-row').nth(0);
+  const { card, row } = await cardWithOneSet(page);
   await row.getByTestId('drop-add').click();
   await row.getByTestId('drop-reps').fill('5');
 
@@ -312,8 +306,7 @@ test('10. 段はリロードしても残る', async ({ page }) => {
 
 test('11. 落とし幅を変えると 1 段目の重量が変わる', async ({ page }) => {
   await setDropPct(page, 12.5);
-  const card = await cardWithOneSet(page);
-  const row = card.getByTestId('set-row').nth(0);
+  const { card, row } = await cardWithOneSet(page);
   await row.getByTestId('drop-add').click();
 
   // 60 の 12.5% 引き = 52.5
@@ -329,8 +322,7 @@ test('12. ★ 落とし幅を掛けるのは 1 段目だけ。2 段目以降は�
   //   限らない）ので、当たらない数字を作ることになる。前の段をそのまま持ってくれば
   //   「同じか、そこから下げる」のどちらでも打ち直しが最小になる
   //   （`add_row` が前の行の重量を引き継ぐのと同じ規則）
-  const card = await cardWithOneSet(page);
-  const row = card.getByTestId('set-row').nth(0);
+  const { card, row } = await cardWithOneSet(page);
   await row.getByTestId('drop-add').first().click();
   await row.getByTestId('drop-reps').nth(0).fill('5');
   await row.getByTestId('drop-add').first().click();
@@ -358,8 +350,7 @@ test('13. 重量の無いメインセットには何も入れない', async ({ p
 
 test('14. 段は上限に達すると足せなくなる', async ({ page }) => {
   // ★ 押しても何も起きないボタンを作らない（`.pin-add` と同じ規則）
-  const card = await cardWithOneSet(page);
-  const row = card.getByTestId('set-row').nth(0);
+  const { card, row } = await cardWithOneSet(page);
   for (let i = 0; i < 4; i += 1) await row.getByTestId('drop-add').first().click();
 
   await expect(row.getByTestId('drop-row')).toHaveCount(4);
@@ -452,8 +443,7 @@ test('19. 記録タブの合計は設定にかかわらず段も数える', asyn
   // ★ 設定は「推移の見せ方」であって記録ではない
   //   （adr/data-model/metric-is-a-view-setting.md）。その日やった仕事の合計から
   //   落としてはいけない
-  const card = await cardWithOneSet(page);
-  const row = card.getByTestId('set-row').nth(0);
+  const { card, row } = await cardWithOneSet(page);
   await row.getByTestId('drop-add').click();
   await row.getByTestId('drop-reps').fill('5');
   await blurActive(page);

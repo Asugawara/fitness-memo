@@ -4,13 +4,14 @@ use chrono::{Months, NaiveDate};
 use leptos::prelude::*;
 
 use crate::core;
-use crate::core::{Metric, Pick};
+use crate::core::{Drops, Metric, Pick};
 use crate::model::{Db, ExerciseId, GroupId};
 use crate::storage;
 
 use super::chart::Chart;
-use super::fmt_set_with;
-use super::{cur_lang, ex_name, fmt_date, fmt_metric, grp_name, t, use_dates, use_db, use_drops};
+use super::{
+    cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, grp_name, t, use_dates, use_db, use_drops,
+};
 use crate::i18n::Lang;
 
 /// 記録テーブルの表示上限。超えた分は件数を明示して省く（黙って切らない）。
@@ -313,7 +314,9 @@ pub fn Progress() -> impl IntoView {
         let drops = drops.get();
         db.with(|d| {
             let (from, to) = bounds(period, today, earliest_session(d));
-            core::has_hidden_drops(d, p, from, to, drops)
+            // ★ 「段が在るか」はデータの事実、それを注記にするかは画面の設定。
+            //   合成をここでやる（`Period` を `(from, to)` に解くのと同じ線）
+            drops == Drops::Exclude && core::any_drops_in_scope(d, p, from, to)
         })
     });
 
@@ -375,7 +378,7 @@ pub fn Progress() -> impl IntoView {
                         let detail = log
                             .sets
                             .iter()
-                            .map(|s| fmt_set_with(s, drops))
+                            .map(|s| fmt_set(s, drops))
                             .collect::<Vec<_>>()
                             .join("  ");
                         rows.push((date, detail, show(core::log_value_of(m, log, drops))));

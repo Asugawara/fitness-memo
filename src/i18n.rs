@@ -303,7 +303,6 @@ pub struct Settings {
     /// 件数サブページの注記。**ラベルが短いぶん、ここが説明を持つ。**
     /// 「表示数」だけでは何の数か読めないので、ここで種目カードの話だと言う
     pub history_note: &'static str,
-    /// 言語の行 / 言語サブページの h1
     /// 推移タブにドロップセットを含めるかの行
     pub row_drop_sets: &'static str,
     pub drop_sets_note: &'static str,
@@ -314,6 +313,7 @@ pub struct Settings {
     /// 落とし幅（%）の見出しと注記。段を足すときの重量をここから計算する
     pub drop_pct_label: &'static str,
     pub drop_pct_note: &'static str,
+    /// 言語の行 / 言語サブページの h1
     pub row_language: &'static str,
     /// 言語サブページの注記。**種目名が変わらないことを先に言う** —
     /// 切り替えてから「英語にしたのに種目名が日本語のまま」と迷わせない
@@ -1128,7 +1128,7 @@ impl Lang {
         }
     }
 
-    /// 取り込みで新しく立ったドロップの印の数。
+    /// 取り込みで新しく段が入ったセットの数。
     pub fn added_drops(self, n: usize) -> String {
         match self {
             Lang::Ja => format!("{n} 件のドロップ"),

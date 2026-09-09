@@ -675,17 +675,14 @@ h3 {
   margin-left: 44px;
 }
 
-/* ★ メインセットの .num より狭くする。字下げ 44px のぶん右に寄るので、4.2em だと
-   iPhone 幅で ＋ と ✕ が押し出される。 */
+/* ★ **枠は `.set-row .num` を継ぐ。** `.drop-row` は `.set-row` の**中**にあるので
+   同詳細度で既に当たっており、ここに書くのは差分だけでよい（枠・角丸・地色・
+   tabular-nums・44px を書き直すと、入力欄の見た目が 2 箇所で決まる）。
+   ★ 狭くするのは、字下げ 44px のぶん右に寄るので 4.2em だと iPhone 幅で
+   ＋ と ✕ が押し出されるから。 */
 .drop-row .num {
   width: 3.4em;
-  min-height: 44px;
   padding: 4px 6px;
-  text-align: right;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg);
-  font-variant-numeric: tabular-nums;
 }
 
 .add-set-wrap {
@@ -772,7 +769,8 @@ h3 {
      サイズだけで、当たり判定ではない
      （adr/ux/destructive-affordance-quiet-at-rest.md）。 */
 .pin-num,
-.interval-num {
+.interval-num,
+.pct-box .num {
   width: 2.9em;
   min-height: 44px;
   padding: 4px 8px;
@@ -783,6 +781,11 @@ h3 {
   /* ラベルの --muted を継がせない（`.ex-note input` と同じ事情） */
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+
+/* 落とし幅は `12.5` の 4 文字が入る。2.9em だと右端が切れる */
+.pct-box .num {
+  width: 5em;
 }
 
 /* 「＋」。カードでいちばん彩度の高い色を、めったに使わない追加に与えない
@@ -805,34 +808,13 @@ h3 {
 }
 
 /* ラベル・入力欄・単位の 1 行。`.pin-box` と同値だが、あちらはチップが折り返す前提の
-   flex-wrap を持つ。こちらは 3 要素固定なので折り返さない。 */
-/* ── 設定タブ: ドロップセットの落とし幅（%）─────────────────────────────────
-   ★ `.interval-box` と同じ形（ラベル + 数値欄 + 単位を横に並べる）。設定タブの
+   flex-wrap を持つ。こちらは 3 要素固定なので折り返さない。
+   ★ 設定タブの落とし幅（`.pct-box`）も同じ 3 要素の 1 行なので共有する。設定タブの
      他の節は `.segmented` だが、刻みは人によって違う（10 / 12.5 / 20 …）ので
-     選択肢を先に決めると必ず外れる。自由入力にした。
-   ★ 数値欄は `.set-row .num` とセレクタを共有しない（あちらはカードの中の
-     44px 前提）。ここは `.pct-box .num` で独立に持つ。 */
+     選択肢を先に決めると必ず外れる。自由入力にした
+     （adr/ux/drop-sets-as-a-box-under-the-main-set.md 決定 4）。 */
+.interval-box,
 .pct-box {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 12px;
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.pct-box .num {
-  width: 5em;
-  min-height: 44px;
-  padding: 4px 8px;
-  text-align: right;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg);
-  font-variant-numeric: tabular-nums;
-}
-
-.interval-box {
   display: flex;
   align-items: center;
   gap: 10px;

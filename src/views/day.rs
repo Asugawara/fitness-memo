@@ -13,7 +13,7 @@ use leptos::prelude::*;
 use web_sys::PointerEvent;
 
 use crate::core;
-use crate::core::Metric;
+use crate::core::{Drops, Metric};
 use crate::model::{
     Db, DropStage, ExerciseId, ExerciseLog, GroupId, MAX_DROPS, MAX_INTERVAL_LEN, MAX_PIN_LEN,
     MAX_PINS, RoutineId, SetEntry,
@@ -1547,7 +1547,14 @@ fn ExerciseCard(
                     }
                     rows.into_iter()
                         .map(|(date, log)| {
-                            let sets = log.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  ");
+                            // ★ 段は出さない。1 行が長くなるとトレ中に読む密度が落ちる
+                            //   （adr/ux/drop-sets-as-a-box-under-the-main-set.md）
+                            let sets = log
+                                .sets
+                                .iter()
+                                .map(|s| fmt_set(s, Drops::Exclude))
+                                .collect::<Vec<_>>()
+                                .join("  ");
                             let metric = fmt_metric(core::log_value(Metric::Volume, &log));
                             // ★ **メモは出さない。** 数値を縦に読んで「伸びているか停滞か」を
                             //   見るための場所なので、自由文が挟まると列が崩れて桁が揃わなくなる。
@@ -1643,6 +1650,29 @@ fn ExerciseCard(
                                     .unwrap_or_default()
                             })
                         };
+                        // 段の**本数だけ**を読む。`drops_of()` は `Vec<DropRow>` を
+                        // clone するので、上限の判定に使うと 1 打鍵ごとに段の数だけ
+                        // `String` を確保して捨てることになる（`rows` はカード共有の
+                        // シグナルなので、どの行を打っても全行のこの closure が走る）
+                        let n_drops = move || {
+                            rows.with(|rs| {
+                                rs.iter()
+                                    .find(|r| r.key == key)
+                                    .map_or(0, |r| r.drops.len())
+                            })
+                        };
+                        // この行の `Row` を書き換えて保存する。**行の書き込みはここを通す。**
+                        //
+                        // ★ `rows.update` → `find(|r| r.key == key)` → `commit()` の
+                        //   3 点セットを手で書くと、`commit()` の付け忘れが行ごとに起きる
+                        let edit_row = move |f: &dyn Fn(&mut Row)| {
+                            rows.update(|rs| {
+                                if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                                    f(r);
+                                }
+                            });
+                            commit();
+                        };
                         // 段を 1 つ足す。重量は先に入れる:
                         //
                         // - **1 段目**はメインセットの重量から落とし幅ぶん引いた値
@@ -1654,6 +1684,12 @@ fn ExerciseCard(
                         //
                         // ★ 回数は入れない。まだ挙げていないので観測が存在しない
                         //   （`add_row` がメモをプリフィルしないのと同じ線）
+                        //
+                        // ★ **`commit()` を呼ばない。** 足した段は回数が空なので
+                        //   `commit` の `parse_reps` で必ず落ちる — 保存内容は 1 バイトも
+                        //   変わらないのに、`db.update` はカレンダーの月集計と全カードの
+                        //   履歴メモを無条件に走らせ、`Db` を丸ごと clone して書き出す。
+                        //   段は `rows`（画面の状態）に居るので、これで足りる
                         let add_drop = move |_| {
                             rows.update(|rs| {
                                 if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
@@ -1669,27 +1705,17 @@ fn ExerciseCard(
                                         .map(fmt_weight)
                                         .unwrap_or_default(),
                                     };
-                                    let next_key =
-                                        r.drops.iter().map(|d| d.key + 1).max().unwrap_or(0);
+                                    let dkey = r.drops.iter().map(|d| d.key + 1).max().unwrap_or(0);
                                     r.drops.push(DropRow {
-                                        key: next_key,
+                                        key: dkey,
                                         weight: prefill,
                                         reps: String::new(),
                                     });
                                 }
                             });
-                            // 回数が空なので保存はされないが、`commit` を呼ばないと
-                            // 「段だけ足して回数を打たずに閉じた」状態が残らない
-                            commit();
                         };
-                        let remove_drop = move |dkey: u32| {
-                            rows.update(|rs| {
-                                if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
-                                    r.drops.retain(|d| d.key != dkey);
-                                }
-                            });
-                            commit();
-                        };
+                        let remove_drop =
+                            move |dkey: u32| edit_row(&|r| r.drops.retain(|d| d.key != dkey));
                         // メモか段は入っているが回数が空 = commit で落ちる行。
                         // weight_missing の完全な対称（あちらは reps あり、こちらは reps なし）
                         //
@@ -1783,6 +1809,30 @@ fn ExerciseCard(
                             };
                             let len = rows.with_untracked(Vec::len);
                             move_row(from, reorder::neighbor(from, up, len));
+                        };
+                        // 段を足すボタン。**絵だけが違う** — メインセット行は
+                        // `arrow-down-wide-narrow`（ドロップを始める）、段の行は `plus`
+                        // （同じドロップに段を継ぎ足す）。押した結果は同じなので
+                        // `aria-label` も `data-testid` も 1 つで、違うのは絵だけ。
+                        //
+                        // ★ 上限に達したら出さない（押しても何も起きないボタンを
+                        //   作らない。`.pin-add` と同じ規則）
+                        let drop_add_btn = move |svg: &'static str| {
+                            move || {
+                                (n_drops() < MAX_DROPS).then(|| {
+                                    view! {
+                                        <button
+                                            class="icon-btn drop-add"
+                                            aria-label=t().day.drop_add
+                                            data-testid="drop-add"
+                                            on:keydown=nudge_row
+                                            on:click=add_drop
+                                        >
+                                            {icon(svg)}
+                                        </button>
+                                    }
+                                })
+                            }
                         };
                         let drop_row = move |ev: PointerEvent| {
                             let Some(d) = row_drag.get_untracked() else { return };
@@ -1882,22 +1932,7 @@ fn ExerciseCard(
                                 //   （iPhone 幅で ✕ の左に 94px 空いている）
                                 // ★ 絵は `arrow-down-wide-narrow`。段の行の ＋ と分けるのは
                                 //   役割が違うから（こちらは「ドロップを始める」）
-                                {move || {
-                                    (drops_of().len() < MAX_DROPS)
-                                        .then(|| {
-                                            view! {
-                                                <button
-                                                    class="icon-btn drop-add"
-                                                    aria-label=t().day.drop_add
-                                                    data-testid="drop-add"
-                                                    on:keydown=nudge_row
-                                                    on:click=add_drop
-                                                >
-                                                    {icon(icon::ARROW_DOWN_WIDE_NARROW)}
-                                                </button>
-                                            }
-                                        })
-                                }}
+                                {drop_add_btn(icon::ARROW_DOWN_WIDE_NARROW)}
                                 <button
                                     class="icon-btn"
                                     aria-label=t().day.delete_set
@@ -2056,24 +2091,8 @@ fn ExerciseCard(
                                                 //   メインセット行と同じ（回数欄の隣）だが、
                                                 //   **絵は ＋ にする** — こちらは「同じ
                                                 //   ドロップに段を継ぎ足す」で、メインセット
-                                                //   行の「ドロップを始める」とは役割が違う。
-                                                //   上限に達したら出さない
-                                                {move || {
-                                                    (drops_of().len() < MAX_DROPS)
-                                                        .then(|| {
-                                                            view! {
-                                                                <button
-                                                                    class="icon-btn drop-add"
-                                                                    aria-label=t().day.drop_add
-                                                                    data-testid="drop-add"
-                                                                    on:keydown=nudge_row
-                                                                    on:click=add_drop
-                                                                >
-                                                                    {icon(icon::PLUS)}
-                                                                </button>
-                                                            }
-                                                        })
-                                                }}
+                                                //   行の「ドロップを始める」とは役割が違う
+                                                {drop_add_btn(icon::PLUS)}
                                                 <button
                                                     class="icon-btn"
                                                     aria-label=t().day.drop_delete

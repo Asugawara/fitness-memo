@@ -439,6 +439,25 @@ fn ui_state() -> UiState {
         .unwrap_or_default()
 }
 
+/// `UI_KEY` の 1 フィールドだけを差し替える。**この読み書きはここ 1 箇所。**
+///
+/// ★ **`UiState { .. }` のリテラルを書かない。** 読んでから差し替えないと、増えた
+/// フィールドの既存値を黙って消す。設定ごとに手で書くと、次に足す設定が 7 度目の
+/// 機会を得る（`e2e/history.spec.mjs` / `e2e/drop.spec.mjs` の「巻き添えで消えない」は
+/// この事故だけを見張っている）。
+///
+/// クリックのたびに 1 回きりなので debounce しない（`Db` 側の `save_debounced` と違う）。
+fn update_ui(f: impl FnOnce(&mut UiState)) {
+    let Some(store) = store() else {
+        return;
+    };
+    let mut next = ui_state();
+    f(&mut next);
+    if let Ok(json) = serde_json::to_string(&next) {
+        let _ = store.set_item(UI_KEY, &json);
+    }
+}
+
 /// ホーム画面追加の案内を利用者が閉じたか。
 pub fn install_hint_dismissed() -> bool {
     ui_state().install_hint_dismissed
@@ -453,15 +472,9 @@ pub fn saved_lang() -> Option<Lang> {
 ///
 /// クリックのたびに 1 回きりなので debounce しない（`dismiss_install_hint` と同じ）。
 pub fn save_lang(lang: Lang) {
-    let Some(store) = store() else {
-        return;
-    };
-    // ★ 読んでから 1 フィールドだけ差し替える（`dismiss_install_hint` と同じ理由）
-    let mut next = ui_state();
-    next.lang = Some(lang.tag().to_string());
-    if let Ok(json) = serde_json::to_string(&next) {
-        let _ = store.set_item(UI_KEY, &json);
-    }
+    update_ui(|u| {
+        u.lang = Some(lang.tag().to_string());
+    });
 }
 
 /// 種目カードに出す過去の記録の件数。**必ず `1..=core::MAX_HISTORY`**（未設定は既定）。
@@ -473,15 +486,9 @@ pub fn history_count() -> usize {
 ///
 /// クリックのたびに 1 回きりなので debounce しない（`save_lang` と同じ）。
 pub fn save_history(n: usize) {
-    let Some(store) = store() else {
-        return;
-    };
-    // ★ 読んでから 1 フィールドだけ差し替える（`save_lang` と同じ理由）
-    let mut next = ui_state();
-    next.history = Some(n as i64);
-    if let Ok(json) = serde_json::to_string(&next) {
-        let _ = store.set_item(UI_KEY, &json);
-    }
+    update_ui(|u| {
+        u.history = Some(n as i64);
+    });
 }
 
 /// 推移タブがドロップセットを集計に入れるか。**未設定は「入れない」。**
@@ -491,15 +498,9 @@ pub fn drops() -> core::Drops {
 
 /// その設定を保存する。クリックのたびに 1 回きりなので debounce しない。
 pub fn save_drops(d: core::Drops) {
-    let Some(store) = store() else {
-        return;
-    };
-    // ★ 読んでから 1 フィールドだけ差し替える（`save_lang` と同じ理由）
-    let mut next = ui_state();
-    next.drops = Some(i64::from(d == core::Drops::Include));
-    if let Ok(json) = serde_json::to_string(&next) {
-        let _ = store.set_item(UI_KEY, &json);
-    }
+    update_ui(|u| {
+        u.drops = Some(i64::from(d == core::Drops::Include));
+    });
 }
 
 /// ドロップセットの落とし幅（%）。**未設定は既定の 20%。**
@@ -509,15 +510,9 @@ pub fn drop_pct() -> f32 {
 
 /// その落とし幅を保存する。
 pub fn save_drop_pct(pct: f32) {
-    let Some(store) = store() else {
-        return;
-    };
-    // ★ 読んでから 1 フィールドだけ差し替える（`save_lang` と同じ理由）
-    let mut next = ui_state();
-    next.drop_pct = Some(f64::from(pct));
-    if let Ok(json) = serde_json::to_string(&next) {
-        let _ = store.set_item(UI_KEY, &json);
-    }
+    update_ui(|u| {
+        u.drop_pct = Some(f64::from(pct));
+    });
 }
 
 /// 推移タブで最後に見ていた対象の**生の保存値** `(部位, 種目)`。
@@ -537,30 +532,16 @@ pub fn saved_progress_pick() -> (Option<String>, Option<String>) {
 ///   読む → 差し替える → 書き戻す を 2 回やる間に、`Pick` の不変条件が破れた組
 ///   （別の部位の種目）が `localStorage` に残る瞬間ができる。
 pub fn save_progress_pick(p: core::Pick) {
-    let Some(store) = store() else {
-        return;
-    };
-    // ★ 読んでから該当フィールドだけ差し替える（`save_lang` と同じ理由）
-    let mut next = ui_state();
-    (next.progress_group, next.progress_exercise) = p.ids();
-    if let Ok(json) = serde_json::to_string(&next) {
-        let _ = store.set_item(UI_KEY, &json);
-    }
+    update_ui(|u| {
+        (u.progress_group, u.progress_exercise) = p.ids();
+    });
 }
 
 /// ホーム画面追加の案内を今後出さない。
 ///
 /// クリック 1 回きりなので debounce しない（`save_debounced` と違って連打されない）。
 pub fn dismiss_install_hint() {
-    let Some(store) = store() else {
-        return;
-    };
-    // ★ 読んでから 1 フィールドだけ差し替える。`UiState { install_hint_dismissed: true }`
-    //   と書くとフィールドが増えたときに既存値を黙って消す。`..ui_state()` を足す形は
-    //   フィールドが 1 つの間 clippy::needless_update に当たるので、この形にしておく
-    let mut next = ui_state();
-    next.install_hint_dismissed = true;
-    if let Ok(json) = serde_json::to_string(&next) {
-        let _ = store.set_item(UI_KEY, &json);
-    }
+    update_ui(|u| {
+        u.install_hint_dismissed = true;
+    });
 }

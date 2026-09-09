@@ -382,6 +382,43 @@ h3 {
   font-weight: 600;
 }
 
+/* 記録タブに初回だけ出す、マニュアルへの手掛かり。
+   ★ 第 3 のトーン。.notice（閉じられる一時通知、ベタ塗り）でも .install-hint
+     （常駐する警告、枠線 + --warn）でもない。警告ではないので面は --surface、
+     枠は --line にとどめ、押すと何が起きるかだけを CTA の --accent で示す
+     （install-guide-banner-and-sheet.md「.notice のようなベタ塗りにしない」）。 */
+.man-hint {
+  margin: 16px 0 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.man-hint p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.man-hint-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.man-hint-cta {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* ── 記録タブ（選択日の入力欄） ─────────────────────────────────────────── */
 
 /* カレンダーと入力欄の境。上に月フッタ、下に日付見出しが来る */
@@ -2565,6 +2602,74 @@ h3 {
    .link-btn と同じ詳細度なので、色を上書きするにはこの位置（後方）である必要がある */
 .danger {
   color: var(--warn);
+}
+
+/* ── 使い方マニュアル（設定タブ） ───────────────────────────────────────── */
+
+.man-intro {
+  margin: 0 0 4px;
+}
+
+.man-note {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+/* マニュアルの章見出し。.fold-group（部位ブロックを折りたたむシート、上の節）と
+   見た目の規則は同じだが独立して持つ。.fold-group はシート専用の性質を自身の
+   コメントで明言しており、ここはシートではない設定タブの節本体だから。
+   .grp-toggle 自体と aria-expanded のフックは共有する。 */
+.man-group {
+  border-bottom: 1px solid var(--line);
+}
+
+.man-group:last-child {
+  border-bottom: 0;
+}
+
+/* ★ <h3> ではなく <h2> を使う（h1 → h2 の 1 本、adr/ux/focus-ring-and-heading-order.md）
+   ので、.fold-group > h3 と同じ打ち消しをここにも書く。片方だけ直すと、
+   ここだけ UA の h2 { font-size: 1.5em } が生き残って見出しの大きさが食い違う */
+.man-group > h2 {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+/* .grp-toggle は <h2> の中の唯一の子。.fold-group .grp-toggle と同じ理由で
+   width を明示する（display: flex だけでは h2 の幅まで伸びない） */
+.man-group .grp-toggle {
+  width: 100%;
+}
+
+.man-body {
+  padding: 0 0 12px;
+}
+
+.man-body p {
+  margin: 8px 0 0;
+}
+
+.man-body p:first-child {
+  margin-top: 0;
+}
+
+/* 図は必ず補助。オフラインでは alt だけが残るので、本文だけで手順が完結していること。
+   .hlp-fig（max-width: 200px）と違って広く取るのは、これがアプリの実画面で
+   小さいと読めないため。 */
+.man-fig {
+  max-width: 365px;
+  margin: 10px auto 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.man-fig img {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 /* ── データの書き出し / 読み込み ─────────────────────────────────────────── */

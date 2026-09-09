@@ -35,6 +35,7 @@ use crate::storage;
 
 use super::help::InstallHelpLink;
 use super::icon::{self, icon};
+use super::manual::ManualSection;
 use super::routine::{RoutineEditor, routine_exercise_names};
 use super::{
     SettingsPage, Sheet, cur_lang, ex_name, fmt_weight, grp_name, kb_blur, kb_focus, parse_weight,
@@ -421,6 +422,14 @@ pub fn Settings() -> impl IntoView {
                             )}
                             // 手順シートを開くだけなので、節ではなく行として並べる
                             <InstallHelpLink />
+                            // 一生に数回読むものなので下寄りだが、性格が近いヘルプの行と
+                            // 隣接させて 1 つの帯にする（計画「2. マニュアル UI」）
+                            {section_row(
+                                t.manual.row_label,
+                                None,
+                                "settings-row-manual",
+                                move || go(SettingsPage::Manual),
+                            )}
                             // ★ 末尾に置く。先頭はデータを失う前に見つけてもらう必要がある
                             //   エクスポート / インポートで固定されているし、言語は
                             //   一生に一度の操作なので探しに来る頻度が最も低い。
@@ -694,6 +703,13 @@ pub fn Settings() -> impl IntoView {
                             (!ids.is_empty())
                                 .then(|| view! { <ArchivedSection ids=ids open_group=open_group /> })
                         }}
+                    }
+                        .into_any()
+                }
+                SettingsPage::Manual => {
+                    view! {
+                        {back_head(t.manual.row_label, move || go(SettingsPage::Root))}
+                        <ManualSection />
                     }
                         .into_any()
                 }

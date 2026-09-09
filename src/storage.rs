@@ -381,6 +381,8 @@ const UI_KEY: &str = "fitness-memo/ui/v1";
 struct UiState {
     #[serde(default)]
     install_hint_dismissed: bool,
+    #[serde(default)]
+    manual_hint_dismissed: bool,
     /// 設定画面で**明示的に選ばれた**言語。`None` は「まだ選んでいない」で、
     /// このときだけブラウザの言語に従う。
     ///
@@ -476,6 +478,11 @@ fn update_ui(f: impl FnOnce(&mut UiState)) {
 /// ホーム画面追加の案内を利用者が閉じたか。
 pub fn install_hint_dismissed() -> bool {
     ui_state().install_hint_dismissed
+}
+
+/// マニュアルへの手掛かり（記録タブ）を利用者が閉じたか。
+pub fn manual_hint_dismissed() -> bool {
+    ui_state().manual_hint_dismissed
 }
 
 /// 設定画面で選ばれた言語。**未設定なら `None`**（呼び側がブラウザの言語に倒す）。
@@ -577,6 +584,21 @@ pub fn save_release_seen(id: u32) {
     // ★ 読んでから 1 フィールドだけ差し替える（`save_lang` と同じ理由）
     let mut next = ui_state();
     next.release_seen = Some(i64::from(id));
+    if let Ok(json) = serde_json::to_string(&next) {
+        let _ = store.set_item(UI_KEY, &json);
+    }
+}
+
+/// マニュアルへの手掛かり（記録タブ）を今後出さない。
+///
+/// クリック 1 回きりなので debounce しない（`dismiss_install_hint` と同じ）。
+pub fn dismiss_manual_hint() {
+    let Some(store) = store() else {
+        return;
+    };
+    // ★ 読んでから 1 フィールドだけ差し替える（`dismiss_install_hint` と同じ理由）
+    let mut next = ui_state();
+    next.manual_hint_dismissed = true;
     if let Ok(json) = serde_json::to_string(&next) {
         let _ = store.set_item(UI_KEY, &json);
     }

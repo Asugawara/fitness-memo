@@ -128,6 +128,7 @@ pub enum SettingsPage {
     Routines,
     Exercises,
     History,
+    DropSets,
     Language,
 }
 
@@ -192,6 +193,35 @@ pub struct HistoryCtx(pub RwSignal<usize>);
 pub fn use_history_count() -> RwSignal<usize> {
     use_context::<HistoryCtx>()
         .expect("HistoryCtx が provide されていない")
+        .0
+}
+
+/// 推移タブがドロップセットを集計に入れるか
+/// （adr/ux/drop-sets-as-a-box-under-the-main-set.md）。
+///
+/// ★ [`HistoryCtx`] とまったく同じ理由でシグナルに載せる。これを読む
+///   `views::progress` の `series` / `records` / `hidden` Memo は `Db` を購読して
+///   **1 打鍵ごとに走る**ので、そこで `storage` を叩くと `localStorage.getItem` +
+///   `serde_json::from_str` が打鍵ごとに走る。
+#[derive(Clone, Copy)]
+pub struct DropsCtx(pub RwSignal<crate::core::Drops>);
+
+pub fn use_drops() -> RwSignal<crate::core::Drops> {
+    use_context::<DropsCtx>()
+        .expect("DropsCtx が provide されていない")
+        .0
+}
+
+/// ドロップセットの落とし幅（%）。段を 1 つ足すときの重量を先に計算するのに使う。
+///
+/// ★ [`DropsCtx`] と同じ理由でシグナルに載せる（読むのは `views::day` の
+///   `add_drop` で、種目カードの枚数ぶん存在する）。
+#[derive(Clone, Copy)]
+pub struct DropPctCtx(pub RwSignal<f32>);
+
+pub fn use_drop_pct() -> RwSignal<f32> {
+    use_context::<DropPctCtx>()
+        .expect("DropPctCtx が provide されていない")
         .0
 }
 
@@ -344,6 +374,29 @@ pub fn fmt_set(s: &SetEntry) -> String {
     } else {
         format!("{}", s.reps)
     }
+}
+
+/// 1 セットの表示。ドロップセットの段を続けて出すかを選べる版。
+///
+/// 段は `↓` を挟んで並べる（`60×6↓50×5↓40×4`）。★ 段の前に空白を入れない —
+/// セット同士は 2 スペースで区切る（`views::progress` / `views::day`）ので、
+/// 空白を入れると「どこまでが 1 セットか」が読めなくなる。
+///
+/// ★ [`fmt_set`] は**変えない**。記録タブの「前回の記録」行は段を出さないと決めた
+/// （adr/ux/drop-sets-as-a-box-under-the-main-set.md）ので、そのまま使う口が要る。
+pub fn fmt_set_with(s: &SetEntry, d: crate::core::Drops) -> String {
+    let mut out = fmt_set(s);
+    if d == crate::core::Drops::Include {
+        for stage in &s.drops {
+            out.push('↓');
+            if stage.weight > 0.0 {
+                out.push_str(&format!("{}×{}", fmt_weight(stage.weight), stage.reps));
+            } else {
+                out.push_str(&stage.reps.to_string());
+            }
+        }
+    }
+    out
 }
 
 // ── DOM ヘルパ ──────────────────────────────────────────────────────────────
@@ -673,6 +726,8 @@ pub fn App() -> impl IntoView {
     provide_context(SettingsPageCtx(RwSignal::new(SettingsPage::default())));
     // ★ こちらは永続化する（`HistoryCtx` の doc を参照）。起動時に 1 回だけ読む
     provide_context(HistoryCtx(RwSignal::new(storage::history_count())));
+    provide_context(DropsCtx(RwSignal::new(storage::drops())));
+    provide_context(DropPctCtx(RwSignal::new(storage::drop_pct())));
 
     let tab = RwSignal::new(Tab::Record);
     let tabs = TabCtx(tab);

@@ -304,6 +304,16 @@ pub struct Settings {
     /// 「表示数」だけでは何の数か読めないので、ここで種目カードの話だと言う
     pub history_note: &'static str,
     /// 言語の行 / 言語サブページの h1
+    /// 推移タブにドロップセットを含めるかの行
+    pub row_drop_sets: &'static str,
+    pub drop_sets_note: &'static str,
+    /// その 2 択のラベル。**行の右端の現在値にも同じものを使う**（言語行の endonym /
+    /// 表示数行の `n_past_sessions` と同じ流儀）
+    pub drop_sets_exclude: &'static str,
+    pub drop_sets_include: &'static str,
+    /// 落とし幅（%）の見出しと注記。段を足すときの重量をここから計算する
+    pub drop_pct_label: &'static str,
+    pub drop_pct_note: &'static str,
     pub row_language: &'static str,
     /// 言語サブページの注記。**種目名が変わらないことを先に言う** —
     /// 切り替えてから「英語にしたのに種目名が日本語のまま」と迷わせない
@@ -358,6 +368,12 @@ const JA_SETTINGS: Settings = Settings {
     row_exercises: "種目",
     row_history: "表示数",
     history_note: "種目カードに、その種目をやった直近の記録を何回分出すか。日付の新しい順に並びます",
+    row_drop_sets: "ドロップセット",
+    drop_sets_note: "推移タブのグラフ・統計・記録に、ドロップセットの段を入れるか。含めないと、落とした段を除いたメインセットだけで推移が出ます。記録タブの合計は設定にかかわらず全部を数えます",
+    drop_sets_exclude: "含めない",
+    drop_sets_include: "含める",
+    drop_pct_label: "落とし幅",
+    drop_pct_note: "段を 1 つ足すとき、メインセットの重量から何 % 落とすか。計算して入れるのは 1 段目だけで、2 段目からは前の段の重量をそのままコピーします。小数点以下 1 桁まで",
     row_language: "言語",
     language_note: "種目名と部位名は変わりません（自分で付けた名前として扱うため）。変えたいときは「種目」から 1 つずつ編集してください",
     edit_group: "部位を編集",
@@ -400,6 +416,12 @@ const EN_SETTINGS: Settings = Settings {
     row_exercises: "Exercises",
     row_history: "Sessions shown",
     history_note: "How many of an exercise's most recent sessions its card shows, newest first.",
+    row_drop_sets: "Drop sets",
+    drop_sets_note: "Whether the drop-set stages count towards the Progress tab's chart, stats and records. Excluded, progress is based on your main sets alone. The Record tab's totals always count everything.",
+    drop_sets_exclude: "Excluded",
+    drop_sets_include: "Included",
+    drop_pct_label: "Drop by",
+    drop_pct_note: "When you add a stage, how much to take off the main set's weight. Only the first stage is worked out from it; from the second on, the previous stage's weight is copied. One decimal place.",
     row_language: "Language",
     language_note: "Exercise and muscle-group names do not change — they are treated as names you gave them. Edit them one by one under Exercises if you want them in another language.",
     edit_group: "Edit muscle group",
@@ -520,6 +542,9 @@ pub struct Progress {
     /// 全期間だけ週単位に落ちることの断り。体重の線が出ているかで文が変わる
     pub weekly_note: &'static str,
     pub weekly_note_with_weight: &'static str,
+    /// ドロップセットを集計から外していることの断り。**外したことを黙らない**
+    /// （記録タブは常に全部数えるので、黙ると同じ日の合計が食い違う理由が出ない）
+    pub drops_hidden_note: &'static str,
     /// この期間・この対象に記録が無い
     pub empty_period_exercise: &'static str,
     pub empty_period: &'static str,
@@ -550,6 +575,7 @@ const JA_PROGRESS: Progress = Progress {
     optgroup_archived: "アーカイブ済み",
     weekly_note: "全期間は週単位で集計しています",
     weekly_note_with_weight: "全期間は週単位で集計しています（体重は週平均）",
+    drops_hidden_note: "ドロップセットの段は含めていません（設定で変えられます）",
     empty_period_exercise: "この期間、この種目の記録はありません",
     empty_period: "この期間の記録はありません",
     stat_delta: "前回比",
@@ -576,6 +602,7 @@ const EN_PROGRESS: Progress = Progress {
     optgroup_archived: "Archived",
     weekly_note: "Over all time, figures are grouped by week.",
     weekly_note_with_weight: "Over all time, figures are grouped by week (body weight is a weekly average).",
+    drops_hidden_note: "Drop sets are not included. You can change this in Settings.",
     empty_period_exercise: "No records for this exercise in this period.",
     empty_period: "No records in this period.",
     stat_delta: "vs. last",
@@ -669,6 +696,12 @@ pub struct Day {
     pub weight: &'static str,
     pub reps: &'static str,
     pub delete_set: &'static str,
+    /// 段を 1 つ足すボタンの `aria-label`（表示は lucide の
+    /// `arrow-down-wide-narrow` のみ）/ 段の入力欄 / 段を消すボタン
+    pub drop_add: &'static str,
+    pub drop_weight: &'static str,
+    pub drop_reps: &'static str,
+    pub drop_delete: &'static str,
     /// 保存されない理由。**責めずに「あと何をすれば保存されるか」を書く**
     pub weight_missing: &'static str,
     pub reps_missing: &'static str,
@@ -713,6 +746,10 @@ const JA_DAY: Day = Day {
     weight: "重量",
     reps: "回数",
     delete_set: "このセットを削除",
+    drop_add: "ドロップを足す",
+    drop_weight: "ドロップの重量",
+    drop_reps: "ドロップの回数",
+    drop_delete: "この段を削除",
     weight_missing: "重量未入力",
     reps_missing: "回数を入れると保存されます",
     add_set: "+ セット",
@@ -751,6 +788,10 @@ const EN_DAY: Day = Day {
     weight: "Weight",
     reps: "Reps",
     delete_set: "Delete this set",
+    drop_add: "Add a drop stage",
+    drop_weight: "Drop weight",
+    drop_reps: "Drop reps",
+    drop_delete: "Delete this stage",
     weight_missing: "No weight yet",
     reps_missing: "Enter reps and this set is saved",
     add_set: "+ Set",
@@ -1084,6 +1125,14 @@ impl Lang {
         match self {
             Lang::Ja => format!("{n} 件のメモ"),
             Lang::En => format!("{n} {}", plural(n, "note", "notes")),
+        }
+    }
+
+    /// 取り込みで新しく立ったドロップの印の数。
+    pub fn added_drops(self, n: usize) -> String {
+        match self {
+            Lang::Ja => format!("{n} 件のドロップ"),
+            Lang::En => format!("{n} {}", plural(n, "drop set", "drop sets")),
         }
     }
 

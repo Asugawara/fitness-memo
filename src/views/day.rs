@@ -15,8 +15,8 @@ use web_sys::PointerEvent;
 use crate::core;
 use crate::core::Metric;
 use crate::model::{
-    Db, ExerciseId, ExerciseLog, GroupId, MAX_INTERVAL_LEN, MAX_PIN_LEN, MAX_PINS, RoutineId,
-    SetEntry,
+    Db, DropStage, ExerciseId, ExerciseLog, GroupId, MAX_DROPS, MAX_INTERVAL_LEN, MAX_PIN_LEN,
+    MAX_PINS, RoutineId, SetEntry,
 };
 use crate::reorder;
 
@@ -27,7 +27,7 @@ use super::drag::{
 use super::icon::{self, icon};
 use super::{
     Sheet, cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, fmt_weight, grp_name, kb_blur,
-    kb_focus, now_ms, parse_reps, parse_weight, scroll_to_id, t, use_dates, use_db,
+    kb_focus, now_ms, parse_reps, parse_weight, scroll_to_id, t, use_dates, use_db, use_drop_pct,
     use_history_count, use_kb,
 };
 
@@ -53,6 +53,35 @@ struct Row {
     /// このセットのメモ。**保存はセットに従属する**（回数の無い行のメモは保存されない）。
     /// adr/data-model/notes-on-logs-and-sets.md
     note: String,
+    /// このメインセットにぶら下がるドロップセットの段。
+    /// adr/data-model/drop-sets-as-stages-under-the-main-set.md
+    ///
+    /// `Row` と同じ理由で文字列で持つ（空欄と `"6."` が `f32` / `u32` で表せない）。
+    drops: Vec<DropRow>,
+}
+
+/// 編集中のドロップセットの 1 段。
+///
+/// `key` を持つ理由は [`PinRow`] と同じ（同じ重量・回数の段を 2 つ並べられるので、
+/// 値をキーにすると keyed diff が壊れて wasm が死ぬ）。
+#[derive(Clone, Debug, PartialEq)]
+struct DropRow {
+    key: u32,
+    weight: String,
+    reps: String,
+}
+
+/// 保存モデルの段 → 編集中の段。**キーは位置**（`<For>` の差分用で、保存には出ない）。
+fn drop_rows(s: &SetEntry) -> Vec<DropRow> {
+    s.drops
+        .iter()
+        .enumerate()
+        .map(|(i, d)| DropRow {
+            key: i as u32,
+            weight: fmt_weight(d.weight),
+            reps: d.reps.to_string(),
+        })
+        .collect()
 }
 
 impl Row {
@@ -62,6 +91,7 @@ impl Row {
             weight: String::new(),
             reps: String::new(),
             note: String::new(),
+            drops: Vec::new(),
         }
     }
 }
@@ -900,6 +930,8 @@ fn ExerciseCard(
     let db = use_db();
     let dates = use_dates();
     let kb = use_kb();
+    // ドロップの段を 1 つ足すときの落とし幅（%）
+    let drop_pct = use_drop_pct();
     let history_count = use_history_count();
 
     // Memo にするのは「値が変わったときだけ」下流を再描画させるため。
@@ -965,6 +997,7 @@ fn ExerciseCard(
                         weight: fmt_weight(s.weight),
                         reps: s.reps.to_string(),
                         note: s.note.clone(),
+                        drops: drop_rows(s),
                     })
                     .collect();
                 (rows, l.note.clone())
@@ -1081,6 +1114,18 @@ fn ExerciseCard(
                         weight: parse_weight(&r.weight),
                         reps,
                         note: r.note.clone(),
+                        // ★ 回数の読めない段は落とす。メインセットで
+                        //   `parse_reps` が None の行を落とすのと同じ規則
+                        drops: r
+                            .drops
+                            .iter()
+                            .filter_map(|d| {
+                                Some(DropStage {
+                                    weight: parse_weight(&d.weight),
+                                    reps: parse_reps(&d.reps)?,
+                                })
+                            })
+                            .collect(),
                     })
                 })
                 .collect()
@@ -1160,6 +1205,10 @@ fn ExerciseCard(
                 //   重量はその計画値だが、書くべき観測はまだ存在しない。過去のログを再現する
                 //   「前回をコピー」とは操作が違う（adr/ux/copy-carries-the-notes.md の決定 2）
                 note: String::new(),
+                // ★ 段もプリフィルしない。理由はメモと同じで、さらに**段は既定で
+                //   推移から外れる**ので、勝手に入ると利用者が気づかないまま
+                //   その重量がグラフから消える
+                drops: Vec::new(),
             })
         });
         focus_key.set(Some(key));
@@ -1228,6 +1277,10 @@ fn ExerciseCard(
                     Some(mine) if !mine.trim().is_empty() => mine.clone(),
                     _ => s.note.clone(),
                 },
+                // ★ 段も運ぶ。メモと違って「今日打ってあるもの」を守る必要が無い
+                //   （このボタンが出るのは保存済みのセットが空のときなので、画面上の
+                //   段は数値と一緒に置き換わってよい）
+                drops: drop_rows(s),
             })
             .collect();
         next_key.set(base + filled.len() as u32 + 1);
@@ -1577,14 +1630,78 @@ fn ExerciseCard(
                                     .unwrap_or_default()
                             })
                         };
-                        // メモは入っているが回数が空 = commit で落ちる行。
+                        // ★ **スナップショット (`row.drops`) を読まない。** `<For>` は
+                        //   `r.key` で差分を取るので、段を足しても `key` は変わらず
+                        //   `children` が再実行されない — `row` の束縛は古いまま残る。
+                        //   `note_of` と同じく `rows` を読む closure にする
+                        //   （種目メモの `value=` が同じ形で取り残された記録が上にある）
+                        let drops_of = move || {
+                            rows.with(|rs| {
+                                rs.iter()
+                                    .find(|r| r.key == key)
+                                    .map(|r| r.drops.clone())
+                                    .unwrap_or_default()
+                            })
+                        };
+                        // 段を 1 つ足す。重量は先に入れる:
+                        //
+                        // - **1 段目**はメインセットの重量から落とし幅ぶん引いた値
+                        // - **2 段目以降**は**前の段の重量をそのままコピー**する。
+                        //   落とし幅をもう一度掛けない — 実際の刻みは段ごとに変わるので
+                        //   （20% → 20% とは限らない）当たらない数字を作ることになる。
+                        //   `add_row` が前の行の重量をそのまま引き継ぐのと同じ規則で、
+                        //   「同じか、そこから下げる」のどちらでも打ち直しが最小になる
+                        //
+                        // ★ 回数は入れない。まだ挙げていないので観測が存在しない
+                        //   （`add_row` がメモをプリフィルしないのと同じ線）
+                        let add_drop = move |_| {
+                            rows.update(|rs| {
+                                if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                                    if r.drops.len() >= MAX_DROPS {
+                                        return;
+                                    }
+                                    let prefill = match r.drops.last() {
+                                        Some(prev) => prev.weight.clone(),
+                                        None => core::dropped_weight(
+                                            parse_weight(&r.weight),
+                                            drop_pct.get_untracked(),
+                                        )
+                                        .map(fmt_weight)
+                                        .unwrap_or_default(),
+                                    };
+                                    let next_key =
+                                        r.drops.iter().map(|d| d.key + 1).max().unwrap_or(0);
+                                    r.drops.push(DropRow {
+                                        key: next_key,
+                                        weight: prefill,
+                                        reps: String::new(),
+                                    });
+                                }
+                            });
+                            // 回数が空なので保存はされないが、`commit` を呼ばないと
+                            // 「段だけ足して回数を打たずに閉じた」状態が残らない
+                            commit();
+                        };
+                        let remove_drop = move |dkey: u32| {
+                            rows.update(|rs| {
+                                if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                                    r.drops.retain(|d| d.key != dkey);
+                                }
+                            });
+                            commit();
+                        };
+                        // メモか段は入っているが回数が空 = commit で落ちる行。
                         // weight_missing の完全な対称（あちらは reps あり、こちらは reps なし）
+                        //
+                        // ★ 段も見る。段だけ足して回数を空のままにした行は `commit` の
+                        //   `parse_reps` で落ちるので、黙って捨てずに理由を出す
+                        //   （文言はメモのときと同じ「回数を入れると保存されます」）
                         let note_orphan = move || {
                             rows.with(|rs| {
                                 rs.iter()
                                     .find(|r| r.key == key)
                                     .is_some_and(|r| {
-                                        !r.note.trim().is_empty()
+                                        (!r.note.trim().is_empty() || !r.drops.is_empty())
                                             && parse_reps(&r.reps).is_none()
                                     })
                             })
@@ -1757,6 +1874,30 @@ fn ExerciseCard(
                                 //   削除は入力欄と地続きにしない。margin-left:auto で右端へ寄せた上に
                                 //   区切り線と内側余白で離す（auto を外すと回数欄の直後に来て
                                 //   今より押しやすくなる）
+                                // ★ ドロップを始める口。**回数欄の隣**に置く
+                                //   （adr/ux/drop-sets-as-a-box-under-the-main-set.md 決定 1）。
+                                //   メモを開かずに段を足せる必要があるので `note_open` に
+                                //   相乗りさせられない。44px の標的を 1 つ増やすが、
+                                //   **1 行目の余白に入るので縦は 1px も増えない**
+                                //   （iPhone 幅で ✕ の左に 94px 空いている）
+                                // ★ 絵は `arrow-down-wide-narrow`。段の行の ＋ と分けるのは
+                                //   役割が違うから（こちらは「ドロップを始める」）
+                                {move || {
+                                    (drops_of().len() < MAX_DROPS)
+                                        .then(|| {
+                                            view! {
+                                                <button
+                                                    class="icon-btn drop-add"
+                                                    aria-label=t().day.drop_add
+                                                    data-testid="drop-add"
+                                                    on:keydown=nudge_row
+                                                    on:click=add_drop
+                                                >
+                                                    {icon(icon::ARROW_DOWN_WIDE_NARROW)}
+                                                </button>
+                                            }
+                                        })
+                                }}
                                 <button
                                     class="icon-btn"
                                     aria-label=t().day.delete_set
@@ -1841,6 +1982,110 @@ fn ExerciseCard(
                                             .into_any()
                                     }
                                 }}
+                                // ── ドロップセットの段 ────────────────────────
+                                //
+                                // ★ **1 段 = 1 行**。メインセットの行と同じ組み方
+                                //   （重量 kg × 回数 ＋ …… ✕）にして、**✕ を縦に揃える**。
+                                //   `.set-row .icon-btn` の margin-left:auto をそのまま
+                                //   効かせるので、行の右端でメインセットの ✕ と 1 列に並ぶ。
+                                // ★ **段があるときだけ出す。** 空の行を常に出すと
+                                //   `44px × セット行数` ぶんカードが伸びる（やらない日の
+                                //   ほうが多い操作にその縦を払わない）。1 段でも入れば
+                                //   その 1 行ぶんの縦は実際の中身が払っている。
+                                // ★ **`note_open` を見ない。** メモを開かずに ＋ で段を
+                                //   足せるので、開かないと打てない入力欄にはできない
+                                <For
+                                    each=drops_of
+                                    key=|d| d.key
+                                    children=move |stage| {
+                                        let dkey = stage.key;
+                                        let update_stage = move |f: fn(&mut DropRow, String), v: String| {
+                                            rows.update(|rs| {
+                                                if let Some(d) = rs
+                                                    .iter_mut()
+                                                    .find(|r| r.key == key)
+                                                    .and_then(|r| {
+                                                        r.drops.iter_mut().find(|d| d.key == dkey)
+                                                    })
+                                                {
+                                                    f(d, v);
+                                                }
+                                            });
+                                            commit();
+                                        };
+                                        view! {
+                                            <div class="drop-row" data-testid="drop-row">
+                                                <input
+                                                    class="num"
+                                                    type="text"
+                                                    inputmode="decimal"
+                                                    pattern="[0-9]*([.,][0-9]*)?"
+                                                    value=stage.weight.clone()
+                                                    aria-label=t().day.drop_weight
+                                                    data-testid="drop-weight"
+                                                    on:keydown=nudge_row
+                                                    on:focusin=move |_| kb_focus(kb)
+                                                    on:focusout=move |_| kb_blur(kb)
+                                                    on:input=move |ev| {
+                                                        update_stage(
+                                                            |d, v| d.weight = v,
+                                                            event_target_value(&ev),
+                                                        );
+                                                    }
+                                                />
+                                                <span class="unit">"kg"</span>
+                                                <span class="times">"×"</span>
+                                                <input
+                                                    class="num"
+                                                    type="text"
+                                                    inputmode="numeric"
+                                                    value=stage.reps.clone()
+                                                    aria-label=t().day.drop_reps
+                                                    data-testid="drop-reps"
+                                                    on:keydown=nudge_row
+                                                    on:focusin=move |_| kb_focus(kb)
+                                                    on:focusout=move |_| kb_blur(kb)
+                                                    on:input=move |ev| {
+                                                        update_stage(
+                                                            |d, v| d.reps = v,
+                                                            event_target_value(&ev),
+                                                        );
+                                                    }
+                                                />
+                                                // ★ 段の行にも足す口を置く。位置は
+                                                //   メインセット行と同じ（回数欄の隣）だが、
+                                                //   **絵は ＋ にする** — こちらは「同じ
+                                                //   ドロップに段を継ぎ足す」で、メインセット
+                                                //   行の「ドロップを始める」とは役割が違う。
+                                                //   上限に達したら出さない
+                                                {move || {
+                                                    (drops_of().len() < MAX_DROPS)
+                                                        .then(|| {
+                                                            view! {
+                                                                <button
+                                                                    class="icon-btn drop-add"
+                                                                    aria-label=t().day.drop_add
+                                                                    data-testid="drop-add"
+                                                                    on:keydown=nudge_row
+                                                                    on:click=add_drop
+                                                                >
+                                                                    {icon(icon::PLUS)}
+                                                                </button>
+                                                            }
+                                                        })
+                                                }}
+                                                <button
+                                                    class="icon-btn"
+                                                    aria-label=t().day.drop_delete
+                                                    data-testid="drop-remove"
+                                                    on:click=move |_| remove_drop(dkey)
+                                                >
+                                                    {icon(icon::X)}
+                                                </button>
+                                            </div>
+                                        }
+                                    }
+                                />
                             </div>
                         }
                     }

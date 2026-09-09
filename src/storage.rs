@@ -394,6 +394,26 @@ struct UiState {
     ///   丸めは `core::history_count`（ホストのテストが届く側）に任せる
     #[serde(default)]
     history: Option<i64>,
+    /// ドロップセットの落とし幅（%）。`None` は既定（`core::DEFAULT_DROP_PCT`）。
+    ///
+    /// ★ 小数点以下 1 桁まで自由入力なので `f64` で受ける。丸めと `clamp` は
+    ///   `core::drop_pct`（ホストのテストが届く側）でやる。`lang` / `history` と同じ
+    ///   「寛容に受けて `core` で既定に寄せる」形。
+    #[serde(default)]
+    drop_pct: Option<f64>,
+    /// 推移タブがドロップセットを集計に入れるか。`0` = 入れない / `1` = 入れる。
+    /// `None` は「まだ選んでいない」で既定（入れない）に倒れる。
+    ///
+    /// ★ `Option<bool>` ではなく `Option<i64>` で持つ。`lang` / `history` と同じ理由で、
+    ///   `bool` は**このファイルで最も狭い型**になる — `1` や `"include"`（手で編集された /
+    ///   将来 3 値になった版が書いた）が入ると deserialize が失敗し、**`UiState` 全体の
+    ///   パースが落ちて `lang` と `history` まで巻き添えで消える**。
+    ///
+    /// ★ ただし `i64` でも `true` や `"include"` では落ちる。**本当の保険は「このキーを
+    ///   書くのはこのアプリだけ」であること**で、型の幅はその上の一段でしかない。
+    ///   解釈は `core::drops_setting`（ホストのテストが届く側）に任せる。
+    #[serde(default)]
+    drops: Option<i64>,
     /// 推移タブで最後に見ていた部位 / 種目。**このキーで唯一 `Db` の ID を持つ**
     /// （adr/storage/db-ids-in-ui-state-behind-a-fallback.md）。
     ///
@@ -459,6 +479,42 @@ pub fn save_history(n: usize) {
     // ★ 読んでから 1 フィールドだけ差し替える（`save_lang` と同じ理由）
     let mut next = ui_state();
     next.history = Some(n as i64);
+    if let Ok(json) = serde_json::to_string(&next) {
+        let _ = store.set_item(UI_KEY, &json);
+    }
+}
+
+/// 推移タブがドロップセットを集計に入れるか。**未設定は「入れない」。**
+pub fn drops() -> core::Drops {
+    core::drops_setting(ui_state().drops)
+}
+
+/// その設定を保存する。クリックのたびに 1 回きりなので debounce しない。
+pub fn save_drops(d: core::Drops) {
+    let Some(store) = store() else {
+        return;
+    };
+    // ★ 読んでから 1 フィールドだけ差し替える（`save_lang` と同じ理由）
+    let mut next = ui_state();
+    next.drops = Some(i64::from(d == core::Drops::Include));
+    if let Ok(json) = serde_json::to_string(&next) {
+        let _ = store.set_item(UI_KEY, &json);
+    }
+}
+
+/// ドロップセットの落とし幅（%）。**未設定は既定の 20%。**
+pub fn drop_pct() -> f32 {
+    core::drop_pct(ui_state().drop_pct)
+}
+
+/// その落とし幅を保存する。
+pub fn save_drop_pct(pct: f32) {
+    let Some(store) = store() else {
+        return;
+    };
+    // ★ 読んでから 1 フィールドだけ差し替える（`save_lang` と同じ理由）
+    let mut next = ui_state();
+    next.drop_pct = Some(f64::from(pct));
     if let Ok(json) = serde_json::to_string(&next) {
         let _ = store.set_item(UI_KEY, &json);
     }

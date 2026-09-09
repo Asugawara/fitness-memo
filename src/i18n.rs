@@ -130,6 +130,9 @@ pub struct S {
     pub help: Help,
     /// `views/backup.rs` — エクスポート / インポート
     pub backup: Backup,
+    /// `views/whatsnew.rs` — 新機能のお知らせバナーとシート。お知らせ本文自体は
+    /// [`RELEASES`] にある（あちらは文言ではなくデータなので表に持たない）
+    pub releases: Releases,
 }
 
 const JA: S = S {
@@ -143,6 +146,7 @@ const JA: S = S {
     day: JA_DAY,
     help: JA_HELP,
     backup: JA_BACKUP,
+    releases: JA_RELEASES,
 };
 
 const EN: S = S {
@@ -156,6 +160,7 @@ const EN: S = S {
     day: EN_DAY,
     help: EN_HELP,
     backup: EN_BACKUP,
+    releases: EN_RELEASES,
 };
 
 // ── views/mod.rs ────────────────────────────────────────────────────────────
@@ -955,6 +960,82 @@ const EN_BACKUP: Backup = Backup {
     join: ", ",
 };
 
+// ── views/whatsnew.rs ───────────────────────────────────────────────────────
+
+/// バナーとシートの固定文言。**お知らせ本文自体はここに置かない**（[`RELEASES`] へ）。
+pub struct Releases {
+    /// バナーの CTA。「見る ›」のように短く保つ（本文は [`Lang::whatsnew_banner`] が持つ）
+    pub banner_cta: &'static str,
+    /// バナーの ✕ の `aria-label`
+    pub banner_dismiss: &'static str,
+    pub sheet_title: &'static str,
+}
+
+const JA_RELEASES: Releases = Releases {
+    banner_cta: "見る ›",
+    banner_dismiss: "このお知らせを閉じる",
+    sheet_title: "新機能のお知らせ",
+};
+
+const EN_RELEASES: Releases = Releases {
+    banner_cta: "See what's new ›",
+    banner_dismiss: "Dismiss this notice",
+    sheet_title: "What's new",
+};
+
+/// 1 リリースぶんのお知らせ。
+///
+/// ★ 言語ごとにリストを分けず、エントリの中で分岐する（[`crate::presets::Names`] と
+///   同じ形）。リストを 2 本にすると片方への足し忘れがコンパイルを通ってしまう。
+pub struct ReleaseNote {
+    /// お知らせ番号。**単調増加。二度と振り直さない**（`storage::release_seen` の基準値）
+    pub id: u32,
+    /// ISO 8601。表示はこのまま出す
+    pub date: &'static str,
+    pub ja: &'static [&'static str],
+    pub en: &'static [&'static str],
+}
+
+impl ReleaseNote {
+    pub const fn items(&self, lang: Lang) -> &'static [&'static str] {
+        match lang {
+            Lang::Ja => self.ja,
+            Lang::En => self.en,
+        }
+    }
+}
+
+/// **新しい順。先頭が最新。** `id` は厳密減少（`core::unseen_releases` が prefix 切り出しの
+/// 前提にしている）。
+///
+/// リリースのたびに機能 PR が自分のエントリを先頭に足す。`date` はマージ日、`id` は
+/// 直前の最新から 1 つ進める。`&'static [ReleaseNote]` ではなく `&[ReleaseNote]` と書く
+/// （clippy::redundant_static_lifetimes。`presets::PRESETS` と同じ書き方）。
+pub const RELEASES: &[ReleaseNote] = &[
+    ReleaseNote {
+        id: 2,
+        date: "2026-09-09",
+        ja: &[
+            "記録タブの「種目を追加」を部位ごとのアコーディオンにしました。部位を開くとその種目だけが並び、同時に開くのは 1 つです。",
+            "新機能をまとめて知らせるこのバナーを追加しました。閉じると次のお知らせまで出ません。",
+        ],
+        en: &[
+            "The Record tab's \"Add exercise\" sheet is now a muscle-group accordion. Opening a group shows only its exercises, and only one opens at a time.",
+            "Added this banner to announce new features together. Once you close it, it stays away until the next release.",
+        ],
+    },
+    ReleaseNote {
+        id: 1,
+        date: "2026-08-25",
+        ja: &[
+            "推移タブの対象を「部位」と「種目」の 2 段セレクタにしました。部位を選ぶと種目の候補がその部位だけに絞られます。",
+        ],
+        en: &[
+            "The Progress tab's target is now two selects, muscle group and exercise. Picking a group narrows the exercise list to it.",
+        ],
+    },
+];
+
 // ── 引数が要る文言 ──────────────────────────────────────────────────────────
 //
 // ★ `format!` はフォーマット文字列がリテラルでなければならず、表から引いた
@@ -1380,6 +1461,18 @@ impl Lang {
             ),
         }
     }
+
+    /// 一番上のバナーの本文。`n` は未読リリースの**項目の総数**（リリース数ではない）。
+    ///
+    /// ★ 件数を含む文言は表に置けない（`format!` はフォーマット文字列がリテラルを
+    ///   要求するので、表から引いた `&'static str` は渡せない）。ここに置いて
+    ///   `match` の腕を 1 つでも落とせばコンパイルが通らないようにする。
+    pub fn whatsnew_banner(self, n: usize) -> String {
+        match self {
+            Lang::Ja => format!("新しい機能が {n} 件あります"),
+            Lang::En => format!("{n} new {} to see", plural(n, "feature", "features")),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1467,5 +1560,67 @@ mod tests {
                 assert!(!s.is_empty(), "{lang:?} に空の文言がある");
             }
         }
+    }
+
+    // ── お知らせ（新機能バナー） ────────────────────────────────────────────
+
+    /// 各エントリで `ja.len() == en.len()`、空文字を含まない。
+    ///
+    /// ★ リストを 1 本にした狙いそのものの検証。片方の言語だけ項目を書き忘れても
+    ///   `RELEASES` の宣言はコンパイルを通るので、ここで人力の突き合わせを肩代わりする。
+    #[test]
+    fn release_notes_line_up_across_languages() {
+        for r in RELEASES {
+            assert_eq!(
+                r.ja.len(),
+                r.en.len(),
+                "id={} で日英の項目数が食い違っている",
+                r.id
+            );
+            for s in r.ja.iter().chain(r.en.iter()) {
+                assert!(!s.is_empty(), "id={} に空の項目がある", r.id);
+            }
+        }
+    }
+
+    /// 新しい順で id が厳密減少する（`core::unseen_releases` が prefix 切り出しの前提にしている）。
+    #[test]
+    fn release_ids_run_strictly_downward() {
+        for pair in RELEASES.windows(2) {
+            assert!(
+                pair[0].id > pair[1].id,
+                "id={} の次に id={} が来ている（新しい順・厳密減少ではない）",
+                pair[0].id,
+                pair[1].id
+            );
+        }
+    }
+
+    /// `RELEASES` が非空。**空だと `None` が永久に残る**（`whatsnew::bootstrap` が
+    /// `latest_release_id` を引けず基準値を書かないため、次のリリースも出なくなる）。
+    #[test]
+    fn there_is_always_at_least_one_release() {
+        assert!(!RELEASES.is_empty(), "RELEASES を空のまま出荷しない");
+    }
+
+    /// ★ `assert_ne!(banner(1), banner(2))` では**何も検証できない**。`n` が本文に
+    ///   埋まるので数字だけで必ず異なり、`plural` を外しても通ってしまう。語形そのものを見る。
+    #[test]
+    fn the_whatsnew_banner_switches_at_one() {
+        // 前後の空白まで含めて見る。`" feature "` は "features to see" には一致しない
+        assert!(
+            Lang::En.whatsnew_banner(1).contains(" feature "),
+            "英語の 1 件が単数形になっていない"
+        );
+        assert!(
+            Lang::En.whatsnew_banner(2).contains(" features "),
+            "英語の 2 件が複数形になっていない"
+        );
+        // 日本語は単複で語形が変わらない。数字以外が同形であることを確かめる
+        assert_eq!(
+            Lang::Ja.whatsnew_banner(1).replace('1', "N"),
+            Lang::Ja.whatsnew_banner(2).replace('2', "N"),
+            "日本語で数字以外が変わっている"
+        );
     }
 }

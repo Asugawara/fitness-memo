@@ -229,7 +229,7 @@ test('英語で書き出した TSV は英語の見出しで、日本語の見出
     return await f.text();
   });
   expect(tsv.split('\n')[0]).toBe(
-    'Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec',
+    'Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec\tLabel',
   );
 
   // ★ 過去に日本語で書き出したファイルが、英語に切り替えた端末でも読める。

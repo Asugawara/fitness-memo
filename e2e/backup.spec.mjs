@@ -109,7 +109,7 @@ test('書き出しは共有シートに files だけを .tsv で渡す', async (
   expect(shared.type).toBe(TSV_MIME);
   // 見出しは外部仕様（cargo test がバイト一致で固定しているのと同じ並び）
   expect(shared.text.split('\n')[0]).toBe(
-    '日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒',
+    '日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル',
   );
   // 保存形式は JSON のまま（書き出し形式とは別。adr/storage/tsv-export-for-spreadsheets.md）
   const stored = await page.evaluate((k) => localStorage.getItem(k), KEY);

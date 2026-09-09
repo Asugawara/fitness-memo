@@ -348,6 +348,18 @@ pub struct Settings {
     /// 種目のアーカイブ
     pub archive_exercise: &'static str,
     pub archive_explain: &'static str,
+    /// 種目ごとのラベル。**定義（作成・改名・削除）はこのシートだけに置く**
+    /// （選択は記録タブのチップ行で 1 タップ）。
+    /// adr/ux/label-chips-switch-the-history-and-the-copy.md
+    pub field_labels: &'static str,
+    /// ラベル欄の注記。**何のためのものかを書く**（`routines_empty` と同じ規則）
+    pub labels_note: &'static str,
+    pub label_value: &'static str,
+    pub label_add: &'static str,
+    pub duplicate_label: &'static str,
+    /// 削除の確認。**「同じ名前で作り直しても戻らない」を必ず含める** —
+    /// 参照は ID なので、消すと過去の記録はそのラベルから永久に外れる（本物の罠）
+    pub delete_label_confirm: &'static str,
 }
 
 const JA_SETTINGS: Settings = Settings {
@@ -390,6 +402,12 @@ const JA_SETTINGS: Settings = Settings {
     add: "追加",
     archive_exercise: "この種目をアーカイブ",
     archive_explain: "アーカイブは記録を消しません。過去のログは残り、「種目を追加」に出なくなります",
+    field_labels: "ラベル",
+    labels_note: "同じ種目で狙いを変えるとき（高重量・高回数など）に付けます。記録タブでラベルを選ぶと、そのラベルの前回だけが出ます",
+    label_value: "ラベルの名前",
+    label_add: "ラベルを追加",
+    duplicate_label: "同じ名前のラベルがあります",
+    delete_label_confirm: "このラベルを削除します。過去の記録は消えませんが、同じ名前で作り直しても過去の記録には戻りません",
 };
 
 const EN_SETTINGS: Settings = Settings {
@@ -432,6 +450,12 @@ const EN_SETTINGS: Settings = Settings {
     add: "Add",
     archive_exercise: "Archive this exercise",
     archive_explain: "Archiving deletes nothing. Past records stay, and the exercise stops appearing under Add exercise.",
+    field_labels: "Labels",
+    labels_note: "Use these when you vary your aim on the same exercise — heavy singles, high reps, and so on. Pick a label on the Record tab and you see only that label's last session.",
+    label_value: "Label name",
+    label_add: "Add a label",
+    duplicate_label: "A label with that name already exists.",
+    delete_label_confirm: "Delete this label? Your records stay, but making a label with the same name again will not bring them back to it.",
 };
 
 // ── core.rs ─────────────────────────────────────────────────────────────────
@@ -691,6 +715,13 @@ pub struct Day {
     pub remove_confirm: &'static str,
     pub remove_yes: &'static str,
     pub remove_no: &'static str,
+    /// ラベルのチップ行の `aria-label`。**定義がある種目にしか出ない**
+    /// （adr/ux/label-chips-switch-the-history-and-the-copy.md）
+    pub labels: &'static str,
+    /// 先頭のチップ。**「ラベルなし」にしない** — これは `LabelFilter::Any`
+    /// （絞らない）であって「ラベルが無いログだけ」ではない。半年ラベルなしで
+    /// 記録してきた利用者が押したときに昨日の記録が出る側の意味にする
+    pub label_any: &'static str,
 }
 
 const JA_DAY: Day = Day {
@@ -729,6 +760,8 @@ const JA_DAY: Day = Day {
     remove_confirm: "この日の記録が消えます",
     remove_yes: "外す",
     remove_no: "やめる",
+    labels: "ラベル",
+    label_any: "指定なし",
 };
 
 const EN_DAY: Day = Day {
@@ -767,6 +800,8 @@ const EN_DAY: Day = Day {
     remove_confirm: "This day's record will be deleted.",
     remove_yes: "Remove",
     remove_no: "Cancel",
+    labels: "Labels",
+    label_any: "Any",
 };
 
 // ── views/help.rs ───────────────────────────────────────────────────────────
@@ -1064,6 +1099,28 @@ impl Lang {
         }
     }
 
+    /// ラベルで絞っているときの履歴ブロックの `aria-label`。
+    ///
+    /// ★ `Day::past_records` と別に持つのは、`format!` がリテラルな書式文字列しか
+    /// 取れないので `&'static str` では組み立てられないため。
+    pub fn past_records_of(self, label: &str) -> String {
+        match self {
+            Lang::Ja => format!("{label} の前回までの記録"),
+            Lang::En => format!("Past {label} sessions"),
+        }
+    }
+
+    /// ラベルの ✕ ボタンの `aria-label`。
+    ///
+    /// ★ 名前を `delete_label` にする（`remove_label` にすると
+    /// `core::remove_label` と読み分けられない）。
+    pub fn delete_label(self, name: &str) -> String {
+        match self {
+            Lang::Ja => format!("{name} を削除"),
+            Lang::En => format!("Delete {name}"),
+        }
+    }
+
     /// 増えるものの名詞句の部品。**語尾を付けない** — 確認では「を追加します」、
     /// 実行後は「を追加」と付け替えるので、ここで文にすると両方に使えない。
     pub fn added_days(self, n: usize) -> String {
@@ -1098,6 +1155,15 @@ impl Lang {
         match self {
             Lang::Ja => format!("{n} 件のメニュー"),
             Lang::En => format!("{n} {}", plural(n, "routine", "routines")),
+        }
+    }
+
+    /// ラベルの定義の追加とログへの付与を**合算した** 1 本のカウンタ
+    /// （`added_notes` が既に異種混合の先例）。
+    pub fn added_labels(self, n: usize) -> String {
+        match self {
+            Lang::Ja => format!("{n} 件のラベル"),
+            Lang::En => format!("{n} {}", plural(n, "label", "labels")),
         }
     }
 
@@ -1466,6 +1532,40 @@ mod tests {
             ] {
                 assert!(!s.is_empty(), "{lang:?} に空の文言がある");
             }
+        }
+    }
+
+    /// 先頭のチップは `LabelFilter::Any`（絞らない）で、利用者が定義した
+    /// どのラベルとも別の状態。名詞句が「ラベル」自体と同語だと、押したときに
+    /// 何が起きるのか読めない。
+    #[test]
+    fn the_any_label_chip_reads_apart_from_the_label_row_itself() {
+        for (lang, _) in Lang::CHOICES {
+            let d = &lang.strings().day;
+            assert_ne!(d.label_any, d.labels, "{lang:?} のチップと行が同語");
+            assert!(!d.label_any.is_empty(), "{lang:?} に空の文言がある");
+            assert!(!d.labels.is_empty(), "{lang:?} に空の文言がある");
+        }
+    }
+
+    /// ラベル名を埋め込む文言は `&'static str` では作れないので `impl Lang` 側に
+    /// ある。**名前が本文に必ず出ること**を見る（消えると「何を削除するのか」が
+    /// 読めないボタンになる）。削除の確認は「作り直しても戻らない」まで言う。
+    #[test]
+    fn the_label_texts_carry_the_name_and_warn_that_deleting_is_final() {
+        for (lang, _) in Lang::CHOICES {
+            assert!(lang.past_records_of("Power").contains("Power"), "{lang:?}");
+            assert!(lang.delete_label("Power").contains("Power"), "{lang:?}");
+            assert!(lang.added_labels(2).contains('2'), "{lang:?}");
+
+            let confirm = lang.strings().settings.delete_label_confirm;
+            assert!(!confirm.is_empty(), "{lang:?} に空の文言がある");
+            // 同じ名前で作り直しても ID が変わるので過去の記録は戻らない
+            let again = match lang {
+                Lang::Ja => "同じ名前",
+                Lang::En => "same name",
+            };
+            assert!(confirm.contains(again), "{lang:?}: {confirm}");
         }
     }
 }

@@ -1214,9 +1214,9 @@ fn ExerciseEditor(
     //
     // ★ **重複チェックは新規追加と改名の両方に通す**（片方だけだと裏口が残る）。
     //   重複していたら書かずに**直前の保存値へ戻す**。
-    // 戻り値は「重複だったので巻き戻した値」。呼び側が DOM も直す
-    // （`value=` は初期値を 1 度読むだけなので、signal を書いても入力欄は古いまま残る。
-    //  day.rs の `ex_note_ref` とまったく同じ事情）。
+    // 戻り値は「入力欄に書き戻すべき値」（重複で巻き戻したとき / trim で変わったとき）。
+    // 呼び側が DOM も直す — `value=` は初期値を 1 度読むだけなので、signal を書いても
+    // 入力欄は古いまま残る（day.rs の `ex_note_ref` とまったく同じ事情）。
     let change_label = move |key: u32, value: String| -> Option<String> {
         let trimmed = value.trim().to_string();
         // 同名が他の行にあるか。空欄は `set_labels` が落とすので通す
@@ -1246,13 +1246,25 @@ fn ExerciseEditor(
             return Some(saved);
         }
         duplicate_label.set(false);
+        // ★ **trim した値を保存する。** 生値のままだと `"P "` が `Db` に入り、TSV の
+        //   往復でラベルが 2 本に割れる — `core::resolve_label` は `name.trim()` して
+        //   から厳密比較するので `"P "` と一致せず新しい `LabelId` を採番し、
+        //   `merge_labels` の同名判定も厳密比較なので新しい定義として足される。
+        //   結果、見分けのつかないチップが 2 個並び**過去ログは旧 ID・取り込んだログは
+        //   新 ID** に付いて履歴が分裂する。UI の重複ガードは trim 比較なので利用者は
+        //   自分ではこの状態を作れず、この経路だけが穴だった。
+        //   同じシートの `commit_name`（種目名）が既に trim しているので、それと対称。
+        //   ★ `core::clean_labels` の「取り込んだデータを trim しない」規則は触らない
+        //     （あちらが守るのは他人のファイルの中身）。
         label_rows.update(|rs| {
             if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
-                r.name = value;
+                r.name = trimmed.clone();
             }
         });
         commit_labels();
-        None
+        // 打った値と保存した値が違うなら入力欄も揃える（見えている値と `Db` を
+        // 食い違わせない）
+        (trimmed != value).then_some(trimmed)
     };
 
     let add_label = move |_| {
@@ -1375,8 +1387,12 @@ fn ExerciseEditor(
                                 <button
                                     // ★ class を必ず付ける（`smoke.spec.mjs` が
                                     //   `[data-testid=settings-sheet] button:not([class])` を
-                                    //   0 件で固定している）
-                                    class="icon-btn lbl-remove"
+                                    //   0 件で固定している）。
+                                    // ★ `.pin-remove` に倣った追加のクラスは付けない —
+                                    //   `.icon-btn` が寸法とトークンを与えており、規則を
+                                    //   持たないフックを CSS に残さない（参照点は
+                                    //   `data-testid="label-remove"` が担う）
+                                    class="icon-btn"
                                     aria-label=move || {
                                         cur_lang()
                                             .delete_label(

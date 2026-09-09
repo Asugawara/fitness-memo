@@ -14,7 +14,10 @@ import { test, expect } from '@playwright/test';
 //    `localStorage` を直接読む以外に可視化する手段が無い
 // 4. **定義 0 の種目でカードの幾何が 1px も動かないこと**（既存利用者の体験不変）。
 //    subgrid の列数と `data-labels` の有無が噛み合っているかは実測しかない
-// 5. **桁揃えと 44px の実測。** どちらも計画では推定値で、ブラウザに聞かないと分からない
+// 5. **桁揃えと 44px の実測。** どちらも計画では推定値で、ブラウザに聞かないと分からない。
+//    ★ 折り返しは**高さ**で見る（`getClientRects().length` は grid item では常に 1 で、
+//      `max-width` を消しても通ってしまう）。9 番は viewport を 393×852 に固定する
+//      （`.screen` の `max-width: 640px` により、Desktop Chrome では余裕がありすぎる）
 //
 // 正規化・上限・merge 規則・TSV 往復・フィルタの意味論は `src/core.rs` の unit test が
 // 総当りしているので、ここでは追わない（history.spec.mjs と pins.spec.mjs の分担と同じ）。
@@ -439,69 +442,106 @@ test('8. ラベルを削除しても記録は消えず、削除済みを選ん�
 });
 
 // ── 9. 桁揃えの実測 ─────────────────────────────────────────────────────────
+//
+// ★ **viewport を 393×852 に固定する。** `.screen` は `max-width: 640px` なので、
+//   既定の `chromium`（Desktop Chrome = 1280px）ではカード内側が約 586px になり
+//   `.sets` に余裕がありすぎて折り返し判定が永久に発火しない。列幅の主張は
+//   「393px 幅のカードで」という前提つきのものなので（ADR 決定 6 の表）、
+//   どの project から走っても同じ幅で測る。
+test.describe('9. 桁揃え（393×852 固定）', () => {
+  test.use({ viewport: { width: 393, height: 852 } });
 
-test('9. 12 文字のラベルでも .sets が折り返さず、日付の桁が縦に揃う', async ({ page }) => {
-  // ★ 12 文字（`MAX_LABEL_LEN`）の和文。cap が効いていないとここで `.sets` が割れる
-  const sheet = await openExerciseEditor(page, '胸', 'ベンチプレス');
-  await addLabels(page, sheet, ['あいうえおかきくけこさし', 'P']);
-  await backToRecord(page);
+  test('12 文字のラベルでも .sets が折り返さず、日付の桁が縦に揃う', async ({ page }) => {
+    // ★ 12 文字（`MAX_LABEL_LEN`）の和文。cap が効いていないとここで `.sets` が割れる
+    const sheet = await openExerciseEditor(page, '胸', 'ベンチプレス');
+    await addLabels(page, sheet, ['あいうえおかきくけこさし', 'P']);
+    await backToRecord(page);
 
-  await seedPastLogs(page, [
-    {
-      daysAgo: 9,
-      exerciseName: 'ベンチプレス',
-      label: 'あいうえおかきくけこさし',
-      sets: [
-        { weight: 100, reps: 3 },
-        { weight: 100, reps: 3 },
-        { weight: 100, reps: 3 },
-      ],
-    },
-    {
-      daysAgo: 2,
-      exerciseName: 'ベンチプレス',
-      label: 'P',
-      sets: [
-        { weight: 100, reps: 3 },
-        { weight: 100, reps: 3 },
-        { weight: 100, reps: 3 },
-      ],
-    },
-  ]);
+    // ★ **`100×3` を 4 セットにする。** これが cap の受け入れ条件そのもの（HPS の
+    //   Power 日として最も普通の記録）。実測で `.sets` は cap 無しで 80px /
+    //   `6em` で 152px / `4em` で 176px になり、176px でしか 1 行に収まらない。
+    //
+    // ★ **2 日前は `label` を落として「定義はあるがその日は None」の行を作る。**
+    //   空 span を省く実装ではその行の `.when` が 1 列目に落ちて x がずれるので、
+    //   下の桁揃え判定がそのまま門番になる（計画の落とし穴 4）。
+    await seedPastLogs(page, [
+      {
+        daysAgo: 9,
+        exerciseName: 'ベンチプレス',
+        label: 'あいうえおかきくけこさし',
+        sets: [
+          { weight: 100, reps: 3 },
+          { weight: 100, reps: 3 },
+          { weight: 100, reps: 3 },
+          { weight: 100, reps: 3 },
+        ],
+      },
+      {
+        daysAgo: 2,
+        exerciseName: 'ベンチプレス',
+        sets: [
+          { weight: 100, reps: 3 },
+          { weight: 100, reps: 3 },
+          { weight: 100, reps: 3 },
+          { weight: 100, reps: 3 },
+        ],
+      },
+    ]);
 
-  // 3 件出して 2 行以上を並べる（既定は 1 件）
-  await blurActive(page);
-  await page.getByTestId('tab-settings').click();
-  const back = page.getByTestId('settings-back');
-  if (await back.isVisible()) await back.click();
-  await page.getByTestId('settings-row-history').click();
-  await page.getByTestId('history-btn').and(page.locator('[data-count="3"]')).click();
-  await page.getByTestId('settings-back').click();
-  await page.getByTestId('tab-record').click();
-  await expect(page.getByTestId('screen-record')).toBeVisible();
+    // 3 件出して 2 行以上を並べる（既定は 1 件）
+    await blurActive(page);
+    await page.getByTestId('tab-settings').click();
+    const back = page.getByTestId('settings-back');
+    if (await back.isVisible()) await back.click();
+    await page.getByTestId('settings-row-history').click();
+    await page.getByTestId('history-btn').and(page.locator('[data-count="3"]')).click();
+    await page.getByTestId('settings-back').click();
+    await page.getByTestId('tab-record').click();
+    await expect(page.getByTestId('screen-record')).toBeVisible();
 
-  const card = await addExercise(page, 'ベンチプレス');
-  await expect(card.getByTestId('last-row')).toHaveCount(2);
-  await expect(card.locator('.last-rows')).toHaveAttribute('data-labels', 'true');
+    const card = await addExercise(page, 'ベンチプレス');
+    await expect(card.getByTestId('last-row')).toHaveCount(2);
+    await expect(card.locator('.last-rows')).toHaveAttribute('data-labels', 'true');
 
-  // ★ `max-width: 6em` の cap が効いていること。`.sets` が 1 行に収まる
-  const rects = await card.getByTestId('last-row').first().locator('.sets').evaluate((el) => ({
-    lines: el.getClientRects().length,
-  }));
-  expect(rects.lines, '.sets が折り返している（列幅の cap が効いていない）').toBe(1);
+    // ★ **折り返しは高さで見る。`getClientRects().length` では見られない** —
+    //   `.last-row` は grid なので子の span は grid item として blockify され、
+    //   インライン内容が何行に折り返しても矩形は常に 1 個になる（`max-width` を
+    //   消しても通ってしまう）。1 行 = 12px × line-height 1.5 = 18px なので 20px で足りる。
+    const setHeights = await card
+      .getByTestId('last-row')
+      .locator('.sets')
+      .evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
+    expect(setHeights.length).toBe(2);
+    for (const h of setHeights) {
+      expect(h, `.sets が折り返している（列幅の cap が効いていない）: ${setHeights}`).toBeLessThan(
+        20,
+      );
+    }
 
-  // ★ 決定 6（subgrid で桁を縦に揃える）が生きていること。日付列の左端が全行で一致する
-  const xs = await card.getByTestId('last-row').locator('.when').evaluateAll((els) =>
-    els.map((el) => Math.round(el.getBoundingClientRect().x)),
-  );
-  expect(xs.length).toBe(2);
-  expect(new Set(xs).size, `日付の桁が揃っていない: ${xs}`).toBe(1);
+    // ★ 決定 6（subgrid で桁を縦に揃える）が生きていること。日付列の左端が全行で一致する。
+    //   **ラベル無しの行でも空 span を描いている**ことがここで担保される
+    const xs = await card.getByTestId('last-row').locator('.when').evaluateAll((els) =>
+      els.map((el) => Math.round(el.getBoundingClientRect().x)),
+    );
+    expect(xs.length).toBe(2);
+    expect(new Set(xs).size, `日付の桁が揃っていない: ${xs}`).toBe(1);
 
-  // ラベル列も同じく縦に揃っている（ellipsis で 1 行）
-  const labelLines = await card.getByTestId('last-label').evaluateAll((els) =>
-    els.map((el) => el.getClientRects().length),
-  );
-  expect(labelLines).toEqual([1, 1]);
+    // ★ ラベル span は**行数と同じ数だけ**ある（`label: None` の行でも空 span を描く）
+    const labels = await card.getByTestId('last-label').evaluateAll((els) =>
+      els.map((el) => ({
+        text: el.textContent,
+        w: Math.round(el.getBoundingClientRect().width),
+        clipped: el.scrollWidth > el.clientWidth,
+      })),
+    );
+    expect(labels.length, 'ラベル span の数が行数と一致しない').toBe(xs.length);
+    expect(labels.filter((l) => l.text === '').length, '空 span が描かれていない').toBe(1);
+
+    // ★ `ellipsis` が実際に効いていること（cap 以下の幅に収まり、中身が溢れている）
+    const long = labels.find((l) => l.text !== '');
+    expect(long.w, `ラベル列が cap（4em = 48px）を超えている: ${long.w}px`).toBeLessThanOrEqual(48);
+    expect(long.clipped, 'ellipsis が効いていない（cap が当たっていない）').toBe(true);
+  });
 });
 
 // ── 10. 改名で履歴が外れない ────────────────────────────────────────────────
@@ -555,4 +595,39 @@ test('同じ名前のラベルは新規追加でも改名でも入らない', as
   const card = await addExercise(page, 'ベンチプレス');
   // 「指定なし」+ H / P。空欄の 3 本目は `set_labels` が落とす
   await expect(card.getByTestId('label-chip')).toHaveCount(3);
+});
+
+test('ラベル名は前後の空白を落として保存する', async ({ page }) => {
+  // ★ 生値のまま保存すると TSV の往復でラベルが 2 本に割れる —
+  //   `core::resolve_label` は `name.trim()` してから厳密比較するので `"P "` と
+  //   一致せず新しい ID を採番し、過去ログは旧 ID・取り込んだログは新 ID に付く。
+  //   UI の重複ガードは trim 比較なので、利用者はこの経路以外からこの状態を作れない
+  const sheet = await openExerciseEditor(page, '胸', 'ベンチプレス');
+  await sheet.getByTestId('label-add').click();
+  const input = sheet.getByTestId('label-name').first();
+  await input.fill('  P  ');
+  await input.blur();
+
+  // 入力欄も揃える（見えている値と `Db` を食い違わせない）
+  await expect(input).toHaveValue('P');
+
+  await flushToStorage(page);
+  const stored = await page.evaluate((key) => {
+    const db = JSON.parse(localStorage.getItem(key));
+    // `labels` は `skip_serializing_if = "Vec::is_empty"` なので 0 本なら欄ごと無い
+    return db.exercises.find((e) => e.name === 'ベンチプレス').labels ?? [];
+  }, STORAGE_KEY);
+  expect(stored.map((l) => l.name), '前後の空白が保存されている').toEqual(['P']);
+
+  // 「高重量 低レップ」のような**中の**空白は落とさない（1 セル = 1 名前）
+  await sheet.getByTestId('label-add').click();
+  const second = sheet.getByTestId('label-name').nth(1);
+  await second.fill('高重量 低レップ');
+  await second.blur();
+  await expect(second).toHaveValue('高重量 低レップ');
+
+  await backToRecord(page);
+  const card = await addExercise(page, 'ベンチプレス');
+  await expect(chip(card, 'P')).toHaveCount(1);
+  await expect(chip(card, '高重量 低レップ')).toHaveCount(1);
 });

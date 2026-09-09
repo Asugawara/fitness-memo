@@ -353,6 +353,16 @@ pub const MAX_LABELS: usize = 6;
 /// 途中で割れて panic する。[`MAX_PIN_LEN`] と同じ）。
 ///
 /// "Hypertrophy"(11) と「高重量ローレップ」(8) が収まる。
+///
+/// ★ **入力欄の `maxlength` と同じ値を使う**（`views::settings` の
+/// `maxlength=MAX_LABEL_LEN`）。2 つがずれると「打てるのに保存で切られる」欄になる。
+/// `max_label_len_matches_the_input_maxlength` が同値を見る。
+///
+/// ★ ただし**単位は厳密には一致しない**。HTML の `maxlength` は **UTF-16 コード
+/// ユニット**を数えるので、サロゲートペア（絵文字など）を含む名前は UI では 6 文字で
+/// 止まる一方、[`crate::core::set_labels`] は 12 char まで許す。BMP 内の文字
+/// （日本語・英数・記号）では一致するので実害は無く、**UI のほうが厳しい側にずれる**
+/// ので「打てたのに切られる」は起きない。
 pub const MAX_LABEL_LEN: usize = 12;
 
 /// 名前付きの種目リスト。**UI では「トレーニングメニュー」**。
@@ -1009,6 +1019,32 @@ mod tests {
             label,
             "{json}"
         );
+    }
+
+    /// UI の入力上限（`views::settings` の `maxlength`）と core の上限を結ぶ。
+    /// `MAX_INTERVAL_LEN` の `max_interval_len_matches_the_cap` に相当するもので、
+    /// **片方だけ動かしても気づけない**のを止める。
+    ///
+    /// ★ `maxlength` は **UTF-16 コードユニット**、`MAX_LABEL_LEN` は **char** なので
+    /// 単位が厳密には一致しない（`MAX_LABEL_LEN` の doc）。BMP 内では同じで、
+    /// ずれるときは UI のほうが厳しい側なので「打てたのに保存で切られる」は起きない。
+    #[test]
+    fn max_label_len_matches_the_input_maxlength() {
+        // `views::settings` は `maxlength=MAX_LABEL_LEN.to_string()` を渡している。
+        // ここが崩れると入力欄と保存の上限が 2 つに割れる
+        assert_eq!(MAX_LABEL_LEN.to_string(), "12");
+        // BMP 内の文字なら char 数と UTF-16 コードユニット数が一致する
+        for name in [
+            "Hypertrophy",
+            "高重量ローレップ",
+            "あいうえおかきくけこさし",
+        ] {
+            assert_eq!(
+                name.chars().count(),
+                name.encode_utf16().count(),
+                "BMP 外の文字が混ざっている: {name}"
+            );
+        }
     }
 
     #[test]

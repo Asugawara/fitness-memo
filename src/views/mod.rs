@@ -10,6 +10,7 @@ pub mod icon;
 pub mod progress;
 pub mod routine;
 pub mod settings;
+pub mod whatsnew;
 
 use std::cell::Cell;
 use std::time::Duration;
@@ -27,6 +28,7 @@ use calendar::Calendar;
 use icon::icon;
 use progress::Progress;
 use settings::Settings;
+use whatsnew::WhatsNewBanner;
 
 // ── コンテキスト ────────────────────────────────────────────────────────────
 
@@ -673,6 +675,10 @@ pub fn App() -> impl IntoView {
     provide_context(SettingsPageCtx(RwSignal::new(SettingsPage::default())));
     // ★ こちらは永続化する（`HistoryCtx` の doc を参照）。起動時に 1 回だけ読む
     provide_context(HistoryCtx(RwSignal::new(storage::history_count())));
+    // ★ 起動時に 1 回だけ評価する（上の HistoryCtx と同じ位置・同じ理由）。既読を
+    //   まだ記録していなければここで基準値を書く（`whatsnew::bootstrap` の doc を参照）。
+    //   言語切替クロージャの外なので、切り替えるたびに再実行されることはない
+    let unseen = whatsnew::bootstrap();
 
     let tab = RwSignal::new(Tab::Record);
     let tabs = TabCtx(tab);
@@ -780,6 +786,12 @@ pub fn App() -> impl IntoView {
                                 }
                             })
                     }}
+
+                    // ★ `.notice` の直後・`<main>` の直前に置く。`.notice` を上に残すのは、
+                    //   あちらが「保存できていない」等の緊急通知でお知らせより優先度が
+                    //   高いから。`.notice` は例外時にしか出ないので、実運用ではこのバナーが
+                    //   実質の最上段になる。
+                    <WhatsNewBanner unseen=unseen />
 
                     <main class="screen">
                         {move || match tab.get() {

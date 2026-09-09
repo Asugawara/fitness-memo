@@ -408,13 +408,33 @@ test('図が無い章にも本文がある', async ({ page }) => {
 // 9. 記録タブの手掛かり（ManualHint） ───────────────────────────────────────
 
 test.describe('記録タブの手掛かり（ManualHint）', () => {
-  test('install バナーが出ている既定の環境（chromium project）では出ない', async ({ page }) => {
-    // ★ 肯定側は条件を作らないと出ない。chromium project は Desktop Chrome UA・
-    //   非 standalone なので install バナー側の条件（!is_standalone() &&
-    //   storage_may_split()）が既定で真になり、ManualHint は出ない
+  test('install バナーと同時には出ない（既定の環境）', async ({ page }) => {
+    // ★ project 名では分岐しない。install バナー側の条件（!is_standalone() &&
+    //   storage_may_split()）は UA に依存し、`storage_may_split()` は UA に
+    //   "Android" を含むと偽になる（src/views/mod.rs）。だから chromium /
+    //   iPhone 15 Pro では install バナーが出て ManualHint が出ないが、
+    //   Pixel 7（Android UA）では逆に install バナーが出ず ManualHint が出る。
+    //   見たいのは「2 つが同時には出ない」という排他そのものなので、
+    //   どちらが出るかで分岐して確かめる（project 名の決め打ちで一方だけを
+    //   期待すると、UA 次第で他方が出ている project で必ず落ちる）
+    //
+    // ★ 軽い側（pre-commit）は chromium と harness だけを走らせるので、
+    //   Pixel 7 だけで踏むこの手の壊れ方は release.sh の重い側で初めて出る
     await page.goto('./');
-    await expect(page.getByTestId('install-hint')).toBeVisible();
-    await expect(page.getByTestId('manual-hint')).toHaveCount(0);
+    // ★ `isVisible()` は待たない即時チェックなので、goto 直後にそのまま呼ぶと
+    //   Calendar がまだ描画し終わる前を拾って両方とも「無い」判定になりうる
+    //   （実測: chromium / iPhone 15 Pro で再現、Pixel 7 は再現しないこともある —
+    //   スケジューリング次第で化けるレースなので project では見分けられない）。
+    //   `screen-record` は install-hint / manual-hint と同じ Calendar の
+    //   view! で同期に描かれるので、これが見えた時点でどちらかは確定している
+    await expect(page.getByTestId('screen-record')).toBeVisible();
+    const install = page.getByTestId('install-hint');
+    const hint = page.getByTestId('manual-hint');
+    if (await install.isVisible()) {
+      await expect(hint).toHaveCount(0);
+    } else {
+      await expect(hint).toBeVisible();
+    }
   });
 
   test.describe('install バナーが出ない環境（standalone を偽装）', () => {

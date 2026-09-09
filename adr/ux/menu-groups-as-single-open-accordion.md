@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-09
 - **カテゴリ**: ux
-- **関連**: [記録タブをカレンダー + 選択日エディタの単一画面にする](record-tab-calendar-with-day-editor.md), [ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする](install-guide-banner-and-sheet.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [`color-scheme` を宣言し、クラスなしの `<button>` を作らない](declare-color-scheme-for-ua-widgets.md), [アイコンに lucide を採り、`assets/icons/*.svg` を `include_str!` で埋め込む](../architecture/lucide-icons-as-included-svg.md), [メニュー編集シートの「選択中」をドラッグで並べ替え、種目ピッカーを複数開けるアコーディオンにする](routine-editor-drag-and-accordion.md)
+- **関連**: [記録タブをカレンダー + 選択日エディタの単一画面にする](record-tab-calendar-with-day-editor.md), [ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする](install-guide-banner-and-sheet.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [`color-scheme` を宣言し、クラスなしの `<button>` を作らない](declare-color-scheme-for-ua-widgets.md), [アイコンに lucide を採り、`assets/icons/*.svg` を `include_str!` で埋め込む](../architecture/lucide-icons-as-included-svg.md), [メニュー編集シートの「選択中」をドラッグで並べ替え、種目ピッカーを複数開けるアコーディオンにする](routine-editor-drag-and-accordion.md), [記録タブの「種目を追加」シートを部位のアコーディオンにし、1 つだけ開く](record-add-sheet-groups-as-single-open-accordion.md)（★ この決定を覆した）
 
 ## 背景
 
@@ -71,6 +71,8 @@
   - `src/views/progress.rs` 推移タブの種目セレクタ（`(group_rank, e.order, e.id)`）
   
   つまり「よく使う種目をシートの先頭に持ってくる」手段が失われた。1 部位 4〜5 種目でセクション内スクロールが発生しないため実効影響は小さいと判断したが、**将来ここが不満になったら矢印を戻すのではなく「直近に記録した順で並べる」を検討する**。手で並べ替えるより厳密に良く、「筋トレ中に最短距離で」に直接効く。
+
+  （★ **記録タブの追加シートも後に折りたたんだ** — [記録タブの「種目を追加」シートを部位のアコーディオンにし、1 つだけ開く](record-add-sheet-groups-as-single-open-accordion.md)。「部位セクション順」は**閉じた 6 行の順**になり、「その中の種目順」は開いた 1 部位の中だけに効くようになった。**ここで将来案とした直近順は、そのときも採らなかった** — 部位の色と名前という既にある構造を捨てることになるため。折りたたみを先に入れた。なお「セクション内スクロールが発生しない」という見立ては実測で覆っている — 平坦なシートは中身 963px に対し可視域 464px で、**28 種目中 14 種目しかスクロールなしで届いていなかった**。）
 - **開閉状態はリロードで失われる。** タブ往復では保つが、`OpenGroupCtx` はプロセス内の寿命しか持たない。永続化しない決定の当然の帰結で、既定の「全部閉じている」は毎回同じで予測でき、部位の全体像が必ず見える状態でもある。
 - **`views` に `scroll_into_view_if_needed` が増えた。** 既存の `scroll_to_id`（`block: start`）との違いは `block: nearest` の 1 点だけで、`web-sys` の feature が 2 つ（`ScrollIntoViewOptions` / `ScrollLogicalPosition`）増えている。似た名前の関数が 2 つ並ぶので、次に使う人はどちらが要るのか doc を読む必要がある。
 - **アコーディオンのスクロールは `Effect` 1 本に集約した。** `open_group` を購読して開いたカードへ寄せる形なので、自動展開の呼び出し側（4 か所）はスクロールを気にしなくてよい。逆に言えば、`open_group` を経由しない開き方を足すとスクロールが漏れる。

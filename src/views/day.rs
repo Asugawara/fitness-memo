@@ -310,6 +310,27 @@ pub fn DayEditor() -> impl IntoView {
         EDGE_SCROLLING.set(false);
     });
     let sheet = RwSignal::new(false);
+    // 「種目を追加」シートで開いている部位。**同時に開くのは 1 つ**
+    // （adr/ux/record-add-sheet-groups-as-single-open-accordion.md）。
+    //
+    // ★ **`OpenGroupCtx` を共有しない。** あれはアプリ全体で 1 本の signal なので、
+    //   ここで開いた部位が設定タブの種目一覧にも漏れる（逆も同じ）。
+    //   `views::routine` の `open_groups` がまったく同じ理由でローカルに持っている。
+    // ★ **`Option` にして排他にする。** メニュー編集シートの `Vec`（複数開ける）は
+    //   継がない。あちらは 1 本組む間に胸と脚を行き来する画面だが、こちらは
+    //   **1 種目を出して閉じる**画面で、往復しない。
+    // ★ 開くたびに `None` へ倒すので（下の `open_sheet`）、`OpenGroupCtx` のような
+    //   「タブを跨いで保つ」寿命も永続化も要らない。
+    let open_group: RwSignal<Option<GroupId>> = RwSignal::new(None);
+
+    // ★ シートを開く唯一の経路。ここで畳むことで「開くたびに全部閉じている」を構造で
+    //   保証する。`on_close` 側に置いても ✕ / Esc / 背景タップ / `pick()` の全経路は
+    //   通るが、`.sheet` の退場 0.22s（`public/styles.css` の `.sheet`）の間もシートは
+    //   見えていて、高さが中身なので**開いていた部位が畳まれて上端が落ちるのが見える**。
+    let open_sheet = move |_| {
+        open_group.set(None);
+        sheet.set(true);
+    };
 
     // カードを Db から引き直す。
     // db は untracked で読む（1 文字打つたびにカードが作り直されるのを防ぐ）。
@@ -643,7 +664,7 @@ pub fn DayEditor() -> impl IntoView {
                     <button
                         class="primary"
                         data-testid="add-exercise"
-                        on:click=move |_| sheet.set(true)
+                        on:click=open_sheet
                     >
                         {t().day.add_exercise}
                     </button>
@@ -656,48 +677,124 @@ pub fn DayEditor() -> impl IntoView {
                     testid="add-sheet"
                     close_testid="add-sheet-close"
                 >
+                    // 部位ごとの種目ピッカー。押すとその部位だけが開く。
+                    //
+                    // ★ **折りたたむ。既定は全部閉。同時に開くのは 1 つ。**
+                    //   平坦に並べると 6 部位 28 種目のボタンが一度に出て、目当てを目で
+                    //   探すことになり、**同じ種目でも毎回違う位置に出る**。閉じた 6 行なら
+                    //   位置が固定され、手が場所を覚える
+                    //   （adr/ux/record-add-sheet-groups-as-single-open-accordion.md）。
+                    // ★ 見た目とフックは `.fold-group` でメニュー編集シートと共有し、
+                    //   **開ける数だけが違う**。`views::settings` の `GroupBlock` を
+                    //   再利用しないのは、あれが private な `Editor` enum を prop に取って
+                    //   いて部位を改名する鉛筆まで付いてくるから。
                     {move || {
                         db.with(|d| {
                             let mut groups = d.groups.clone();
                             groups.sort_by_key(|g| g.order);
                             groups
                                 .into_iter()
-                                .map(|g| {
+                                .filter_map(|g| {
+                                    let gid = g.id;
                                     let mut exercises: Vec<_> = d
                                         .exercises
                                         .iter()
-                                        .filter(|e| e.group_id == g.id && !e.archived)
+                                        .filter(|e| e.group_id == gid && !e.archived)
                                         .cloned()
                                         .collect();
                                     exercises.sort_by_key(|e| e.order);
-                                    view! {
-                                        <section class="sheet-group">
-                                            <h3 style=format!("--dot:{}", g.color)>{grp_name(&g).to_string()}</h3>
-                                            <div class="pick-list">
-                                                {exercises
-                                                    .into_iter()
-                                                    .map(|e| {
-                                                        let id = e.id;
-                                                        view! {
-                                                            <button
-                                                                class="pick"
-                                                                // ★ 追跡する（`with_untracked` にしない）。
-                                                                //   シートは常時マウントなので、開いた瞬間に
-                                                                //   作り直されることを当てにできない
-                                                                class:added=move || {
-                                                                    cards.with(|cs| cs.iter().any(|c| c.ex == id))
-                                                                }
-                                                                data-testid="pick-exercise"
-                                                                on:click=move |_| pick(id)
-                                                            >
-                                                                {ex_name(&e).to_string()}
-                                                            </button>
-                                                        }
-                                                    })
-                                                    .collect::<Vec<_>>()}
-                                            </div>
-                                        </section>
+                                    // ★ **中身が 0 の部位は出さない。** 平坦だった頃は空の
+                                    //   見出しが 1 行出るだけだったが、畳むと「押しても何も
+                                    //   開かない 52px の的」になる。設定タブが 0 件でも
+                                    //   ヘッダを出すのは中に「＋ 種目を追加」があるからで、
+                                    //   このシートには開いて出せるものが 1 つも無い
+                                    if exercises.is_empty() {
+                                        return None;
                                     }
+                                    let count = exercises.len();
+                                    // ★ `open_group` を読むのは**この内側の closure だけ**に
+                                    //   する。外側（`db.with(..)` のブロック）で読むと、
+                                    //   1 部位開くたびにピッカー全体が作り直される。
+                                    // ★ `Memo` にしないのは、この外側の closure が `db` を
+                                    //   購読していて**セットを 1 文字打つたびに作り直される**
+                                    //   ため（`views::settings` の `GroupBlock` は長寿命の
+                                    //   コンポーネントなので `Memo` が効く）
+                                    let open = move || open_group.get() == Some(gid);
+                                    Some(
+                                        view! {
+                                            <section class="fold-group" data-testid="pick-group">
+                                                // ★ **`<h3>` は残す。** ここは畳む前から部位の
+                                                //   見出しで、`<button>` に置き換えると部位ぶんの
+                                                //   見出しが a11y ツリーから消える。`<button>` は
+                                                //   phrasing content なので `<h3>` の中に置けて、
+                                                //   WAI-ARIA APG のアコーディオンも
+                                                //   「見出し > ボタン」を求めている
+                                                <h3>
+                                                    <button
+                                                        class="grp-toggle"
+                                                        data-testid="pick-group-toggle"
+                                                        aria-expanded=move || {
+                                                            if open() { "true" } else { "false" }
+                                                        }
+                                                        on:click=move |_| {
+                                                            open_group
+                                                                .update(|o| {
+                                                                    *o = (*o != Some(gid)).then_some(gid)
+                                                                });
+                                                        }
+                                                    >
+                                                        // 開いた状態は CSS で 90 度回す
+                                                        // （chevron-down を別に持たない）
+                                                        {icon(icon::CHEVRON_RIGHT)}
+                                                        <span
+                                                            class="dot"
+                                                            style=format!("--dot:{}", g.color)
+                                                        ></span>
+                                                        <span
+                                                            class="grp-name"
+                                                            data-testid="pick-group-name"
+                                                        >
+                                                            {grp_name(&g).to_string()}
+                                                        </span>
+                                                        <span class="grp-count muted">
+                                                            {cur_lang().n_exercises(count)}
+                                                        </span>
+                                                    </button>
+                                                </h3>
+                                                {move || {
+                                                    open()
+                                                        .then(|| {
+                                                            let list = exercises.clone();
+                                                            view! {
+                                                                <div class="pick-list">
+                                                                    {list
+                                                                        .into_iter()
+                                                                        .map(|e| {
+                                                                            let id = e.id;
+                                                                            view! {
+                                                                                <button
+                                                                                    class="pick"
+                                                                                    // ★ 追跡する（`with_untracked` にしない）。
+                                                                                    //   シートは常時マウントなので、開いた瞬間に
+                                                                                    //   作り直されることを当てにできない
+                                                                                    class:added=move || {
+                                                                                        cards.with(|cs| cs.iter().any(|c| c.ex == id))
+                                                                                    }
+                                                                                    data-testid="pick-exercise"
+                                                                                    on:click=move |_| pick(id)
+                                                                                >
+                                                                                    {ex_name(&e).to_string()}
+                                                                                </button>
+                                                                            }
+                                                                        })
+                                                                        .collect::<Vec<_>>()}
+                                                                </div>
+                                                            }
+                                                        })
+                                                }}
+                                            </section>
+                                        },
+                                    )
                                 })
                                 .collect::<Vec<_>>()
                         })

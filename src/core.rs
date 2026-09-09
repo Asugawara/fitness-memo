@@ -9,8 +9,9 @@ use chrono::{Datelike, NaiveDate, TimeDelta};
 
 use crate::i18n::Lang;
 use crate::model::{
-    Db, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, LabelId, MAX_INTERVAL_SEC,
-    MAX_PIN_LEN, MAX_PINS, Routine, RoutineId, SCHEMA, Session, SetEntry,
+    Db, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, Label, LabelId, MAX_INTERVAL_SEC,
+    MAX_LABEL_LEN, MAX_LABELS, MAX_PIN_LEN, MAX_PINS, Routine, RoutineId, SCHEMA, Session,
+    SetEntry,
 };
 
 /// `Db::sessions` のキー書式。ゼロ埋め ISO なので辞書順 = 時系列順になる。
@@ -265,6 +266,35 @@ fn blank_notes_to_empty(s: &mut Session) {
 
 // ── 参照 ────────────────────────────────────────────────────────────────────
 
+/// 「前回」をどのラベルの中から引くか
+/// （adr/data-model/labels-on-the-exercise-and-a-mark-on-the-log.md）。
+///
+/// ★ **`Option<LabelId>` を引数に足さない。** `None` が「絞らない」なのか
+/// 「ラベルなしのログだけ」なのか、呼び出し側のコードから読めない。
+///
+/// ★ **`Unlabeled`（ラベルなしのログだけ）バリアントを作らない。** 6 か月ラベル
+/// なしで記録 → 今日 H/P/S を定義 → 以後全部付ける、という利用で「指定なし」が
+/// `Unlabeled` の意味だと**半年前の記録が出る**。`Any` なら昨日が出る。既存利用者の
+/// 体験を変えないという要件はこちらでしか満たせない。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum LabelFilter {
+    /// 絞らない。**従来の挙動そのもの。**
+    #[default]
+    Any,
+    /// そのラベルが付いたログだけ。
+    Only(LabelId),
+}
+
+impl LabelFilter {
+    /// そのログを通すか。
+    fn passes(self, log: &ExerciseLog) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Only(id) => log.label == Some(id),
+        }
+    }
+}
+
 /// 指定日より**厳密に前**の、その種目の記録を**新しい順**に走査する。
 ///
 /// 1 日につき高々 1 件なのは「1 日 1 種目 1 ログ」の不変条件（`Vec` になるのは
@@ -272,10 +302,15 @@ fn blank_notes_to_empty(s: &mut Session) {
 ///
 /// ★ セットが空のログは飛ばす。メモだけ書いた日は実施日ではない
 ///   （[`crate::model::Session::is_trained`] と同じ式）。
+///
+/// ★ ラベルで絞っても**フォールバックしない**（0 件なら 0 件）。落とすと
+///   コピーボタンが「表示と違うものを流し込む」ことになり、
+///   adr/ux/copy-button-only-when-empty.md が消した 3 問題が別の入口から戻る。
 fn logs_before(
     db: &Db,
     ex: ExerciseId,
     before: NaiveDate,
+    filter: LabelFilter,
 ) -> impl Iterator<Item = (NaiveDate, &ExerciseLog)> {
     db.sessions
         .range(..date_key(before))
@@ -284,7 +319,7 @@ fn logs_before(
             let log = session
                 .logs
                 .iter()
-                .find(|l| l.exercise_id == ex && !l.sets.is_empty())?;
+                .find(|l| l.exercise_id == ex && !l.sets.is_empty() && filter.passes(l))?;
             Some((parse_date_key(key)?, log))
         })
 }
@@ -292,12 +327,26 @@ fn logs_before(
 /// 指定日より**厳密に前**で最も新しい、その種目の記録。
 ///
 /// 単一の `ExerciseLog` を返せるのは「1 日 1 種目 1 ログ」の不変条件に依存する。
+///
+/// ★ **ラベルで絞らない。** 「旧名は旧挙動、新名がパラメータ付き」なので、この名前で
+/// 呼んだ側の挙動は今までと 1 バイトも変わらない（絞りたいときは
+/// [`last_log_before_with`]）。
 pub fn last_log_before(
     db: &Db,
     ex: ExerciseId,
     before: NaiveDate,
 ) -> Option<(NaiveDate, &ExerciseLog)> {
-    logs_before(db, ex, before).next()
+    last_log_before_with(db, ex, before, LabelFilter::Any)
+}
+
+/// [`last_log_before`] のラベル指定版。
+pub fn last_log_before_with(
+    db: &Db,
+    ex: ExerciseId,
+    before: NaiveDate,
+    filter: LabelFilter,
+) -> Option<(NaiveDate, &ExerciseLog)> {
+    logs_before(db, ex, before, filter).next()
 }
 
 /// 指定日より**厳密に前**の、その種目の記録を**新しい順に最大 `limit` 件**。
@@ -313,7 +362,23 @@ pub fn last_logs_before(
     before: NaiveDate,
     limit: usize,
 ) -> Vec<(NaiveDate, &ExerciseLog)> {
-    logs_before(db, ex, before).take(limit).collect()
+    last_logs_before_with(db, ex, before, limit, LabelFilter::Any)
+}
+
+/// [`last_logs_before`] のラベル指定版。**種目カードの `history` Memo だけが呼ぶ。**
+///
+/// ★ 「重量を使う種目か」の判定（`views::day` の `uses_weight`）はここを通さない。
+/// あれは種目の性質でモードの性質ではないので、無絞りの [`last_log_before`] を
+/// 専用に引く（adr/ux/past-records-by-date-with-a-count-setting.md
+/// 「表示設定は表示だけを変える」）。
+pub fn last_logs_before_with(
+    db: &Db,
+    ex: ExerciseId,
+    before: NaiveDate,
+    limit: usize,
+    filter: LabelFilter,
+) -> Vec<(NaiveDate, &ExerciseLog)> {
+    logs_before(db, ex, before, filter).take(limit).collect()
 }
 
 /// 種目カードに出す過去の記録の件数の既定値。**現状と同じ「前回 1 件だけ」。**
@@ -542,6 +607,21 @@ impl Seed {
             label: *label,
         }
     }
+
+    /// ラベルを落とす。**[`apply_routine`] 専用。**
+    ///
+    /// ★ メニューの展開は種目ごとに**別々の不可視の日**から引くので、たまたま最後が
+    /// Power だった種目は今日が黙って Power になり、**来週の Power 履歴を汚染する** —
+    /// この機能が直そうとしているバグそのものの再導入になる。[`copy_day`] は候補
+    /// リストで日付を名指しする操作なのでソースが可視で、そちらは運ぶ側
+    /// （adr/ux/label-chips-switch-the-history-and-the-copy.md）。
+    ///
+    /// ★ **名前で逸脱を可視化する。** `Seed::carry` の中で分岐すると、どちらの
+    /// 呼び出しがどの規則で動いているのかが呼び出し側から読めない。
+    fn without_label(mut self) -> Self {
+        self.label = None;
+        self
+    }
 }
 
 /// 空の日に種目とセットを流し込む。**書いた種目 ID** を返す。
@@ -727,7 +807,11 @@ pub fn apply_routine(
     let picked: Vec<Seed> = opened
         .iter()
         // `last_log_before` はその種目のログしか返さないので `log.exercise_id == *ex`
-        .filter_map(|ex| last_log_before(db, *ex, to).map(|(_, log)| Seed::carry(log)))
+        // ★ **読みは `Any`**（絞ると「カードに前回が出ているのにメニューからは何も
+        //   入らない」食い違いが生まれる）。**書きは落とす**（[`Seed::without_label`]）
+        .filter_map(|ex| {
+            last_log_before(db, *ex, to).map(|(_, log)| Seed::carry(log).without_label())
+        })
         .collect();
 
     // 履歴が 1 種目も無ければ `picked` は空。`seed_day` はセッションを作らずに返るので、
@@ -1362,7 +1446,7 @@ pub fn migrate(raw: &str, ids: &mut IdGen) -> Result<Db, RestoreError> {
 /// `ids` はトレーニングメニューの ID 重複を解くためだけに使う（[`normalize_routines`]）。
 fn normalize(db: &mut Db, ids: &mut IdGen) {
     normalize_routines(db, ids);
-    normalize_exercises(db);
+    normalize_exercises(db, ids);
 
     let mut sessions: BTreeMap<String, Session> = BTreeMap::new();
     for (key, session) in std::mem::take(&mut db.sessions) {
@@ -1433,10 +1517,11 @@ fn normalize_routines(db: &mut Db, ids: &mut IdGen) {
 /// 「1 要素 = 空白を含まない 1 個の値」という [`Exercise::pins`] の不変条件。
 /// TSV の `ピン` 列はセル内を空白で区切る（[`export_tsv`]）ので、ここが崩れると
 /// 書き出して読み戻した値が一致しなくなる。
-fn normalize_exercises(db: &mut Db) {
+fn normalize_exercises(db: &mut Db, ids: &mut IdGen) {
     for e in &mut db.exercises {
         e.pins = clean_pins(std::mem::take(&mut e.pins));
         e.interval_sec = clean_interval(e.interval_sec);
+        e.labels = clean_labels(std::mem::take(&mut e.labels), ids);
     }
 }
 
@@ -1488,6 +1573,66 @@ pub fn set_interval(db: &mut Db, id: ExerciseId, sec: Option<u32>) {
     if let Some(e) = db.exercises.iter_mut().find(|e| e.id == id) {
         e.interval_sec = clean_interval(sec);
     }
+}
+
+/// [`normalize_exercises`] と [`set_labels`] が共有する 1 種目ぶんの規則。
+///
+/// ★ **2 経路に分けて書かない**（[`clean_pins`] と同じ理由）。食い違うと「画面で
+/// 消えたはずの値が取り込みで生き返る」「取り込みで落ちた値が画面からは入る」が起きる。
+///
+/// - 名前を **trim しない**（[`normalize_routines`] の規則）が、空白だけの要素は落とす
+/// - **`split_whitespace` しない。** ピンが分割するのは TSV の**セル内が空白区切り**
+///   だからで、ラベルは 1 セル = 1 名前。「高重量 低レップ」を許したい
+/// - [`crate::model::MAX_LABEL_LEN`] で **char 単位**に切り詰め、
+///   [`crate::model::MAX_LABELS`] で本数を切る
+/// - **重複 ID だけ**採番し直す。`<For key=id>` の重複キーは wasm で panic =
+///   アプリが死ぬ。捨てずに採り直すのは名前を黙って失わないため。**渡された ID は
+///   それ以外では保持する** — 設定タブの改名で ID が変わらないことの土台で、
+///   ここを緩めると 1 打鍵で過去ログが全部宙に浮く
+/// - **同名は潰さない**（`merge_db` が正当に生む）。**並べ替えない**（`Vec` 順 = 表示順）
+fn clean_labels(labels: Vec<Label>, ids: &mut IdGen) -> Vec<Label> {
+    let mut out: Vec<Label> = Vec::with_capacity(labels.len().min(MAX_LABELS));
+    for mut l in labels {
+        if l.name.trim().is_empty() {
+            continue;
+        }
+        if out.len() >= MAX_LABELS {
+            break;
+        }
+        // ★ char で数える。バイトで切ると UTF-8 の途中で割れて panic する
+        l.name = l.name.chars().take(MAX_LABEL_LEN).collect();
+        if out.iter().any(|o| o.id == l.id) {
+            l.id = ids.alloc();
+        }
+        out.push(l);
+    }
+    out
+}
+
+/// 種目のラベルの定義を差し替える（設定タブの種目編集シートから呼ぶ）。
+///
+/// ★ 正規化を `views` 側に持たせない理由は [`set_pins`] と同じ。
+///
+/// ★ **`Label.id` は呼び側が渡す。** 既存のラベルは既存の ID を、新規だけ
+/// `storage::alloc_id()` を振る。ここで採番し直すと改名の 1 打鍵で
+/// [`crate::model::ExerciseLog::label`] が全部宙に浮く。
+pub fn set_labels(db: &mut Db, id: ExerciseId, labels: Vec<Label>, ids: &mut IdGen) {
+    if let Some(e) = db.exercises.iter_mut().find(|e| e.id == id) {
+        e.labels = clean_labels(labels, ids);
+    }
+}
+
+/// その種目のラベルの中から ID で引く。**参照の解決は必ずこれを通す。**
+///
+/// ★ 「そのログの種目の `labels` の中」でしか解決しないので、種目をまたいだ宙に
+/// 浮いた参照が構造的に起きない（共通プールを作らないという方針が、データの
+/// 置き場所で強制される）。
+pub fn label_name(db: &Db, ex: ExerciseId, id: LabelId) -> Option<&str> {
+    db.exercise(ex)?
+        .labels
+        .iter()
+        .find(|l| l.id == id)
+        .map(|l| l.name.as_str())
 }
 
 /// 既存の種目に取り込み側のピンを**空のときだけ**入れる（[`merge_db`] から呼ぶ）。
@@ -1781,6 +1926,9 @@ fn dedupe_logs(s: &mut Session) {
                     (None, b) => b,
                 };
                 append_note(&mut existing.note, &log.note);
+                // ★ ここが無いと後発の `label` が黙って落ちる。「空のときだけ埋める」
+                //   なのは merge_db のセッション枝と同じ規則（先に来たものを優先）
+                existing.label = existing.label.or(log.label);
             }
             None => {
                 order.push(log.exercise_id);
@@ -3300,6 +3448,13 @@ mod tests {
 
     fn e(n: u64) -> ExerciseId {
         ExerciseId::from_bits(0x1_0000 + n)
+    }
+
+    /// ★ 種目 ID と**別の帯**（`0x2_0000`）に置く。同じ帯だと
+    /// 「`(ExerciseId, LabelId)` のキーが要る」ことを見るテストで、
+    /// たまたま一致して通ってしまう
+    fn lb(n: u64) -> LabelId {
+        LabelId::from_bits(0x2_0000 + n)
     }
 
     /// 決定的な採番器。`migrate` に渡す。
@@ -8556,7 +8711,7 @@ mod tests {
         if let Some(e) = through_import.exercises.iter_mut().find(|e| e.id == bench) {
             e.pins = raw;
         }
-        normalize_exercises(&mut through_import);
+        normalize_exercises(&mut through_import, &mut IdGen::from_seed(1));
 
         assert_eq!(
             through_ui.exercise(bench).expect("種目").pins,
@@ -8868,7 +9023,7 @@ mod tests {
         if let Some(e) = through_import.exercises.iter_mut().find(|e| e.id == bench) {
             e.interval_sec = Some(5000);
         }
-        normalize_exercises(&mut through_import);
+        normalize_exercises(&mut through_import, &mut IdGen::from_seed(1));
 
         assert_eq!(
             through_ui.exercise(bench).expect("種目").interval_sec,
@@ -9299,5 +9454,374 @@ mod tests {
         }
 
         assert_eq!(mine.exercise(bench).expect("種目").interval_sec, Some(90));
+    }
+
+    // ── ラベル ──────────────────────────────────────────────────────────────
+    // adr/data-model/labels-on-the-exercise-and-a-mark-on-the-log.md
+    // adr/ux/label-chips-switch-the-history-and-the-copy.md
+
+    /// ラベル定義入りの Db。ベンチプレス(10) に H(1) / P(2) / S(3)。
+    fn label_db() -> Db {
+        let mut db = menu_db();
+        if let Some(x) = db.exercises.iter_mut().find(|x| x.id == e(10)) {
+            x.labels = vec![label(1, "H"), label(2, "P"), label(3, "S")];
+        }
+        db
+    }
+
+    fn label(n: u64, name: &str) -> Label {
+        Label {
+            id: lb(n),
+            name: name.into(),
+        }
+    }
+
+    /// ラベル付きのログ。
+    fn tagged(exercise_id: u64, label: u64, sets: &[(f32, u32)]) -> ExerciseLog {
+        ExerciseLog {
+            label: Some(lb(label)),
+            ..log(exercise_id, sets, None)
+        }
+    }
+
+    /// H(1) が 8/1、P(2) が 8/2 と 8/8、ラベルなしが 8/5。
+    fn hps_db() -> Db {
+        let mut db = label_db();
+        put(&mut db, d(2026, 8, 1), vec![tagged(10, 1, &[(70.0, 10)])]);
+        put(&mut db, d(2026, 8, 2), vec![tagged(10, 2, &[(100.0, 3)])]);
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(80.0, 8)], None)]);
+        put(&mut db, d(2026, 8, 8), vec![tagged(10, 2, &[(105.0, 3)])]);
+        db
+    }
+
+    // ── フィルタ ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn only_returns_just_that_labels_days_newest_first() {
+        let db = hps_db();
+        let got = last_logs_before_with(&db, e(10), d(2026, 8, 9), 3, LabelFilter::Only(lb(2)));
+        assert_eq!(
+            got.iter().map(|(date, _)| *date).collect::<Vec<_>>(),
+            vec![d(2026, 8, 8), d(2026, 8, 2)],
+            "P の日だけを新しい順に返す"
+        );
+        // 先頭が「前回」であることは無絞りと同じ仕様
+        let (date, _) = last_log_before_with(&db, e(10), d(2026, 8, 9), LabelFilter::Only(lb(2)))
+            .expect("P の記録がある");
+        assert_eq!(date, d(2026, 8, 8));
+    }
+
+    #[test]
+    fn any_is_identical_to_the_unfiltered_lookup() {
+        // 旧名は旧挙動。ここが崩れると既存利用者の画面が黙って変わる
+        let db = hps_db();
+        for limit in 1..=MAX_HISTORY {
+            let plain: Vec<NaiveDate> = last_logs_before(&db, e(10), d(2026, 8, 9), limit)
+                .into_iter()
+                .map(|(date, _)| date)
+                .collect();
+            let any: Vec<NaiveDate> =
+                last_logs_before_with(&db, e(10), d(2026, 8, 9), limit, LabelFilter::Any)
+                    .into_iter()
+                    .map(|(date, _)| date)
+                    .collect();
+            assert_eq!(plain, any, "limit={limit}");
+        }
+        assert_eq!(
+            last_log_before(&db, e(10), d(2026, 8, 9)).map(|(date, _)| date),
+            last_log_before_with(&db, e(10), d(2026, 8, 9), LabelFilter::Any).map(|(date, _)| date),
+        );
+    }
+
+    /// ★ **フォールバックしない**ことの唯一の型上の主張。落とすとコピーボタンが
+    /// 「表示と違うものを流し込む」ことになり、
+    /// adr/ux/copy-button-only-when-empty.md が消した 3 問題が別の入口から戻る。
+    #[test]
+    fn a_label_with_no_history_returns_nothing_instead_of_falling_back() {
+        let db = hps_db();
+        assert!(
+            last_logs_before_with(&db, e(10), d(2026, 8, 9), 3, LabelFilter::Only(lb(3)))
+                .is_empty(),
+            "S は 1 日も使っていないのでラベルなしの前回に落ちてはいけない"
+        );
+        assert_eq!(
+            last_log_before_with(&db, e(10), d(2026, 8, 9), LabelFilter::Only(lb(3))),
+            None
+        );
+        // 定義されていないラベル ID でも同じ（回復手段は「指定なし」チップ）
+        assert_eq!(
+            last_log_before_with(&db, e(10), d(2026, 8, 9), LabelFilter::Only(lb(99))),
+            None
+        );
+    }
+
+    #[test]
+    fn only_still_skips_days_without_sets() {
+        // メモだけ書いた日は実施日ではない。ラベルが付いていても変わらない
+        let mut db = label_db();
+        put(&mut db, d(2026, 8, 1), vec![tagged(10, 2, &[(100.0, 3)])]);
+        let mut memo_only = tagged(10, 2, &[]);
+        memo_only.note = "肩が痛いのでやめた".into();
+        put(&mut db, d(2026, 8, 7), vec![memo_only]);
+
+        let (date, _) = last_log_before_with(&db, e(10), d(2026, 8, 8), LabelFilter::Only(lb(2)))
+            .expect("8/1 まで遡る");
+        assert_eq!(date, d(2026, 8, 1));
+    }
+
+    /// ★ 既存利用者の体験不変。半年ラベルなしで記録してきた人が「指定なし」を
+    /// 押したとき、半年前ではなく**昨日**が出る（`Unlabeled` を作らない理由）。
+    #[test]
+    fn logs_written_before_labels_existed_all_show_up_under_any() {
+        let mut db = label_db();
+        put(&mut db, d(2026, 8, 1), vec![log(10, &[(50.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 4), vec![log(10, &[(55.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 8), vec![tagged(10, 2, &[(100.0, 3)])]);
+
+        let got = last_logs_before_with(&db, e(10), d(2026, 8, 9), 3, LabelFilter::Any);
+        assert_eq!(
+            got.iter().map(|(date, _)| *date).collect::<Vec<_>>(),
+            vec![d(2026, 8, 8), d(2026, 8, 4), d(2026, 8, 1)]
+        );
+    }
+
+    // ── コピー ──────────────────────────────────────────────────────────────
+
+    /// 候補リストで日付を名指しして 1 日丸ごと写す操作。ソースが可視なので、
+    /// ラベルはその日に実在した真実。**両方向で固定する**（片方だけだと将来
+    /// 「揃えよう」で崩される）。
+    #[test]
+    fn copy_day_carries_the_label() {
+        let mut db = label_db();
+        put(&mut db, d(2026, 8, 8), vec![tagged(10, 2, &[(100.0, 3)])]);
+
+        copy_day(&mut db, d(2026, 8, 8), d(2026, 8, 9), None);
+
+        let copied = &db.sessions[&date_key(d(2026, 8, 9))].logs[0];
+        assert_eq!(copied.label, Some(lb(2)), "名指しした日のラベルは運ぶ");
+    }
+
+    /// ★ メニューの展開は種目ごとに**別々の不可視の日**から引くので、たまたま最後が
+    /// Power だった種目は今日が黙って Power になり、来週の Power 履歴を汚染する。
+    #[test]
+    fn apply_routine_does_not_carry_the_label() {
+        let mut db = label_db();
+        db.routines.push(routine(1, "胸の日", &[10, 30]));
+        put(&mut db, d(2026, 8, 8), vec![tagged(10, 2, &[(100.0, 3)])]);
+
+        apply_routine(&mut db, r(1), d(2026, 8, 9), None);
+
+        let opened = &db.sessions[&date_key(d(2026, 8, 9))].logs;
+        let bench = opened
+            .iter()
+            .find(|l| l.exercise_id == e(10))
+            .expect("ベンチプレスが展開されている");
+        assert_eq!(
+            bench.label, None,
+            "メニューは狙いを持たないのでラベルを押し付けてはいけない"
+        );
+        // セットは運ぶ（落とすのはラベルだけ）
+        assert_eq!(bench.sets.len(), 1);
+    }
+
+    /// **読みは `Any`。** 絞ると「カードに前回が出ているのにメニューからは何も
+    /// 入らない」食い違いが生まれる。
+    #[test]
+    fn apply_routine_reads_without_filtering_by_label() {
+        let mut db = label_db();
+        db.routines.push(routine(1, "胸の日", &[10]));
+        // 直近はラベル付き。読みが `Only(なにか)` に寄っていたら 0 件になる
+        put(&mut db, d(2026, 8, 8), vec![tagged(10, 2, &[(100.0, 3)])]);
+
+        let opened = apply_routine(&mut db, r(1), d(2026, 8, 9), None);
+
+        assert_eq!(opened, vec![e(10)]);
+        assert_eq!(
+            db.sessions[&date_key(d(2026, 8, 9))].logs[0].sets.len(),
+            1,
+            "ラベル付きの直近が読めていない"
+        );
+    }
+
+    // ── ID の安定 ───────────────────────────────────────────────────────────
+
+    /// ★ この機能の目的が「数か月にわたる Power の履歴」なので、`P` → `Power` の
+    /// 改名で過去ログが外れる形は採れない。設定タブの実装（`LabelRow` が `LabelId`
+    /// を持つ）が崩れるとここが落ちる。
+    #[test]
+    fn renaming_a_label_keeps_its_id() {
+        let mut db = hps_db();
+        let before = last_logs_before_with(&db, e(10), d(2026, 8, 9), 3, LabelFilter::Only(lb(2)))
+            .into_iter()
+            .map(|(date, _)| date)
+            .collect::<Vec<_>>();
+
+        // 「P」→「Power」。**ID は据え置き**で名前だけ差し替える
+        set_labels(
+            &mut db,
+            e(10),
+            vec![label(1, "H"), label(2, "Power"), label(3, "S")],
+            &mut ids(),
+        );
+
+        assert_eq!(label_name(&db, e(10), lb(2)), Some("Power"));
+        assert_eq!(
+            last_logs_before_with(&db, e(10), d(2026, 8, 9), 3, LabelFilter::Only(lb(2)))
+                .into_iter()
+                .map(|(date, _)| date)
+                .collect::<Vec<_>>(),
+            before,
+            "改名で過去ログが外れてはいけない"
+        );
+    }
+
+    // ── 正規化 ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn clean_labels_drops_blank_names_and_truncates_by_char() {
+        let got = clean_labels(
+            vec![
+                label(1, ""),
+                label(2, "  "),
+                label(3, "　"),
+                // ★ char で切る。バイトで切ると UTF-8 の途中で割れて panic する
+                label(4, "あいうえおかきくけこさしすせそ"),
+                label(5, "Hypertrophy"),
+            ],
+            &mut ids(),
+        );
+        assert_eq!(
+            got.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+            ["あいうえおかきくけこさし", "Hypertrophy"]
+        );
+    }
+
+    /// ★ **`split_whitespace` しない。** ピンが分割するのは TSV のセル内が空白
+    /// 区切りだからで、ラベルは 1 セル = 1 名前。「高重量 低レップ」を許したい。
+    #[test]
+    fn clean_labels_does_not_split_a_name_that_contains_a_space() {
+        let got = clean_labels(vec![label(1, "高重量 低レップ")], &mut ids());
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "高重量 低レップ");
+        // trim もしない（取り込んだデータを書き換えない。`normalize_routines` の規則）
+        let got = clean_labels(vec![label(1, " P ")], &mut ids());
+        assert_eq!(got[0].name, " P ");
+    }
+
+    #[test]
+    fn clean_labels_keeps_duplicate_names_and_their_order() {
+        // 同名は merge が正当に生む。並べ替えない（`Vec` 順 = 表示順）
+        let got = clean_labels(
+            vec![label(3, "S"), label(1, "P"), label(2, "P")],
+            &mut ids(),
+        );
+        assert_eq!(
+            got.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+            ["S", "P", "P"]
+        );
+        assert_eq!(
+            got.iter().map(|l| l.id).collect::<Vec<_>>(),
+            [lb(3), lb(1), lb(2)]
+        );
+    }
+
+    /// ★ 重複 ID は `<For key=id>` の keyed diff を壊す（wasm では panic =
+    /// アプリが死ぬ）ので採り直す。**それ以外の ID は保持する** — ここを緩めると
+    /// 改名の 1 打鍵で `ExerciseLog.label` が全部宙に浮く。
+    #[test]
+    fn clean_labels_only_reallocates_duplicate_ids() {
+        let got = clean_labels(
+            vec![label(1, "H"), label(1, "P"), label(2, "S")],
+            &mut ids(),
+        );
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].id, lb(1), "初出の ID は据え置く");
+        assert_ne!(got[1].id, lb(1), "重複した ID は採り直す");
+        assert_eq!(got[2].id, lb(2), "重複していない ID は据え置く");
+        assert_eq!(got[1].name, "P", "名前は黙って失わない");
+    }
+
+    #[test]
+    fn clean_labels_caps_the_number_of_labels() {
+        let many: Vec<Label> = (0..MAX_LABELS as u64 + 5)
+            .map(|i| label(i, &format!("L{i}")))
+            .collect();
+        assert_eq!(clean_labels(many, &mut ids()).len(), MAX_LABELS);
+    }
+
+    /// ★ 画面からの書き込みと取り込みで規則が食い違うと、**画面で消えたはずの値が
+    /// 取り込みで生き返る**（またはその逆）。
+    /// `set_pins_normalizes_the_same_way_as_normalize` の鏡像。
+    #[test]
+    fn set_labels_normalizes_the_same_way_as_normalize() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let raw = vec![
+            label(1, "H"),
+            label(1, "P"),
+            label(2, ""),
+            label(3, "あいうえおかきくけこさしすせそ"),
+        ];
+
+        let mut through_ui = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_labels(&mut through_ui, bench, raw.clone(), &mut ids());
+
+        let mut through_import = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        if let Some(x) = through_import.exercises.iter_mut().find(|x| x.id == bench) {
+            x.labels = raw;
+        }
+        normalize_exercises(&mut through_import, &mut ids());
+
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").labels,
+            through_import.exercise(bench).expect("種目").labels,
+            "画面からの書き込みと取り込みで規則がずれている"
+        );
+        assert_eq!(
+            through_ui
+                .exercise(bench)
+                .expect("種目")
+                .labels
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect::<Vec<_>>(),
+            ["H", "P", "あいうえおかきくけこさし"]
+        );
+    }
+
+    /// ★ 宙に浮いた `label` は**消さない**（`normalize_routines` の「宙に浮いた参照は
+    /// 宙に浮いたまま残す」）。後から相手のファイルを取り込めば生き返る。
+    #[test]
+    fn normalize_leaves_a_dangling_label_on_the_log() {
+        let mut db = label_db();
+        put(&mut db, d(2026, 8, 8), vec![tagged(10, 99, &[(100.0, 3)])]);
+        normalize(&mut db, &mut ids());
+        assert_eq!(
+            db.sessions[&date_key(d(2026, 8, 8))].logs[0].label,
+            Some(lb(99))
+        );
+    }
+
+    /// ★ ここが無いと重複ログを畳むときに後発の `label` が黙って落ちる。
+    #[test]
+    fn dedupe_logs_does_not_drop_a_later_label() {
+        let mut s = Session {
+            logs: vec![log(10, &[(100.0, 3)], None), tagged(10, 2, &[(100.0, 2)])],
+            ..Session::default()
+        };
+        dedupe_logs(&mut s);
+        assert_eq!(s.logs.len(), 1);
+        assert_eq!(s.logs[0].label, Some(lb(2)));
+        assert_eq!(s.logs[0].sets.len(), 2, "セットは連結される");
+    }
+
+    /// 「空のときだけ埋める」なので、先に来たものが勝つ。
+    #[test]
+    fn dedupe_logs_keeps_the_first_label_it_saw() {
+        let mut s = Session {
+            logs: vec![tagged(10, 1, &[(70.0, 10)]), tagged(10, 2, &[(100.0, 3)])],
+            ..Session::default()
+        };
+        dedupe_logs(&mut s);
+        assert_eq!(s.logs[0].label, Some(lb(1)));
     }
 }

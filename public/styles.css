@@ -808,6 +808,42 @@ h3 {
   color: var(--muted);
 }
 
+/* ── 設定シートのラベル編集（adr/ux/label-chips-switch-the-history-and-the-copy.md）──
+   `.pin-*` の隣に置く。値の性質（種目に貼り付く定義）が同じなので寸法とトークンを
+   揃えるが、**入力がテキスト（IME 付き）なので入力欄は幅広**にする。
+
+   ★ 接頭辞は記録タブのチップ（`.lbl` / `.lbl-row`）と共有する。同じ「ラベル」という
+     概念の 2 つの面（選ぶ / 定義する）なので、`.pin-*` が記録タブに閉じているのとは
+     事情が違う。衝突しないのは `.lbl-edit` 以下が設定シートにしか出ないため。 */
+.lbl-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  /* 列間 10px は `.pin-box` と同じ理由（「✕ がどのチップのものか」を間隔で読ませる） */
+  gap: 6px 10px;
+}
+
+.lbl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* ★ `.pin-num` の 2.9em では 12 文字のラベルが入らない。`.text-input` を土台に
+   幅だけ与える（`.field` の中で 100% に伸びると ✕ が押し出される）。
+   ★ **子孫セレクタ（0,2,0）が要る。** `.text-input`（0,1,0）はこの節より後ろに
+     あるので、同詳細度では `width: 100%` に負ける（`.pin-add` と同じ事情）。 */
+.lbl-edit .lbl-name {
+  width: 7.5em;
+}
+
+/* 「＋」。`.pin-box .pin-add` と同じ規則（めったに使わない追加に彩度を与えない）。
+   詳細度の事情も同じで、`.link-btn`（0,1,0）と同詳細度では上書きできない。 */
+.lbl-edit .lbl-add {
+  min-width: 44px;
+  color: var(--muted);
+}
+
 /* ── インターバル（adr/ux/interval-seconds-on-the-exercise.md）───────────────
    ピンの真下に置く。値の性質（種目に貼り付く設定）が同じなので、寸法もトークンも
    `.pin-*` と揃える — 段が変わると「その日のメモ」と同じ列に見えてしまう。

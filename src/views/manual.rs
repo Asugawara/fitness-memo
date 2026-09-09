@@ -48,7 +48,7 @@ pub fn ManualSection() -> impl IntoView {
         <div class="man-section" data-testid="man-section">
             <p class="man-intro">{m.intro}</p>
             <p class="muted man-note">{m.offline_note}</p>
-            <p class="muted man-note">{m.light_note}</p>
+            <p class="muted man-note man-light-note">{m.light_note}</p>
             <p class="muted man-note">{m.see_install_help}</p>
 
             <div data-testid="man-chapters">

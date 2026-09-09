@@ -25,6 +25,7 @@
 
 use leptos::prelude::*;
 
+use crate::core::Drops;
 use crate::i18n::Lang;
 use crate::model::{Db, Exercise, ExerciseId, Group, GroupId, RoutineId};
 use crate::storage;
@@ -33,9 +34,9 @@ use super::help::InstallHelpLink;
 use super::icon::{self, icon};
 use super::routine::{RoutineEditor, routine_exercise_names};
 use super::{
-    SettingsPage, Sheet, cur_lang, ex_name, grp_name, kb_blur, kb_focus,
-    scroll_into_view_if_needed, t, use_db, use_history_count, use_kb, use_lang, use_open_group,
-    use_settings_page,
+    SettingsPage, Sheet, cur_lang, ex_name, fmt_weight, grp_name, kb_blur, kb_focus, parse_weight,
+    scroll_into_view_if_needed, t, use_db, use_drop_pct, use_drops, use_history_count, use_kb,
+    use_lang, use_open_group, use_settings_page,
 };
 
 /// 部位を追加するときの既定色。プリセットの 6 色を順に回す。
@@ -289,6 +290,11 @@ pub fn Settings() -> impl IntoView {
     let t = t();
     let lang = use_lang();
     let hist = use_history_count();
+    let drops = use_drops();
+    let drop_pct = use_drop_pct();
+    // ★ 落とし幅の入力欄のため。キーボードが開くとタブ帯を隠す仕組みに乗せる
+    //   （adr/pwa/hide-tabs-when-keyboard-open.md）
+    let kb = use_kb();
     let db = use_db();
     let editor: RwSignal<Option<Editor>> = RwSignal::new(None);
     let backup_open = RwSignal::new(false);
@@ -390,6 +396,24 @@ pub fn Settings() -> impl IntoView {
                                 ),
                                 "settings-row-history",
                                 move || go(SettingsPage::History),
+                            )}
+                            // ★ 表示数の隣。どちらも「推移 / カードの見せ方」で、
+                            //   探しに来る頻度も同じ（一度決めたら触らない）。
+                            //   右端は件数ではなく現在値（表示数 / 言語と同じ形）
+                            {section_row(
+                                t.settings.row_drop_sets,
+                                Some(
+                                    Signal::derive(move || {
+                                        let s = &cur_lang().strings().settings;
+                                        if drops.get() == Drops::Include {
+                                            s.drop_sets_include.to_string()
+                                        } else {
+                                            s.drop_sets_exclude.to_string()
+                                        }
+                                    }),
+                                ),
+                                "settings-row-drop-sets",
+                                move || go(SettingsPage::DropSets),
                             )}
                             // 手順シートを開くだけなので、節ではなく行として並べる
                             <InstallHelpLink />
@@ -500,6 +524,105 @@ pub fn Settings() -> impl IntoView {
 
                         <p class="settings-note muted" data-testid="history-note">
                             {t.settings.history_note}
+                        </p>
+                    }
+                        .into_any()
+                }
+                SettingsPage::DropSets => {
+                    // 言語 / 表示数ページと同じ形（同値ガード → 保存 → シグナル）
+                    let pick = move |d: Drops| {
+                        if drops.get_untracked() == d {
+                            return;
+                        }
+                        storage::save_drops(d);
+                        drops.set(d);
+                    };
+                    view! {
+                        {back_head(t.settings.row_drop_sets, move || go(SettingsPage::Root))}
+
+                        // ★ 言語ページと同じ 2 択の `.segmented`。**「含めない」を左に置く**
+                        //   （既定が左、というのは期間 / 表示数セレクタが軽い順に並ぶのと
+                        //   同じ流儀）
+                        <div
+                            class="segmented"
+                            role="group"
+                            aria-label=t.settings.row_drop_sets
+                            data-testid="drop-sets-select"
+                        >
+                            {[
+                                (Drops::Exclude, t.settings.drop_sets_exclude),
+                                (Drops::Include, t.settings.drop_sets_include),
+                            ]
+                                .into_iter()
+                                .map(|(d, label)| {
+                                    view! {
+                                        <button
+                                            class="seg-btn"
+                                            class:active=move || drops.get() == d
+                                            aria-pressed=move || (drops.get() == d).to_string()
+                                            data-testid="drop-sets-btn"
+                                            data-drops=if d == Drops::Include {
+                                                "include"
+                                            } else {
+                                                "exclude"
+                                            }
+                                            on:click=move |_| pick(d)
+                                        >
+                                            {label}
+                                        </button>
+                                    }
+                                })
+                                .collect::<Vec<_>>()}
+                        </div>
+
+                        <p class="settings-note muted" data-testid="drop-sets-note">
+                            {t.settings.drop_sets_note}
+                        </p>
+
+                        // ── 落とし幅（%）──────────────────────────────────────
+                        //
+                        // ★ 同じ節に置く。「含めるか」と「何 % 落とすか」はどちらも
+                        //   ドロップセットの設定で、別の行に分けると設定タブのトップが
+                        //   1 つの機能で 2 行を食う（adr/ux/settings-as-a-list-of-sections.md）。
+                        // ★ セグメントにしない。刻みは人によって違う（10 / 12.5 / 20 …）
+                        //   ので、選択肢を先に決めると必ず外れる。自由入力にする
+                        <div class="pct-box" data-testid="drop-pct-box">
+                            <span class="pct-label">{t.settings.drop_pct_label}</span>
+                            <input
+                                class="num"
+                                type="text"
+                                // ★ 保存は数値だが入力欄は文字列。`type="number"` は
+                                //   空欄と "1." を保持できない（adr/ux/text-input-not-number.md）
+                                inputmode="decimal"
+                                pattern="[0-9]*([.,][0-9]*)?"
+                                value=move || fmt_weight(drop_pct.get())
+                                aria-label=t.settings.drop_pct_label
+                                data-testid="drop-pct"
+                                on:focusin=move |_| kb_focus(kb)
+                                on:focusout=move |_| kb_blur(kb)
+                                // ★ **`on:input` ではなく `on:change`。** 保存は
+                                //   `localStorage` の read-modify-write（同期・ディスク
+                                //   backed）なので、打鍵ごとに走らせると `12.5` の 4 打鍵で
+                                //   4 往復する。この節以外の設定は全部クリック 1 回きりで、
+                                //   `storage` 側の doc もそれを前提に debounce を持たない
+                                on:change=move |ev| {
+                                    let raw = event_target_value(&ev);
+                                    // ★ 空欄は既定へ戻す。0 と空欄は違う（0 は
+                                    //   「落とさない」という有効な選択）
+                                    let next = if raw.trim().is_empty() {
+                                        crate::core::DEFAULT_DROP_PCT
+                                    } else {
+                                        crate::core::drop_pct(Some(parse_weight(&raw) as f64))
+                                    };
+                                    storage::save_drop_pct(next);
+                                    drop_pct.set(next);
+                                }
+                            />
+                            <span class="pct-unit">"%"</span>
+                        </div>
+
+                        <p class="settings-note muted" data-testid="drop-pct-note">
+                            {t.settings.drop_pct_note}
                         </p>
                     }
                         .into_any()

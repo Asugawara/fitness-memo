@@ -128,6 +128,7 @@ pub enum SettingsPage {
     Routines,
     Exercises,
     History,
+    DropSets,
     Language,
 }
 
@@ -192,6 +193,35 @@ pub struct HistoryCtx(pub RwSignal<usize>);
 pub fn use_history_count() -> RwSignal<usize> {
     use_context::<HistoryCtx>()
         .expect("HistoryCtx が provide されていない")
+        .0
+}
+
+/// 推移タブがドロップセットを集計に入れるか
+/// （adr/ux/drop-sets-as-a-box-under-the-main-set.md）。
+///
+/// ★ [`HistoryCtx`] とまったく同じ理由でシグナルに載せる。これを読む
+///   `views::progress` の `series` / `records` / `hidden` Memo は `Db` を購読して
+///   **1 打鍵ごとに走る**ので、そこで `storage` を叩くと `localStorage.getItem` +
+///   `serde_json::from_str` が打鍵ごとに走る。
+#[derive(Clone, Copy)]
+pub struct DropsCtx(pub RwSignal<crate::core::Drops>);
+
+pub fn use_drops() -> RwSignal<crate::core::Drops> {
+    use_context::<DropsCtx>()
+        .expect("DropsCtx が provide されていない")
+        .0
+}
+
+/// ドロップセットの落とし幅（%）。段を 1 つ足すときの重量を先に計算するのに使う。
+///
+/// ★ [`DropsCtx`] と同じ理由でシグナルに載せる（読むのは `views::day` の
+///   `add_drop` で、種目カードの枚数ぶん存在する）。
+#[derive(Clone, Copy)]
+pub struct DropPctCtx(pub RwSignal<f32>);
+
+pub fn use_drop_pct() -> RwSignal<f32> {
+    use_context::<DropPctCtx>()
+        .expect("DropPctCtx が provide されていない")
         .0
 }
 
@@ -335,15 +365,28 @@ pub fn fmt_metric(v: f64) -> String {
 pub use crate::core::{fmt_weight, parse_reps, parse_weight};
 
 /// 1 セットの表示。重量ありなら "60×10"、重量なしなら "12"。
+/// `d` が `Drops::Include` なら、続けて段を `↓` 区切りで並べる（`60×6↓50×5`）。
 ///
 /// 単位（回 / 秒）は添えない。プランクの 60 に「回」と付くほうが嘘になるし、
 /// それが秒だと分かるのは種目名からで、表記から読むものではない。
-pub fn fmt_set(s: &SetEntry) -> String {
-    if s.weight > 0.0 {
-        format!("{}×{}", fmt_weight(s.weight), s.reps)
-    } else {
-        format!("{}", s.reps)
+///
+/// ★ **段の前に空白を入れない。** セット同士は 2 スペースで区切る
+/// （`views::progress` / `views::day`）ので、空白を入れると「どこまでが 1 セットか」が
+/// 読めなくなる。
+///
+/// ★ 既定を持つラッパを作らない。記録タブの「前回の記録」行は段を出さないと決めた
+/// （adr/ux/drop-sets-as-a-box-under-the-main-set.md）が、それを関数名に隠すと
+/// `core::log_value`（段を**数える**側の既定）と逆向きの既定が 2 つ並んで読めなくなる。
+/// 呼び出し側で `Drops::Exclude` と書く。
+pub fn fmt_set(s: &SetEntry, d: crate::core::Drops) -> String {
+    let mut out = crate::core::fmt_wr(s.weight, s.reps);
+    if d == crate::core::Drops::Include {
+        for stage in &s.drops {
+            out.push('↓');
+            out.push_str(&crate::core::fmt_wr(stage.weight, stage.reps));
+        }
     }
+    out
 }
 
 // ── DOM ヘルパ ──────────────────────────────────────────────────────────────
@@ -673,6 +716,8 @@ pub fn App() -> impl IntoView {
     provide_context(SettingsPageCtx(RwSignal::new(SettingsPage::default())));
     // ★ こちらは永続化する（`HistoryCtx` の doc を参照）。起動時に 1 回だけ読む
     provide_context(HistoryCtx(RwSignal::new(storage::history_count())));
+    provide_context(DropsCtx(RwSignal::new(storage::drops())));
+    provide_context(DropPctCtx(RwSignal::new(storage::drop_pct())));
 
     let tab = RwSignal::new(Tab::Record);
     let tabs = TabCtx(tab);

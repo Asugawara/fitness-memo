@@ -1494,10 +1494,17 @@ fn ExerciseCard(
                                 //   履歴の無いラベルからの回復手段なので**常に可視**
                                 <button
                                     class="lbl"
-                                    class:on=move || label_sel.with(Option::is_none)
+                                    // ★ 点灯は `label_sel` ではなく**門番後の `filter`**
+                                    //   から出す。削除済みラベルを選んだ状態では
+                                    //   `label_sel = Some(消えた ID)` のまま `Any` で引く
+                                    //   ので、`label_sel` を見るとどのチップも点かず
+                                    //   「セットがあるのに宛先が読めない」状態になる
+                                    class:on=move || filter.get() == core::LabelFilter::Any
                                     // ★ `aria-pressed` に bool を渡さない（列挙属性なので
                                     //   `false` で属性ごと消える）。settings.rs と同じ形
-                                    aria-pressed=move || label_sel.with(Option::is_none).to_string()
+                                    aria-pressed=move || {
+                                        (filter.get() == core::LabelFilter::Any).to_string()
+                                    }
                                     data-testid="label-chip"
                                     data-label-any="true"
                                     on:click=move |_| pick_label(None)
@@ -1512,9 +1519,12 @@ fn ExerciseCard(
                                         view! {
                                             <button
                                                 class="lbl"
-                                                class:on=move || label_sel.get() == Some(id)
+                                                class:on=move || {
+                                                    filter.get() == core::LabelFilter::Only(id)
+                                                }
                                                 aria-pressed=move || {
-                                                    (label_sel.get() == Some(id)).to_string()
+                                                    (filter.get() == core::LabelFilter::Only(id))
+                                                        .to_string()
                                                 }
                                                 data-testid="label-chip"
                                                 on:click=move |_| pick_label(Some(id))

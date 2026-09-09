@@ -24,6 +24,7 @@
 //!   1 文字打つたびに `Db` が動いて一覧ごと作り直され、編集中の文字列が消える
 
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
 use crate::i18n::Lang;
 use crate::model::{
@@ -1213,7 +1214,10 @@ fn ExerciseEditor(
     //
     // ★ **重複チェックは新規追加と改名の両方に通す**（片方だけだと裏口が残る）。
     //   重複していたら書かずに**直前の保存値へ戻す**。
-    let change_label = move |key: u32, value: String| {
+    // 戻り値は「重複だったので巻き戻した値」。呼び側が DOM も直す
+    // （`value=` は初期値を 1 度読むだけなので、signal を書いても入力欄は古いまま残る。
+    //  day.rs の `ex_note_ref` とまったく同じ事情）。
+    let change_label = move |key: u32, value: String| -> Option<String> {
         let trimmed = value.trim().to_string();
         // 同名が他の行にあるか。空欄は `set_labels` が落とすので通す
         let clash = !trimmed.is_empty()
@@ -1236,10 +1240,10 @@ fn ExerciseEditor(
             });
             label_rows.update(|rs| {
                 if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
-                    r.name = saved;
+                    r.name = saved.clone();
                 }
             });
-            return;
+            return Some(saved);
         }
         duplicate_label.set(false);
         label_rows.update(|rs| {
@@ -1248,6 +1252,7 @@ fn ExerciseEditor(
             }
         });
         commit_labels();
+        None
     };
 
     let add_label = move |_| {
@@ -1348,7 +1353,24 @@ fn ExerciseEditor(
                                     // ★ `on:input` ではなく `on:change`（blur / Enter）。
                                     //   毎打鍵 commit すると既存 `P` があるとき `Power` と
                                     //   打つ途中の `P` が重複になる
-                                    on:change=move |ev| change_label(key, event_target_value(&ev))
+                                    on:change=move |ev| {
+                                        if let Some(revert)
+                                            = change_label(key, event_target_value(&ev))
+                                        {
+                                            // ★ signal を書いても `value=` は初期値の
+                                            //   ままなので DOM も直す。抜くと「画面は
+                                            //   `H` 重複のまま・Db は `P`」になり、
+                                            //   次の 1 打鍵で古い値が保存される
+                                            if let Some(el) = ev
+                                                .target()
+                                                .and_then(|t| {
+                                                    t.dyn_into::<web_sys::HtmlInputElement>().ok()
+                                                })
+                                            {
+                                                el.set_value(&revert);
+                                            }
+                                        }
+                                    }
                                 />
                                 <button
                                     // ★ class を必ず付ける（`smoke.spec.mjs` が

@@ -87,14 +87,35 @@ async function savedSets(page, name, date = new Date()) {
   return (log?.sets ?? []).map((s) => [s.weight, s.reps, s.note ?? '']);
 }
 
+/**
+ * 「種目を追加」シートの部位アコーディオンを、目当ての種目が出るまで順に開いて押す。
+ *
+ * ★ 部位は既定で全部閉じていて、**同時に開けるのは 1 つ**
+ *   （adr/ux/record-add-sheet-groups-as-single-open-accordion.md）。押す前に
+ *   `aria-expanded` を見ないと、開いている部位を閉じてしまう。
+ * ★ 正典は e2e/smoke.spec.mjs の `openPickGroupFor`（e2e は spec 単体で読める作法なので
+ *   共有モジュールを作らずコピーしてある）。
+ */
+async function pickFromAddSheet(page, name) {
+  const sheet = page.getByTestId('add-sheet');
+  const groups = sheet.getByTestId('pick-group');
+  const n = await groups.count();
+  expect(n, 'シートに部位が 1 つも出ていない').toBeGreaterThan(0);
+  for (let i = 0; i < n; i++) {
+    const group = groups.nth(i);
+    const toggle = group.getByTestId('pick-group-toggle');
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+    await expect(group.getByTestId('pick-exercise').first()).toBeVisible();
+    const pick = group.getByTestId('pick-exercise').filter({ hasText: exactText(name) });
+    if (await pick.count()) return pick.click();
+  }
+  throw new Error(`「種目を追加」シートに ${name} が無い`);
+}
+
 async function addExercise(page, name) {
   await blurActive(page);
   await page.getByTestId('add-exercise').click();
-  await page
-    .getByTestId('add-sheet')
-    .getByTestId('pick-exercise')
-    .filter({ hasText: exactText(name) })
-    .click();
+  await pickFromAddSheet(page, name);
   return cardOf(page, name);
 }
 

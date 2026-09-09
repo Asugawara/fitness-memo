@@ -1244,68 +1244,60 @@ h3 {
   overscroll-behavior: contain;
 }
 
-.sheet-group {
-  margin-bottom: 12px;
+/* 部位ブロックを折りたたむシート。**2 枚が共有する**（.grp-toggle + aria-expanded の
+   フックは設定タブと同じ、開ける数だけが違う）。
+
+   - メニュー編集シート — 複数同時に開ける
+     （adr/ux/routine-editor-drag-and-accordion.md）
+   - 記録タブの「種目を追加」シート — 同時に開くのは 1 つ
+     （adr/ux/record-add-sheet-groups-as-single-open-accordion.md）
+
+   ★ **クラス名は .rtn-group ではない。** 中身は「見出しを折りたたみ用に整える」規則
+     だけで、メニュー編集シート固有のものは 1 つも無い。他の .rtn-*（.rtn-grab /
+     .rtn-picked / .rtn-save）は本当にあの画面固有なので、共有すると接頭辞の意味が崩れる。
+   ★ このコメントは以前「記録タブの『種目を追加』シートには当てない。あちらは 1 タップで
+     1 種目を出す画面で、往復しないので畳む理由が無い」と書いていた。往復しないのは
+     今も正しいが、**28 個のボタンから目で探すことと、行の位置が毎回違うこと**が
+     問題だったので後に覆した（上の 2 本目の ADR）。 */
+.fold-group {
+  border-bottom: 1px solid var(--line);
 }
 
-/* メニュー編集シートの部位ブロックだけ折りたたむ（.grp-toggle + aria-expanded の
-   フックは設定タブと同じ、開ける数だけが違う。
-   adr/ux/routine-editor-drag-and-accordion.md）。
-
-   ★ 記録タブの「種目を追加」シート（.sheet-group のまま）には当てない。あちらは
-     1 タップで 1 種目を出す画面で、往復しないので畳む理由が無い。 */
-.rtn-group {
-  margin-bottom: 0;
-  border-bottom: 1px solid var(--line);
+/* ★ 最後の部位だけ線を持たない。記録タブの追加シートは .fold-group が .sheet-body の
+   最終子になるので、シート下端の 16px 上に横線が浮いて残る。メニュー編集シートは
+   .rtn-save（DOM 最後）が必ず後ろに来るのでここは当たらない */
+.fold-group:last-child {
+  border-bottom: 0;
 }
 
 /* .grp-toggle は設定タブでは flex アイテム（.card-head の中）なので flex: 1 で伸びるが、
    ここは <h3> の中の唯一の子。display: flex がブロックレベルにするので幅は足りているが、
    .grp-toggle 側の display が変わっても崩れないよう明示しておく。
    高さは 52px を継ぐ（閉じた 6 部位が 1 画面に収まる） */
-.rtn-group .grp-toggle {
+.fold-group .grp-toggle {
   width: 100%;
 }
 
 /* 開いた中身の余白。閉じている間は 1px も持たない */
-.rtn-group > .pick-list {
+.fold-group > .pick-list {
   padding-bottom: 12px;
 }
 
-.sheet-group h3 {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--muted);
-  margin-bottom: 6px;
-}
-
-.sheet-group h3::before {
-  content: "";
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--dot, var(--muted));
-}
-
-/* ★ 折りたたむ側（.rtn-group）の見出しは中身が .grp-toggle 1 個なので、見出し自身は
-   寸法も装飾も持たない。上の 2 つ（色・余白・部位の丸）は「種目を追加」シートの
-   平坦な見出し用で、そのまま効くと丸が 2 つ並び、ボタンの 52px の外に余白が付く。
-   ★ 詳細度は上と同じ (0,1,1) なので、**この位置（後ろ）である必要がある**。 */
-.rtn-group > h3 {
-  display: block;
-  margin: 0;
+/* 見出しは中身が .grp-toggle 1 個なので、見出し自身は寸法も装飾も持たない。
+   ★ ここに残る 2 つは**打ち消し先が今も生きている**もの。margin は冒頭の
+     `h1, h2, h3 { margin: 0 }` が持つので要らない。
+   ★ かつては色・余白・部位の丸（`.sheet-group h3` / `::before`）を打ち消す規則が
+     ここにあったが、追加シートも折りたたみへ移って平坦な見出しの利用者が 0 になった
+     ので、打ち消される側ごと消した
+     （adr/ux/record-add-sheet-groups-as-single-open-accordion.md）。 */
+.fold-group > h3 {
+  /* 冒頭の `h1, h2, h3` は font-size を触らないので、UA の `h3 { font-size: 1.17em }`
+     が生きている */
   font-size: inherit;
-  /* このファイル冒頭の `h1, h2, h3 { font-weight: 600 }` も外す。残すと件数
-     （.grp-count）まで太くなり、設定タブの同じ行と見た目が食い違う。
-     部位名だけが太いのは .grp-name 自身が 600 を持っているから */
+  /* 冒頭の `h1, h2, h3 { font-weight: 600 }` を外す。残すと件数（.grp-count）まで
+     太くなり、設定タブの同じ行と見た目が食い違う。部位名だけが太いのは
+     .grp-name 自身が 600 を持っているから */
   font-weight: inherit;
-  color: inherit;
-}
-
-.rtn-group > h3::before {
-  content: none;
 }
 
 .pick-list {
@@ -2011,7 +2003,7 @@ h3 {
   transform: rotate(90deg);
 }
 
-/* 部位カラーの丸。色は inline の --dot で受け取る（.sheet-group h3::before と同じ作り） */
+/* 部位カラーの丸。色は inline の --dot で受け取る */
 .dot {
   flex: none;
   width: 10px;

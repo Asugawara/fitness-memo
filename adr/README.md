@@ -22,12 +22,13 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [ルーターを使わずタブを enum signal で切り替える](architecture/no-router-tab-enum-signal.md) | 採用 |
 | [UI 依存を wasm32 の target 別 dependencies に置く](architecture/wasm-target-scoped-dependencies.md) | 採用 |
 | [グラフライブラリを使わず SVG を自前で描く](architecture/no-chart-library-hand-rolled-svg.md) | 採用（`layout()` の置き場所は [グラフの座標計算を `chart_layout` に切り出してテスト可能にする](architecture/chart-layout-as-a-testable-module.md) で修正） |
-| [ヘルプの図を `assets/` の SVG に置き `include_str!` + `inner_html` で挿す](architecture/help-figures-as-included-svg.md) | 採用 |
+| [ヘルプの図を `assets/` の SVG に置き `include_str!` + `inner_html` で挿す](architecture/help-figures-as-included-svg.md) | 採用（アプリ自身の画面のスクショは [マニュアルの図は `public/` に配信するスクリーンショットにし、`<img>` で参照する](architecture/manual-figures-as-served-screenshots.md) で別扱い） |
 | [グラフの座標計算を `chart_layout` に切り出してテスト可能にする](architecture/chart-layout-as-a-testable-module.md) | 採用 |
 | [ブラウザサポートは Safari を基準にし、polyfill を入れない](architecture/browser-support-policy.md) | 採用 |
 | [読み込みと操作は実測して、何も入れないと決めた](architecture/measure-before-optimizing-and-do-nothing.md) | 採用 |
 | [アイコンに lucide を採り、`assets/icons/*.svg` を `include_str!` で埋め込む](architecture/lucide-icons-as-included-svg.md) | 採用 |
 | [i18n crate を入れず、`src/i18n.rs` の struct + `const` 2 枚で文言を持つ](architecture/i18n-hand-rolled-string-table.md) | 採用 |
+| [マニュアルの図は `public/` に配信するスクリーンショットにし、`<img>` で参照する](architecture/manual-figures-as-served-screenshots.md) | 採用 |
 
 ### data-model — データ構造と不変条件
 
@@ -118,6 +119,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [新機能のお知らせバナーを画面最上段に置く](ux/whats-new-banner-above-the-screen.md) | 採用 |
 | [チップでラベルを選ぶと履歴とコピーが切り替わる](ux/label-chips-switch-the-history-and-the-copy.md) | 採用（データ側は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)。決定 13「推移タブはスコープ外」と却下案「ラベルに色を持たせる」は [ラベルに色を持たせ、推移タブのデータ点をその色で描く](ux/label-colour-on-the-progress-dots.md) で改訂） |
 | [ラベルに色を持たせ、推移タブのデータ点をその色で描く](ux/label-colour-on-the-progress-dots.md) | 採用（2 つのラベル ADR の「推移タブはラベルを見ない」を改訂） |
+| [使い方マニュアルを設定タブの節にし、章は 1 つだけ開く](ux/manual-as-a-settings-section-with-one-open-chapter.md) | 採用 |
 
 ### deploy — 配信とブランチ運用
 
@@ -128,6 +130,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [`release` を `main` から派生させ orphan 運用にしない](deploy/release-branch-from-main.md) | 採用 |
 | [マージ方式を merge コミットのみに固定する](deploy/force-merge-commit-only.md) | 採用 |
 | [CI を `.githooks/pre-commit` で回す](deploy/ci-in-pre-commit.md) | 採用 |
+| [UI 関連パスを触ったコミットでだけスクリーンショットを撮り直す](deploy/screenshots-in-pre-commit-on-ui-paths.md) | 採用 |
 
 ### seo — 検索エンジンと SNS への見え方
 

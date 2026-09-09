@@ -5,6 +5,37 @@
 - **カテゴリ**: deploy
 - **関連**: [ワークフローファイルを書かない（ただし Actions 機能は無効化しない）](no-workflow-files.md), [UI 依存を wasm32 の target 別 dependencies に置く](../architecture/wasm-target-scoped-dependencies.md)
 
+> **追記（マニュアル節の時点）**
+> - **下の「決定」に貼ってある hook の丸写しはもう現物ではない。**
+>   `trunk build` と `npx playwright test` の間に撮影ブロックが挟まっている
+>   （[UI 関連パスを触ったコミットでだけスクリーンショットを撮り直す](screenshots-in-pre-commit-on-ui-paths.md)）。
+>   骨格（`docs/` ガード → fmt → clippy → test → build → playwright）は変わっていない
+> - **脱出口が 2 つになった。** `SKIP_HOOKS=1` は全部飛ばす。**`SHOTS=0` は撮影だけを
+>   飛ばす**（「撮り直したくないが fmt/clippy/test は通したい」に使う）。判定は
+>   `!= "0"` — `= "1"` だと `SHOTS=yes` で黙って飛ぶ
+> - **「実測が 60 秒を超えたら Playwright を release 側へ移す判断になる」の閾値は、
+>   マニュアル PR より前から超えていた。** 実測（同 PR の 5 コミット）:
+>
+>   | 触ったパス | 撮影 | Playwright | hook 全体 |
+>   |---|---|---|---|
+>   | `src/`（章の骨格と文言） | なし | 247 件 | 1.6 分 |
+>   | `scripts/shots.mjs` | なし | 247 件 | 1.8 分 |
+>   | `src/views/` 他（マニュアル UI） | なし | 247 件 | 1.1 分 |
+>   | `.githooks/`（hook 自身） | なし | 248 件 | 59.6 秒 |
+>   | `public/manual/` `src/`（図 + 寸法） | **あり（10 枚）** | 248 件 | **57.6 秒** |
+>
+>   **超過の主因は撮影ではなく E2E の件数**である。撮影ありの 57.6 秒のうち
+>   **Playwright が 52.2 秒**（262 件）を占めており、撮影の増分は差分ゼロのとき数秒に
+>   留まる（`--only=manual` 単体で 3.4 秒）。**「撮影の増分」と「hook 全体」を混ぜて
+>   読まないこと。** `src/` を触ると wasm の再ビルドが乗るので 1 分を超えるのは
+>   撮影の有無と無関係である
+> - **したがって「Playwright を release 側へ移す」判断は保留する。** 撮影を消しても
+>   50 秒台は動かないので、移すなら E2E そのものを削る話になる。順序としては
+>   (a) 図を 10 枚から減らす → (b) E2E を release 側へ寄せる
+> - **`--check` が新しい網として増えた。** `scripts/shots.mjs --check` は一時
+>   ディレクトリへ撮ってバイト比較する（13 枚で 4.1 秒）。rebase / マージでは
+>   pre-commit が走らないので、その穴の唯一の受け皿になる
+
 ## 背景
 
 本プロジェクトはワークフローファイルを書かない（[ワークフローファイルを書かない（ただし Actions 機能は無効化しない）](no-workflow-files.md)）。したがって自動検証はローカルの git hook に載せるしかない。

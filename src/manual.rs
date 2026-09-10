@@ -22,13 +22,15 @@ pub struct Chapter {
     ///   側へ置いてある。クリップが要素の外接矩形なので内容依存で、実際に `accordions`
     ///   は ja 786×1030 / en 786×994 と高さが違う（部位名の折り返し行数の差）。
     ///
-    /// 図を持たない 3 章（`progress-target` / `reorder` / `backup`）が `false` なのは、
-    /// 静止画で伝わらない（`reorder`）か、閉じた `<select>` しか写らない
-    /// （`progress-target`）か、文章で足りる（`backup`）ため。
+    /// 図を持たない 6 章（`progress-target` / `labels` / `drop-sets` / `reorder` /
+    /// `backup` / `whats-new`）が `false` なのは、静止画で伝わらない（`reorder`）か、
+    /// 閉じた `<select>` しか写らない（`progress-target`）か、文章で足りる
+    /// （`backup` / `whats-new`）か、この波ではまだ図を持たせない（`labels` /
+    /// `drop-sets`）ため。
     pub has_fig: bool,
 }
 
-/// マニュアルの章立て。8 章、`i18n.rs` の `Manual::chapters` と同じ順・同じ長さ
+/// マニュアルの章立て。11 章、`i18n.rs` の `Manual::chapters` と同じ順・同じ長さ
 /// （`every_language_has_the_same_manual_chapters` が突き合わせる）。
 pub const MANUAL_CHAPTERS: &[Chapter] = &[
     Chapter {
@@ -44,8 +46,16 @@ pub const MANUAL_CHAPTERS: &[Chapter] = &[
         has_fig: true,
     },
     Chapter {
+        id: "labels",
+        has_fig: false,
+    },
+    Chapter {
         id: "exercise-memo",
         has_fig: true,
+    },
+    Chapter {
+        id: "drop-sets",
+        has_fig: false,
     },
     Chapter {
         id: "empty-day",
@@ -61,6 +71,10 @@ pub const MANUAL_CHAPTERS: &[Chapter] = &[
     },
     Chapter {
         id: "backup",
+        has_fig: false,
+    },
+    Chapter {
+        id: "whats-new",
         has_fig: false,
     },
 ];

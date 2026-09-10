@@ -1059,6 +1059,17 @@ const JA_MANUAL: Manual = Manual {
             fig: Some((762, 618)),
         },
         ChapterText {
+            title: "種目ごとのラベル",
+            body: &[
+                "ラベルは種目ごとに定義します。場所は設定タブの「種目」→その種目の編集シートの「ラベル」です。1種目につき6個まで、名前は12文字まで登録できます。最初から入っている種目にはラベルが1つも無く、定義するまで記録タブの見た目は1pxも変わりません。用途は同じ種目で狙い（高重量・高回数など）を変えたいときです。",
+                "定義すると、記録タブのその種目のカードに、種目名の行のすぐ下・「前回までの記録」のすぐ上にチップの行が出ます。先頭のチップは「指定なし」で、これが既定です。「ラベルが無い記録だけ」ではなく「絞らない」という意味です。ラベルを選ぶと「前回までの記録」がそのラベルの回だけになり、「前回をコピー」で入る内容も選んでいるラベルの前回に変わります。",
+                "選んだラベルでの記録がまだ無ければ「記録なし」と出て、「前回をコピー」のボタンも出ません。ラベルなしの前回に勝手に落ちることはありません。「指定なし」に戻せば全部の記録が戻ります。ラベルは「その日・その種目に1つ」で、セット1本ごとには付けられません。ラベルを選んだだけでセットを1本も入れていない状態は保存されず、タブを移る・日付を変える・アプリを開き直すと「指定なし」に戻ります。",
+                "名前を空にしても定義は消えません。消すのは行の✕だけで、押すと確認が出ます。削除しても過去の記録は消えませんが、同じ名前で作り直しても過去の記録はそのラベルには戻りません。削除したラベルを選んでいた場合は「指定なし」として引き直されます。書き出すTSVには「ラベル」の列があります。",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
             title: "「＋ メモ」で開く4つ",
             body: &[
                 "種目カードの「＋ メモ」を押すと、ピン・インターバル（秒）・種目メモ・セット行ごとのメモ欄の4つが一度に開きます。閉じるときも「－ メモ」で4つまとめて畳まれます。",
@@ -1067,6 +1078,17 @@ const JA_MANUAL: Manual = Manual {
             ],
             fig_alt: "一斉に開いた4つの入力欄",
             fig: Some((718, 1024)),
+        },
+        ChapterText {
+            title: "ドロップセット",
+            body: &[
+                "セット行の回数欄のすぐ右にあるアイコン（下向きの矢印）を押すと、そのメインセットの下に段が1行増えます。「＋ メモ」を開かなくても押せます — 常にセット行に出ています。1段＝1行で、メインセットより少し右に字下げして出ます。番号が付かないのがメインセットとの違いです。",
+                "1段目の重量には、メインセットの重量から落とし幅ぶんを引いた値が先に入ります。落とし幅の既定は20%で、設定タブの「ドロップセット」で変えられます。2段目からは落とし幅を掛け直さず、前の段の重量をそのままコピーします。回数はどの段も空のまま入るので、挙げた回数を打ちます。重量が入っていないセット（自重種目など）では、段の重量も空のままです。段の行にある＋を押すと同じメインセットに段が増え、1つのメインセットにつき4段まで作れます。上限に達すると足す口そのものが消えます。段は行ごとの✕で消せ、段を足しただけで回数が空の行は保存されず、その行に「回数を入れると保存されます」と出ます。",
+                "推移タブは既定で段を含めません。落とした段まで数えると「前回と同じかそれ以上」の基準が日によって膨らむためです。含めるかどうかは設定タブの「ドロップセット」で切り替えられ、効く範囲は推移タブ全体（グラフ・前回比やベストなどの統計・記録の一覧）です。含めない設定のとき、その範囲に実際に段があると推移タブに「ドロップセットの段は含めていません（設定で変えられます）」と出ます。",
+                "記録タブの合計・カレンダー・月ごとの集計は、設定にかかわらず常に段も数えます。設定はあくまで推移タブの見せ方で、記録そのものは変えません。そのため同じ日でも記録タブと推移タブで合計が違って見えることがあります。「＋ セット」で足した行には段が付きませんが、「前回をコピー」・メニューの展開・日のコピーは段ごと持ってきます。種目カードの「前回までの記録」の行にはメインセットだけが出ます（段は出ません）。",
+            ],
+            fig_alt: "",
+            fig: None,
         },
         ChapterText {
             title: "空の日から始める",
@@ -1106,6 +1128,16 @@ const JA_MANUAL: Manual = Manual {
                 "読み込みは基本的に追加だけです。同じ日・同じ種目でセットの内容が食い違っている場合は、「セット数 → ボリューム → 各セットの中身」の順で比べて、多いほうが残ります。ファイル側が多ければ今ある記録が入れ替わり、確認画面に「入れ替わる記録があります」と出ます。逆に今ある記録のほうが多ければ何も起きず、「新しく取り込むものはありません」と出ます — この場合ファイルの内容は捨てられます。",
                 "取り込んだ直後なら「元に戻す」で戻せます。誤操作を防ぐため、押すと1度目は確認の表示に変わり、もう一度押すと実際に戻ります。シートを閉じるとその「元に戻す」の機会も失われます。",
                 "TSVには種目のID・色・並び順・アーカイブ状態は含まれません。記録された時刻の列は書き出されますが、読み込み時には使われません。",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "新機能のお知らせ",
+            body: &[
+                "新しい機能が入ると、画面の一番上に細い帯が出ます。記録・推移・設定のどのタブを開いても同じ位置に出ます。押すと、まだ読んでいないぶんをまとめて1枚で読めます。複数回ぶんたまっていても1回で読み切れます。",
+                "帯の✕を押すか、開いた画面を閉じると既読になり、その回のお知らせは二度と出ません。アプリの中に読み返す場所はありません。内容はREADMEとGitHubに残っているので、そちらで読めます。既読になるのは「閉じたとき」なので、開いたまま離れた場合は未読のまま次も出ます。",
+                "使い始めたばかりの端末や、この仕組みが入る前から使っている端末には、過去のお知らせは出ません。次に新しいお知らせが入ったときから出ます。",
             ],
             fig_alt: "",
             fig: None,
@@ -1155,6 +1187,17 @@ const EN_MANUAL: Manual = Manual {
             fig: Some((762, 618)),
         },
         ChapterText {
+            title: "Labels on an exercise",
+            body: &[
+                "Labels are defined per exercise, from Settings → \"Exercises\" → that exercise's edit sheet → \"Labels.\" Each exercise can have up to 6 labels, with names up to 12 characters. Exercises that come with the app have no labels at all, and the Record tab looks exactly the same until you define one. They exist for switching the goal on the same exercise — heavy weight vs. high reps, for example.",
+                "Once defined, a row of chips appears on that exercise's card on the Record tab, just below the exercise name and just above \"Past records.\" The first chip is \"Any,\" and it's the default — it means \"no filter,\" not \"only records with no label.\" Picking a label narrows \"Past records\" to sessions with that label, and \"Copy last time\" then copies from the last session with that label.",
+                "If there are no records yet with the chosen label, it shows \"No records\" and the \"Copy last time\" button doesn't appear either — it never silently falls back to the most recent record with no label. Switching back to \"Any\" brings all records back. A label applies to \"one exercise, one day\" — you can't attach one per set. Picking a label without entering a single set isn't saved; switching tabs, changing the date, or reopening the app resets it back to \"Any.\"",
+                "Clearing the name doesn't delete the label — only the ✕ on its row does, and it asks for confirmation first. Deleting a label doesn't delete past records, but recreating one with the same name doesn't reattach those old records to it either. If a deleted label was selected, it's redrawn as \"Any.\" The exported TSV has a \"Label\" column.",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
             title: "The four things \"+ Note\" opens",
             body: &[
                 "Tapping \"+ Note\" on an exercise card opens four things at once: pins, interval (in seconds), the exercise note, and a note field for each set row. \"- Note\" folds all four back up together.",
@@ -1163,6 +1206,17 @@ const EN_MANUAL: Manual = Manual {
             ],
             fig_alt: "The four fields opened at once",
             fig: Some((718, 1024)),
+        },
+        ChapterText {
+            title: "Drop sets",
+            body: &[
+                "Tapping the icon (a down arrow) just to the right of a set row's reps field adds one drop below that main set. You can tap it without opening \"+ Note\" — it's always on the set row. Each drop is one row, indented slightly to the right of the main set, and — unlike a main set — it has no number.",
+                "The first drop's weight is prefilled as the main set's weight minus the drop percentage. The default percentage is 20% and can be changed under \"Drop sets\" in Settings. From the second drop onward, the percentage isn't reapplied — each drop just copies the weight from the drop above it. Reps always start empty on every drop, so you type in what you actually lifted. For sets with no weight (bodyweight exercises, for example), a drop's weight also starts empty. Tapping the + on a drop's row adds another drop to the same main set, up to 4 drops per main set — once you hit that limit, the + itself disappears. Each drop can be removed with its own ✕, and a drop you've added but left with empty reps isn't saved; that row shows \"Enter reps and this set is saved.\"",
+                "The Progress tab excludes drops by default, since counting the dropped weight too would inflate the \"same as or more than last time\" baseline on days that happen to have drops. Whether to include them is toggled under \"Drop sets\" in Settings, and it affects the whole Progress tab — the chart, stats like the last-time comparison and bests, and the record list. When drops are excluded and the visible range actually has some, the Progress tab shows \"Drop sets are not included. You can change this in Settings.\"",
+                "The Record tab's totals, calendar, and monthly aggregates always count drops regardless of the setting — the setting only changes how the Progress tab presents things, not the records themselves. Because of that, the same day's total can look different between the Record tab and the Progress tab. A row added with \"+ Set\" never gets a drop, but \"Copy last time,\" expanding a routine, and copying a day all bring drops along with them. The exercise card's \"Past records\" row shows only the main set — drops don't appear there.",
+            ],
+            fig_alt: "",
+            fig: None,
         },
         ChapterText {
             title: "Starting from an empty day",
@@ -1202,6 +1256,16 @@ const EN_MANUAL: Manual = Manual {
                 "Importing only ever adds. When the same day and exercise have sets that disagree, they are compared in order — set count, then volume, then the contents of each set — and the larger one wins. If the file has more, it replaces what you already have, and the confirmation screen says so. If what you already have is larger, nothing happens and the screen says there is nothing new to import — in that case the file's version is discarded.",
                 "Right after an import, \"Undo\" can reverse it. To guard against a stray tap, the first press only arms a confirmation, and a second press actually undoes it. Closing the sheet gives up that chance to undo.",
                 "A TSV file does not include an exercise's ID, color, sort order, or archived state. The time-of-day column is written on export but is not read back on import.",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "What's new",
+            body: &[
+                "When a new feature ships, a thin banner appears at the very top of the screen — in the same place whether you're on the Record, Progress, or Settings tab. Tapping it lets you read everything you haven't seen yet as one sheet, even if several releases have piled up.",
+                "Closing the banner with its ✕, or closing the sheet it opens, marks it read — that release's announcement never shows again. There's no place inside the app to read it back later; the content stays in the README and on GitHub, so you can read it there instead. Since it's marked read only when you close it, leaving it open and walking away keeps it unread, and it shows again next time.",
+                "On a device you just started using, or one you were already using before this feature existed, past announcements don't appear — it only starts showing from the next new announcement onward.",
             ],
             fig_alt: "",
             fig: None,

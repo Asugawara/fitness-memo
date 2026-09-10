@@ -1254,6 +1254,13 @@ struct LabelRow {
     key: u32,
     id: LabelId,
     name: String,
+    /// 推移タブのデータ点の色（`#rrggbb`）。
+    /// adr/ux/label-colour-on-the-progress-dots.md
+    ///
+    /// ★ **`name` と違って空欄の概念が無い。** `<input type="color">` は常に
+    /// `#rrggbb` を返し、`core::clean_labels` が既定色を保証するので、この欄が
+    /// 空になるのは `＋` で足した直後だけ（`add_label` がその場でパレットから振る）。
+    color: String,
 }
 
 #[component]
@@ -1308,6 +1315,7 @@ fn ExerciseEditor(
                 key: i as u32,
                 id: l.id,
                 name: l.name,
+                color: l.color,
             })
             .collect::<Vec<_>>(),
     );
@@ -1335,15 +1343,14 @@ fn ExerciseEditor(
                 rs.iter()
                     .map(|r| Label {
                         id: r.id,
-                        // ★ C5 で行の色（`r.color`）に差し替える。それまでは保存値を
-                        //   写す — `String::new()` を送ると `clean_labels` が
-                        //   毎 commit パレットから振り直し、**1 打鍵ごとに色が
-                        //   ローテーションする**
-                        color: saved
-                            .iter()
-                            .find(|l| l.id == r.id)
-                            .map(|l| l.color.clone())
-                            .unwrap_or_default(),
+                        // ★ **色は空名の行でも `saved` に落とさず、行の値をそのまま
+                        //   送る。** 名前だけ `saved` を再送するのは「✕ が唯一の削除
+                        //   経路」を守るためで（上の ★）、色にはその危険が無い —
+                        //   `clean_labels` が色で行を落とすことはない。むしろ落とすと
+                        //   **色ピッカーを触った直後の空名行で色が巻き戻る**
+                        //   （色を変えてから名前を打つ、という順序で必ず踏む）。
+                        //   この非対称は意図的
+                        color: r.color.clone(),
                         name: if r.name.trim().is_empty() {
                             saved
                                 .iter()
@@ -1433,14 +1440,37 @@ fn ExerciseEditor(
         next_label_key.set(key + 1);
         duplicate_label.set(false);
         label_rows.update(|rs| {
+            // ★ **既定色はその場で振る。** `core::clean_labels` も同じ規則で埋めるが、
+            //   新規行は名前が空なので commit を通らず `Db` に届かない = 画面の
+            //   色ピッカーが `#000000` のまま残る。`rs` の色を見て採るので、
+            //   ✕ で 1 本消してから ＋ で足しても残った行と同じ色にならない
+            let color =
+                crate::core::next_label_color(rs.iter().map(|r| r.color.as_str())).to_string();
             rs.push(LabelRow {
                 key,
                 // ★ **新規だけ採番する。** 既存行は `db` から写した ID のまま
                 id: storage::alloc_id(),
                 name: String::new(),
+                color,
             })
         });
         // 空欄は `set_labels` が落とすので commit は要らない（`add_pin` と同じ）
+    };
+
+    // ★ **書き込みは `on:input`**（`group-color` と同じ）。`change_label` が
+    //   `on:change` なのは重複判定のためで、色に重複の概念は無い
+    //   （`clean_labels` は同色を潰さない）。ネイティブの色ピッカーは開いている
+    //   あいだ `input` を連射するが、`save_debounced` が保存回数を吸収する。
+    //
+    // ★ **`duplicate_label` を触らない。** 色は重複警告の対象外なので、色を変えた
+    //   だけで名前の重複警告が消えると「直したつもり」の誤解を生む。
+    let change_label_color = move |key: u32, value: String| {
+        label_rows.update(|rs| {
+            if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                r.color = value;
+            }
+        });
+        commit_labels();
     };
 
     // ★ **確認を挟む。** `remove_pin` に確認が無いのは消えるのが数字 1 個だから。
@@ -1506,12 +1536,43 @@ fn ExerciseEditor(
                 <For
                     each=move || {
                         label_rows
-                            .with(|rs| rs.iter().map(|r| (r.key, r.name.clone())).collect::<Vec<_>>())
+                            .with(|rs| {
+                                rs.iter()
+                                    .map(|r| (r.key, r.name.clone(), r.color.clone()))
+                                    .collect::<Vec<_>>()
+                            })
                     }
-                    key=|(key, _)| *key
-                    children=move |(key, value)| {
+                    key=|(key, _, _)| *key
+                    children=move |(key, value, color)| {
                         view! {
                             <span class="lbl-chip">
+                                // ★ 名前入力の**前**に置く。丸い色見本 → 名前 → ✕ の順は
+                                //   推移タブのチップ（`<span class="dot">` + 名前）と同じ
+                                //   並びで、設定シートで選んだ色がどこに出るかが読める
+                                <input
+                                    class="lbl-color"
+                                    type="color"
+                                    value=color
+                                    // ★ `kb_focus` / `kb_blur` は付けない。色ピッカーは
+                                    //   ソフトキーボードを出さないので、付けると
+                                    //   ボトムタブが理由なく退避する（`group-color` と同じ）
+                                    aria-label=move || {
+                                        cur_lang()
+                                            .color_of(
+                                                &label_rows
+                                                    .with(|rs| {
+                                                        rs.iter()
+                                                            .find(|r| r.key == key)
+                                                            .map(|r| r.name.clone())
+                                                            .unwrap_or_default()
+                                                    }),
+                                            )
+                                    }
+                                    data-testid="label-color"
+                                    on:input=move |ev| {
+                                        change_label_color(key, event_target_value(&ev))
+                                    }
+                                />
                                 <input
                                     class="text-input lbl-name"
                                     // ★ `inputmode` を付けない = IME 付きのフルキーボードが

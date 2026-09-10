@@ -853,6 +853,14 @@ pub fn Progress() -> impl IntoView {
                                         key=|l: &Label| l.id
                                         children=move |l| {
                                             let id = l.id;
+                                            // ★ `colors` Memo と**同じ防御**を通す。`--dot:` が空文字で
+                                            //   載ると `var(--dot, var(--muted))` のフォールバックが
+                                            //   効かず丸が黒くなる（`var()` は「値が空」を「未定義」と
+                                            //   見ない）。`clean_labels` が既定色を保証しているので
+                                            //   通常は起きないが、`ex_labels` を直に読むこの経路だけ
+                                            //   素通しにすると規則が 2 本に割れる
+                                            let dot = core::is_hex_color(&l.color)
+                                                .then(|| format!("--dot:{}", l.color));
                                             view! {
                                                 <button
                                                     class="lbl"
@@ -866,10 +874,7 @@ pub fn Progress() -> impl IntoView {
                                                     data-testid="progress-label-chip"
                                                     on:click=move |_| label_sel.set(Some(id))
                                                 >
-                                                    <span
-                                                        class="dot"
-                                                        style=format!("--dot:{}", l.color)
-                                                    ></span>
+                                                    <span class="dot" style=dot></span>
                                                     {l.name.clone()}
                                                 </button>
                                             }

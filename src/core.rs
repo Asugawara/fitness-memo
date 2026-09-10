@@ -2038,8 +2038,10 @@ pub fn is_hex_color(s: &str) -> bool {
 /// ★ 大文字小文字を無視して比べる。手編集の JSON や取り込みで `#E0524A` が
 /// 入っていても「使用済み」と数える（同じ色なのに違う扱いにしない）。
 ///
-/// 6 色を使い切ったら重複を許して `n % 6` に落ちる。[`crate::model::MAX_LABELS`]
-/// まで色を増やすほうが不便で、7 本目からは名前で見分ける前提。
+/// 6 色を使い切ったら重複を許して `n % 6` に落ちる。ただし
+/// [`crate::model::MAX_LABELS`] が 6 でパレットも 6 色なので、**現状この枝には
+/// 到達しない**（[`clean_labels`] も [`merge_labels`] も 6 本で切る）。上限を
+/// 増やしたときに関数が答えを返せなくなるのを避けるための逃げ道として置いてある。
 pub fn next_label_color<'a>(used: impl IntoIterator<Item = &'a str>) -> &'static str {
     let used: Vec<String> = used.into_iter().map(|c| c.to_ascii_lowercase()).collect();
     let palette = crate::presets::LABEL_COLOR_CHOICES;
@@ -2067,6 +2069,14 @@ pub fn next_label_color<'a>(used: impl IntoIterator<Item = &'a str>) -> &'static
 /// - **同名は潰さない**（`merge_db` が正当に生む）。**並べ替えない**（`Vec` 順 = 表示順）
 /// - **色が `#rrggbb` でなければ [`next_label_color`] で埋める**（旧版の JSON・TSV 取込・
 ///   手編集の入口をここ 1 箇所で塞ぐ）。有効な色は同色でも書き換えない
+///
+/// ★ **色を埋めるのは 2 パス目。** 1 パス目で空名を落として ID を整え、
+/// 2 パス目で埋める。1 パスで前方（`out`）の色だけを見ると、
+/// `[{color: ""}, {color: "#e0524a"}]` のように**無効な色が先・有効な色が後ろ**という
+/// 並びで 1 本目がパレットの先頭を取り、2 本目は有効なので据え置かれて**同色 2 本**が
+/// できる。画面からは作れない（`add_label` が常に色を振る）が、手編集の JSON や
+/// 色欄が一部欠けたファイルの取り込みでは起きうる。「利用者が選んでいないのに重複する」
+/// のは説明できないので、**入力全体の有効な色を先に「使用済み」として集める**。
 fn clean_labels(labels: Vec<Label>, ids: &mut IdGen) -> Vec<Label> {
     let mut out: Vec<Label> = Vec::with_capacity(labels.len().min(MAX_LABELS));
     for mut l in labels {
@@ -2081,12 +2091,22 @@ fn clean_labels(labels: Vec<Label>, ids: &mut IdGen) -> Vec<Label> {
         if out.iter().any(|o| o.id == l.id) {
             l.id = ids.alloc();
         }
-        // ★ **有効な色は同色でも触らない。** 利用者が 2 本を同じ色にしたなら、それは
-        //   選択であって壊れた値ではない。埋めるのは「持っていない」ときだけ
-        if !is_hex_color(&l.color) {
-            l.color = next_label_color(out.iter().map(|o| o.color.as_str())).into();
-        }
         out.push(l);
+    }
+
+    // ★ **有効な色は同色でも触らない。** 利用者が 2 本を同じ色にしたなら、それは
+    //   選択であって壊れた値ではない。埋めるのは「持っていない」ときだけ。
+    //   使用済みの集合は**残す行すべて**（後ろの行も含む）から始め、埋めた色も足していく
+    let mut used: Vec<String> = out
+        .iter()
+        .filter(|l| is_hex_color(&l.color))
+        .map(|l| l.color.clone())
+        .collect();
+    for l in &mut out {
+        if !is_hex_color(&l.color) {
+            l.color = next_label_color(used.iter().map(String::as_str)).into();
+            used.push(l.color.clone());
+        }
     }
     out
 }
@@ -11515,6 +11535,40 @@ mod tests {
             got.iter().map(|l| l.color.as_str()).collect::<Vec<_>>(),
             ["#123456", "#123456", "#ABCDEF"]
         );
+    }
+
+    /// ★ **色を埋めるのは 2 パス目**であることの主張。1 パスで前方（`out`）の色だけを
+    /// 見ると、**無効な色が先・有効な色が後ろ**という並びで 1 本目がパレットの先頭を
+    /// 取り、2 本目は有効なので据え置かれて同色 2 本ができる。画面からは作れないが、
+    /// 手編集の JSON や色欄が一部欠けたファイルの取り込みでは起きうる経路。
+    #[test]
+    fn clean_labels_does_not_collide_with_a_valid_colour_that_comes_later() {
+        let got = clean_labels(
+            vec![
+                colored(1, "H", ""),
+                // 2 本目はパレットの先頭色を**有効な値として**持っている
+                colored(2, "P", palette(0)),
+                colored(3, "S", ""),
+                // 大文字違いも「使用済み」として数える
+                colored(4, "T", palette(1).to_uppercase().as_str()),
+            ],
+            &mut ids(),
+        );
+        let colors: Vec<&str> = got.iter().map(|l| l.color.as_str()).collect();
+        assert_eq!(
+            colors,
+            [
+                palette(2),
+                palette(0),
+                palette(3),
+                &palette(1).to_uppercase()
+            ],
+            "後ろの行の有効な色を「使用済み」に数えていない"
+        );
+        // 大文字小文字を無視して見ても 4 色が全部違う
+        let lower: std::collections::HashSet<String> =
+            colors.iter().map(|c| c.to_ascii_lowercase()).collect();
+        assert_eq!(lower.len(), 4, "同じ色のラベルが 2 本並んだ: {colors:?}");
     }
 
     #[test]

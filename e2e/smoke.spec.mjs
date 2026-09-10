@@ -80,17 +80,58 @@ async function openGroup(page, name) {
   return item;
 }
 
+/**
+ * 「種目を追加」シートの部位アコーディオンを、目当ての種目が出るまで順に開く。
+ * `{ group, pick }` を返す（`group` は開いた `pick-group`、`pick` は種目のボタン）。
+ *
+ * ★ シートは**開くたびに全部閉じている**し、同時に開けるのは 1 つ
+ *   （adr/ux/record-add-sheet-groups-as-single-open-accordion.md）。閉じた部位の
+ *   `pick-exercise` は DOM に無いので、名前で引く前に必ずここを通す。
+ * ★ **押す前に `aria-expanded` を見る。** トグルなので、既に開いている部位を押すと
+ *   閉じる（同じシートで 2 回呼ぶテストがこれを踏む）。`openGroup` と同じ作法。
+ * ★ **部位名の表を持たない。** 順に開けば前のは勝手に閉じるので、どの種目がどの部位かを
+ *   テスト側で知らずに済む。英語 UI（i18n.spec）やテスト中に作った種目にも効く。
+ * ★ **探索は `pick-group` の中に閉じる。** シート全体で `pick-exercise` を数えると、
+ *   直前に開いていた部位の DOM が残っている一瞬を掴んで黙って部位を飛ばす。
+ * ★ `first()` の可視待ちが同期点。**0 種目の部位はシートに出ない**ので、開いた部位には
+ *   必ず 1 個以上ある（この前提が崩れるとここで固まる）。
+ * ★ **「無いこと」の確認にこれを使わない**（見つからないと throw する）。その場合は
+ *   `addSheetGroup` で部位を絞ってから数える。
+ */
+async function openPickGroupFor(page, name) {
+  const sheet = page.getByTestId('add-sheet');
+  const groups = sheet.getByTestId('pick-group');
+  const n = await groups.count();
+  expect(n, 'シートに部位が 1 つも出ていない').toBeGreaterThan(0);
+  for (let i = 0; i < n; i++) {
+    const group = groups.nth(i);
+    const toggle = group.getByTestId('pick-group-toggle');
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+    await expect(group.getByTestId('pick-exercise').first()).toBeVisible();
+    const pick = group.getByTestId('pick-exercise').filter({ hasText: exactText(name) });
+    if (await pick.count()) return { group, pick };
+  }
+  throw new Error(`「種目を追加」シートに ${name} が無い`);
+}
+
+/** 「種目を追加」シートの部位ブロック 1 つ。名前は完全一致で絞る。 */
+function addSheetGroup(page, name) {
+  return page
+    .getByTestId('add-sheet')
+    .getByTestId('pick-group')
+    .filter({
+      has: page.getByTestId('pick-group-name').filter({ hasText: exactText(name) }),
+    });
+}
+
 /** 「種目を追加」シートからプリセットを選び、追加されたカードを返す。 */
 async function addExercise(page, name) {
   // ★ 入力欄にフォーカスが残ると .kb-open で追加ボタンごと隠れる（iOS でキーボードの
   //   裏に回るのを避ける仕様）。連続で種目を足すテストのために毎回 blur してから押す
   await blurActive(page);
   await page.getByTestId('add-exercise').click();
-  await page
-    .getByTestId('add-sheet')
-    .getByTestId('pick-exercise')
-    .filter({ hasText: exactText(name) })
-    .click();
+  const { pick } = await openPickGroupFor(page, name);
+  await pick.click();
   return page.getByTestId('exercise-card');
 }
 
@@ -188,12 +229,21 @@ test('1. 初回起動でプリセットが投入され記録タブが出る', as
   await expect(page.getByTestId('elapsed')).toHaveText('—');
   await expect(page.getByTestId('group-chip')).toHaveCount(6);
 
-  // プリセットが投入されている（胸=ベンチプレス、背中=懸垂）ことをシートで確認
+  // プリセットが投入されている（胸=ベンチプレス、背中=懸垂）ことをシートで確認。
+  // ★ 同時に開けるのは 1 つなので、2 つの部位を続けて開いて 1 つずつ見る
+  //   （adr/ux/record-add-sheet-groups-as-single-open-accordion.md）
   await page.getByTestId('add-exercise').click();
   const sheet = page.getByTestId('add-sheet');
   await expect(sheet).toBeVisible();
-  await expect(sheet.getByTestId('pick-exercise').filter({ hasText: exactText('ベンチプレス') })).toBeVisible();
-  await expect(sheet.getByTestId('pick-exercise').filter({ hasText: exactText('懸垂') })).toBeVisible();
+  await expect(sheet.getByTestId('pick-group')).toHaveCount(6);
+  const chest = await openPickGroupFor(page, 'ベンチプレス');
+  await expect(chest.pick).toBeVisible();
+  await expect(chest.group.getByTestId('pick-group-name')).toHaveText('胸');
+  const back = await openPickGroupFor(page, '懸垂');
+  await expect(back.pick).toBeVisible();
+  await expect(back.group.getByTestId('pick-group-name')).toHaveText('背中');
+  // 背中を開いた時点で胸は閉じている（排他）
+  await expect(chest.group.getByTestId('pick-exercise')).toHaveCount(0);
 });
 
 test('2. 種目を追加してセットを2行入力すると指標表示が正しい（60×10 + 60×8 = 1,080）', async ({ page }) => {
@@ -684,11 +734,7 @@ test('10. 同じ日に同じ種目を再度追加してもカードは増えず�
   // 既に追加済みの種目をもう一度ピックしても新規カードは作られない
   await blurActive(page);
   await page.getByTestId('add-exercise').click();
-  await page
-    .getByTestId('add-sheet')
-    .getByTestId('pick-exercise')
-    .filter({ hasText: exactText('ベンチプレス') })
-    .click();
+  await (await openPickGroupFor(page, 'ベンチプレス')).pick.click();
 
   await expect(page.getByTestId('exercise-card')).toHaveCount(1);
   // 新規カードへの置き換えではなく既存カードのままであることの確認（入力内容が保持される）
@@ -735,14 +781,19 @@ test('11. 設定タブでの改名・部位変更・新規追加が記録タブ�
   // 今日タブの「種目を追加」シートに、改名後の名前・新規種目の両方が反映されている
   await page.getByTestId('tab-record').click();
   await page.getByTestId('add-exercise').click();
-  const addSheet = page.getByTestId('add-sheet');
-  await expect(addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('サイドレイズ改') })).toBeVisible();
-  await expect(addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('サイドレイズ') })).toHaveCount(0);
-  await expect(addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('テスト種目') })).toBeVisible();
+  // ★ 「無いこと」は開いた部位の中で数える。シート全体で数えると、閉じている部位の
+  //   種目も 0 件なので**改名が効いていなくても通ってしまう**
+  const shoulder = await openPickGroupFor(page, 'サイドレイズ改');
+  await expect(shoulder.pick).toBeVisible();
+  await expect(
+    shoulder.group.getByTestId('pick-exercise').filter({ hasText: exactText('サイドレイズ') }),
+  ).toHaveCount(0);
 
   // ★ 推移の候補は「記録がある種目」だけなので、アーカイブ後も参照できることを
   //   確かめるには先に 1 件記録しておく必要がある
-  await addSheet.getByTestId('pick-exercise').filter({ hasText: exactText('テスト種目') }).click();
+  const testEx = await openPickGroupFor(page, 'テスト種目');
+  await expect(testEx.group.getByTestId('pick-group-name')).toHaveText('テスト部位');
+  await testEx.pick.click();
   const testCard = page
     .getByTestId('exercise-card')
     .filter({ has: page.getByTestId('card-name').filter({ hasText: exactText('テスト種目') }) });
@@ -766,6 +817,11 @@ test('11. 設定タブでの改名・部位変更・新規追加が記録タブ�
 
   await page.getByTestId('tab-record').click();
   await page.getByTestId('add-exercise').click();
+  // ★ **部位ごと消える。** 「テスト部位」の種目はこれ 1 つだったので、アーカイブすると
+  //   中身が 0 になる。0 件の部位はシートに出さない
+  //   （adr/ux/record-add-sheet-groups-as-single-open-accordion.md）。
+  //   pick-exercise を数えるだけだと、畳んだ時点で 0 件なので空振りする
+  await expect(addSheetGroup(page, 'テスト部位')).toHaveCount(0);
   await expect(
     page.getByTestId('add-sheet').getByTestId('pick-exercise').filter({ hasText: exactText('テスト種目') }),
   ).toHaveCount(0);
@@ -1585,15 +1641,119 @@ test('メモを使っていないデータの保存 JSON に note キーが増�
 //   「シートの下端が押せること」「シート表示中に裏のタブへ抜けないこと」が要件そのもので、
 //   実装をどう変えても守られるべきだから。手書きの重なり順に戻れば再び落ちる。
 
+// ── 「種目を追加」シートの部位アコーディオン ──────────────────────────────────
+// adr/ux/record-add-sheet-groups-as-single-open-accordion.md
+
+test('「種目を追加」シートは既定で全部閉じており、部位のヘッダだけが並ぶ', async ({ page }) => {
+  await page.getByTestId('add-exercise').click();
+  const sheet = page.getByTestId('add-sheet');
+
+  await expect(sheet.getByTestId('pick-group')).toHaveCount(6);
+  // 閉じている部位の種目は DOM に無い（display:none ではない）
+  await expect(sheet.getByTestId('pick-exercise')).toHaveCount(0);
+  const toggles = sheet.getByTestId('pick-group-toggle');
+  for (let i = 0; i < 6; i++) {
+    await expect(toggles.nth(i)).toHaveAttribute('aria-expanded', 'false');
+  }
+  // 閉じていても件数はヘッダに出る（肩は 4 種目）
+  await expect(addSheetGroup(page, '肩')).toContainText('4 種目');
+});
+
+test('部位を押すとその部位の種目だけが開き、もう 1 つ押すと前のが閉じる（同時に 1 つ）', async ({ page }) => {
+  await page.getByTestId('add-exercise').click();
+  const sheet = page.getByTestId('add-sheet');
+  const chest = addSheetGroup(page, '胸');
+  const legs = addSheetGroup(page, '脚');
+
+  await chest.getByTestId('pick-group-toggle').click();
+  await expect(chest.getByTestId('pick-group-toggle')).toHaveAttribute('aria-expanded', 'true');
+  await expect(chest.getByTestId('pick-exercise')).toHaveCount(5);
+  // 開いているのは胸だけ
+  await expect(sheet.getByTestId('pick-exercise')).toHaveCount(5);
+
+  await legs.getByTestId('pick-group-toggle').click();
+  await expect(legs.getByTestId('pick-group-toggle')).toHaveAttribute('aria-expanded', 'true');
+  await expect(chest.getByTestId('pick-group-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await expect(chest.getByTestId('pick-exercise')).toHaveCount(0);
+  await expect(sheet.getByTestId('pick-exercise')).toHaveCount(5);
+});
+
+test('開いている部位をもう一度押すと閉じる', async ({ page }) => {
+  await page.getByTestId('add-exercise').click();
+  const chest = addSheetGroup(page, '胸');
+  const toggle = chest.getByTestId('pick-group-toggle');
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(chest.getByTestId('pick-exercise')).toHaveCount(0);
+});
+
+test('★ シートを開き直すと必ず全部閉じている（✕ / Esc / 種目を選んで閉じた場合とも）', async ({ page }) => {
+  const sheet = page.getByTestId('add-sheet');
+  const chest = addSheetGroup(page, '胸');
+
+  // ★ <dialog> は常時マウントなので、開くたびに畳んでいないと開いたままで出る。
+  //   このテストが `open_sheet`（views::day）の存在理由そのもの
+  for (const close of [
+    async () => page.getByTestId('add-sheet-close').click(),
+    async () => page.keyboard.press('Escape'),
+  ]) {
+    await page.getByTestId('add-exercise').click();
+    await chest.getByTestId('pick-group-toggle').click();
+    await expect(chest.getByTestId('pick-group-toggle')).toHaveAttribute('aria-expanded', 'true');
+    await close();
+    await expect(sheet).toBeHidden();
+
+    await page.getByTestId('add-exercise').click();
+    await expect(sheet.getByTestId('pick-exercise')).toHaveCount(0);
+    await page.getByTestId('add-sheet-close').click();
+  }
+
+  // 種目を選んで閉じた経路（`pick()` の sheet.set(false)）も同じ
+  await page.getByTestId('add-exercise').click();
+  await (await openPickGroupFor(page, 'ベンチプレス')).pick.click();
+  await expect(page.getByTestId('exercise-card')).toHaveCount(1);
+
+  await blurActive(page);
+  await page.getByTestId('add-exercise').click();
+  await expect(sheet.getByTestId('pick-exercise')).toHaveCount(0);
+});
+
+test('シートで開いた部位は、設定タブの種目一覧に漏れない（signal を共有していない）', async ({ page }) => {
+  // ★ OpenGroupCtx はアプリ全体で 1 本なので、共有すると両方が同時に開く。
+  //   追加シートは DayEditor ローカルの signal を持つ
+  await page.getByTestId('add-exercise').click();
+  await addSheetGroup(page, '胸').getByTestId('pick-group-toggle').click();
+  await expect(addSheetGroup(page, '胸').getByTestId('pick-group-toggle')).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
+  await page.getByTestId('add-sheet-close').click();
+
+  await openSettingsSection(page, 'exercises');
+  await expect(groupItem(page, '胸').getByTestId('group-toggle')).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+});
+
 test('「種目を追加」シート最下部（体幹の最後の種目）がタブバーに隠れずクリックできる', async ({ page }) => {
   await page.getByTestId('add-exercise').click();
   const sheet = page.getByTestId('add-sheet');
   await expect(sheet).toBeVisible();
 
+  // ★ 部位は既定で全部閉じているので、最後の部位を開いてから最下部を取る
+  //   （adr/ux/record-add-sheet-groups-as-single-open-accordion.md）。シートは
+  //   下端貼りなので、中身が短くなっても「シートの一番下を踏む」検証としては等価
+  const lastGroup = sheet.getByTestId('pick-group').last();
+  await lastGroup.getByTestId('pick-group-toggle').click();
+
   // force を付けない: z-index が外れてタブバーに覆われた瞬間、ヒットターゲット判定で
   // 落ちてこの click がタイムアウトする。プリセット順で体幹の最後（レッグレイズ）が
   // 対象になるが、対象が何であれ「シートの一番下」を踏むことが重要
-  const lastPick = sheet.getByTestId('pick-exercise').last();
+  const lastPick = lastGroup.getByTestId('pick-exercise').last();
   await lastPick.scrollIntoViewIfNeeded();
   await lastPick.click();
 
@@ -1737,7 +1897,7 @@ test('記録タブの h1 は 1 個だけで、選択日は h2 にぶら下がる
   await expect(page.getByTestId('today-date')).toHaveJSProperty('tagName', 'H2');
 
   await page.getByTestId('add-exercise').click();
-  await page.getByTestId('pick-exercise').first().click();
+  await (await openPickGroupFor(page, 'ベンチプレス')).pick.click();
   await expect(page.getByTestId('card-name').first()).toHaveJSProperty('tagName', 'H3');
 });
 
@@ -1986,7 +2146,7 @@ async function openAllPickGroups(scope) {
 }
 
 /** メニュー編集シートの部位アコーディオン 1 つ。名前は完全一致で絞る。 */
-function pickGroup(page, name) {
+function routinePickGroup(page, name) {
   return page.getByTestId('routine-group-toggle').filter({
     has: page.getByTestId('routine-group-name').filter({ hasText: exactText(name) }),
   });
@@ -2366,8 +2526,8 @@ test('種目ピッカーは既定で全部閉じており、部位は複数同�
   await page.getByTestId('settings-add-routine').click();
   await expect(page.getByTestId('settings-sheet')).toBeVisible();
 
-  const chest = pickGroup(page, '胸');
-  const legs = pickGroup(page, '脚');
+  const chest = routinePickGroup(page, '胸');
+  const legs = routinePickGroup(page, '脚');
 
   // 既定で全部閉じている（開いている部位にしか種目ボタンは無い）
   await expect(page.getByTestId('routine-group-toggle')).toHaveCount(6);
@@ -2410,8 +2570,8 @@ test('シートで開いた部位は、設定タブの種目一覧にも記録�
   //   共有すると「メニューを組むために開いた胸」が種目一覧でも開きっぱなしになる
   await openSettingsSection(page, 'routines');
   await page.getByTestId('settings-add-routine').click();
-  await pickGroup(page, '胸').click();
-  await expect(pickGroup(page, '胸')).toHaveAttribute('aria-expanded', 'true');
+  await routinePickGroup(page, '胸').click();
+  await expect(routinePickGroup(page, '胸')).toHaveAttribute('aria-expanded', 'true');
   await page.getByTestId('settings-sheet-close').click();
   await expect(page.getByTestId('settings-sheet')).toBeHidden();
 
@@ -2789,10 +2949,11 @@ test('★ 設定タブの入口は節の一覧で、中身は入るまで出な�
   await blurActive(page);
   await page.getByTestId('tab-settings').click();
 
-  // トップは 6 行だけ（書き出し / メニュー / 種目 / 表示数 / ホーム画面 / 言語）。
+  // トップは 7 行だけ
+  // （書き出し / メニュー / 種目 / 表示数 / ドロップセット / ホーム画面 / 言語）。
   // 種目もメニューも 1 件も出ていない
   // （`.row` で数える。手順シートの <dialog> も同じ親に出るので `> *` だと 1 多くなる）
-  await expect(page.getByTestId('settings-rows').locator('.row')).toHaveCount(6);
+  await expect(page.getByTestId('settings-rows').locator('.row')).toHaveCount(7);
   await expect(page.getByTestId('group-item')).toHaveCount(0);
   await expect(page.getByTestId('routine-item')).toHaveCount(0);
   await expect(page.getByTestId('settings-add-group')).toHaveCount(0);

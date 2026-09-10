@@ -130,6 +130,9 @@ pub struct S {
     pub help: Help,
     /// `views/backup.rs` — エクスポート / インポート
     pub backup: Backup,
+    /// `views/whatsnew.rs` — 新機能のお知らせバナーとシート。お知らせ本文自体は
+    /// [`RELEASES`] にある（あちらは文言ではなくデータなので表に持たない）
+    pub releases: Releases,
 }
 
 const JA: S = S {
@@ -143,6 +146,7 @@ const JA: S = S {
     day: JA_DAY,
     help: JA_HELP,
     backup: JA_BACKUP,
+    releases: JA_RELEASES,
 };
 
 const EN: S = S {
@@ -156,6 +160,7 @@ const EN: S = S {
     day: EN_DAY,
     help: EN_HELP,
     backup: EN_BACKUP,
+    releases: EN_RELEASES,
 };
 
 // ── views/mod.rs ────────────────────────────────────────────────────────────
@@ -303,6 +308,16 @@ pub struct Settings {
     /// 件数サブページの注記。**ラベルが短いぶん、ここが説明を持つ。**
     /// 「表示数」だけでは何の数か読めないので、ここで種目カードの話だと言う
     pub history_note: &'static str,
+    /// 推移タブにドロップセットを含めるかの行
+    pub row_drop_sets: &'static str,
+    pub drop_sets_note: &'static str,
+    /// その 2 択のラベル。**行の右端の現在値にも同じものを使う**（言語行の endonym /
+    /// 表示数行の `n_past_sessions` と同じ流儀）
+    pub drop_sets_exclude: &'static str,
+    pub drop_sets_include: &'static str,
+    /// 落とし幅（%）の見出しと注記。段を足すときの重量をここから計算する
+    pub drop_pct_label: &'static str,
+    pub drop_pct_note: &'static str,
     /// 言語の行 / 言語サブページの h1
     pub row_language: &'static str,
     /// 言語サブページの注記。**種目名が変わらないことを先に言う** —
@@ -358,6 +373,12 @@ const JA_SETTINGS: Settings = Settings {
     row_exercises: "種目",
     row_history: "表示数",
     history_note: "種目カードに、その種目をやった直近の記録を何回分出すか。日付の新しい順に並びます",
+    row_drop_sets: "ドロップセット",
+    drop_sets_note: "推移タブのグラフ・統計・記録に、ドロップセットの段を入れるか。含めないと、落とした段を除いたメインセットだけで推移が出ます。記録タブの合計は設定にかかわらず全部を数えます",
+    drop_sets_exclude: "含めない",
+    drop_sets_include: "含める",
+    drop_pct_label: "落とし幅",
+    drop_pct_note: "段を 1 つ足すとき、メインセットの重量から何 % 落とすか。計算して入れるのは 1 段目だけで、2 段目からは前の段の重量をそのままコピーします。小数点以下 1 桁まで",
     row_language: "言語",
     language_note: "種目名と部位名は変わりません（自分で付けた名前として扱うため）。変えたいときは「種目」から 1 つずつ編集してください",
     edit_group: "部位を編集",
@@ -400,6 +421,12 @@ const EN_SETTINGS: Settings = Settings {
     row_exercises: "Exercises",
     row_history: "Sessions shown",
     history_note: "How many of an exercise's most recent sessions its card shows, newest first.",
+    row_drop_sets: "Drop sets",
+    drop_sets_note: "Whether the drop-set stages count towards the Progress tab's chart, stats and records. Excluded, progress is based on your main sets alone. The Record tab's totals always count everything.",
+    drop_sets_exclude: "Excluded",
+    drop_sets_include: "Included",
+    drop_pct_label: "Drop by",
+    drop_pct_note: "When you add a stage, how much to take off the main set's weight. Only the first stage is worked out from it; from the second on, the previous stage's weight is copied. One decimal place.",
     row_language: "Language",
     language_note: "Exercise and muscle-group names do not change — they are treated as names you gave them. Edit them one by one under Exercises if you want them in another language.",
     edit_group: "Edit muscle group",
@@ -520,6 +547,9 @@ pub struct Progress {
     /// 全期間だけ週単位に落ちることの断り。体重の線が出ているかで文が変わる
     pub weekly_note: &'static str,
     pub weekly_note_with_weight: &'static str,
+    /// ドロップセットを集計から外していることの断り。**外したことを黙らない**
+    /// （記録タブは常に全部数えるので、黙ると同じ日の合計が食い違う理由が出ない）
+    pub drops_hidden_note: &'static str,
     /// この期間・この対象に記録が無い
     pub empty_period_exercise: &'static str,
     pub empty_period: &'static str,
@@ -550,6 +580,7 @@ const JA_PROGRESS: Progress = Progress {
     optgroup_archived: "アーカイブ済み",
     weekly_note: "全期間は週単位で集計しています",
     weekly_note_with_weight: "全期間は週単位で集計しています（体重は週平均）",
+    drops_hidden_note: "ドロップセットの段は含めていません（設定で変えられます）",
     empty_period_exercise: "この期間、この種目の記録はありません",
     empty_period: "この期間の記録はありません",
     stat_delta: "前回比",
@@ -576,6 +607,7 @@ const EN_PROGRESS: Progress = Progress {
     optgroup_archived: "Archived",
     weekly_note: "Over all time, figures are grouped by week.",
     weekly_note_with_weight: "Over all time, figures are grouped by week (body weight is a weekly average).",
+    drops_hidden_note: "Drop sets are not included. You can change this in Settings.",
     empty_period_exercise: "No records for this exercise in this period.",
     empty_period: "No records in this period.",
     stat_delta: "vs. last",
@@ -669,6 +701,12 @@ pub struct Day {
     pub weight: &'static str,
     pub reps: &'static str,
     pub delete_set: &'static str,
+    /// 段を 1 つ足すボタンの `aria-label`（表示は lucide の
+    /// `arrow-down-wide-narrow` のみ）/ 段の入力欄 / 段を消すボタン
+    pub drop_add: &'static str,
+    pub drop_weight: &'static str,
+    pub drop_reps: &'static str,
+    pub drop_delete: &'static str,
     /// 保存されない理由。**責めずに「あと何をすれば保存されるか」を書く**
     pub weight_missing: &'static str,
     pub reps_missing: &'static str,
@@ -713,6 +751,10 @@ const JA_DAY: Day = Day {
     weight: "重量",
     reps: "回数",
     delete_set: "このセットを削除",
+    drop_add: "ドロップを足す",
+    drop_weight: "ドロップの重量",
+    drop_reps: "ドロップの回数",
+    drop_delete: "この段を削除",
     weight_missing: "重量未入力",
     reps_missing: "回数を入れると保存されます",
     add_set: "+ セット",
@@ -751,6 +793,10 @@ const EN_DAY: Day = Day {
     weight: "Weight",
     reps: "Reps",
     delete_set: "Delete this set",
+    drop_add: "Add a drop stage",
+    drop_weight: "Drop weight",
+    drop_reps: "Drop reps",
+    drop_delete: "Delete this stage",
     weight_missing: "No weight yet",
     reps_missing: "Enter reps and this set is saved",
     add_set: "+ Set",
@@ -955,6 +1001,82 @@ const EN_BACKUP: Backup = Backup {
     join: ", ",
 };
 
+// ── views/whatsnew.rs ───────────────────────────────────────────────────────
+
+/// バナーとシートの固定文言。**お知らせ本文自体はここに置かない**（[`RELEASES`] へ）。
+pub struct Releases {
+    /// バナーの CTA。「見る ›」のように短く保つ（本文は [`Lang::whatsnew_banner`] が持つ）
+    pub banner_cta: &'static str,
+    /// バナーの ✕ の `aria-label`
+    pub banner_dismiss: &'static str,
+    pub sheet_title: &'static str,
+}
+
+const JA_RELEASES: Releases = Releases {
+    banner_cta: "見る ›",
+    banner_dismiss: "このお知らせを閉じる",
+    sheet_title: "新機能のお知らせ",
+};
+
+const EN_RELEASES: Releases = Releases {
+    banner_cta: "See what's new ›",
+    banner_dismiss: "Dismiss this notice",
+    sheet_title: "What's new",
+};
+
+/// 1 リリースぶんのお知らせ。
+///
+/// ★ 言語ごとにリストを分けず、エントリの中で分岐する（[`crate::presets::Names`] と
+///   同じ形）。リストを 2 本にすると片方への足し忘れがコンパイルを通ってしまう。
+pub struct ReleaseNote {
+    /// お知らせ番号。**単調増加。二度と振り直さない**（`storage::release_seen` の基準値）
+    pub id: u32,
+    /// ISO 8601。表示はこのまま出す
+    pub date: &'static str,
+    pub ja: &'static [&'static str],
+    pub en: &'static [&'static str],
+}
+
+impl ReleaseNote {
+    pub const fn items(&self, lang: Lang) -> &'static [&'static str] {
+        match lang {
+            Lang::Ja => self.ja,
+            Lang::En => self.en,
+        }
+    }
+}
+
+/// **新しい順。先頭が最新。** `id` は厳密減少（`core::unseen_releases` が prefix 切り出しの
+/// 前提にしている）。
+///
+/// リリースのたびに機能 PR が自分のエントリを先頭に足す。`date` はマージ日、`id` は
+/// 直前の最新から 1 つ進める。`&'static [ReleaseNote]` ではなく `&[ReleaseNote]` と書く
+/// （clippy::redundant_static_lifetimes。`presets::PRESETS` と同じ書き方）。
+pub const RELEASES: &[ReleaseNote] = &[
+    ReleaseNote {
+        id: 2,
+        date: "2026-09-09",
+        ja: &[
+            "記録タブの「種目を追加」を部位ごとのアコーディオンにしました。部位を開くとその種目だけが並び、同時に開くのは 1 つです。",
+            "新機能をまとめて知らせるこのバナーを追加しました。閉じると次のお知らせまで出ません。",
+        ],
+        en: &[
+            "The Record tab's \"Add exercise\" sheet is now a muscle-group accordion. Opening a group shows only its exercises, and only one opens at a time.",
+            "Added this banner to announce new features together. Once you close it, it stays away until the next release.",
+        ],
+    },
+    ReleaseNote {
+        id: 1,
+        date: "2026-08-25",
+        ja: &[
+            "推移タブの対象を「部位」と「種目」の 2 段セレクタにしました。部位を選ぶと種目の候補がその部位だけに絞られます。",
+        ],
+        en: &[
+            "The Progress tab's target is now two selects, muscle group and exercise. Picking a group narrows the exercise list to it.",
+        ],
+    },
+];
+
 // ── 引数が要る文言 ──────────────────────────────────────────────────────────
 //
 // ★ `format!` はフォーマット文字列がリテラルでなければならず、表から引いた
@@ -1084,6 +1206,14 @@ impl Lang {
         match self {
             Lang::Ja => format!("{n} 件のメモ"),
             Lang::En => format!("{n} {}", plural(n, "note", "notes")),
+        }
+    }
+
+    /// 取り込みで新しく段が入ったセットの数。
+    pub fn added_drops(self, n: usize) -> String {
+        match self {
+            Lang::Ja => format!("{n} 件のドロップ"),
+            Lang::En => format!("{n} {}", plural(n, "drop set", "drop sets")),
         }
     }
 
@@ -1380,6 +1510,18 @@ impl Lang {
             ),
         }
     }
+
+    /// 一番上のバナーの本文。`n` は未読リリースの**項目の総数**（リリース数ではない）。
+    ///
+    /// ★ 件数を含む文言は表に置けない（`format!` はフォーマット文字列がリテラルを
+    ///   要求するので、表から引いた `&'static str` は渡せない）。ここに置いて
+    ///   `match` の腕を 1 つでも落とせばコンパイルが通らないようにする。
+    pub fn whatsnew_banner(self, n: usize) -> String {
+        match self {
+            Lang::Ja => format!("新しい機能が {n} 件あります"),
+            Lang::En => format!("{n} new {} to see", plural(n, "feature", "features")),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1467,5 +1609,67 @@ mod tests {
                 assert!(!s.is_empty(), "{lang:?} に空の文言がある");
             }
         }
+    }
+
+    // ── お知らせ（新機能バナー） ────────────────────────────────────────────
+
+    /// 各エントリで `ja.len() == en.len()`、空文字を含まない。
+    ///
+    /// ★ リストを 1 本にした狙いそのものの検証。片方の言語だけ項目を書き忘れても
+    ///   `RELEASES` の宣言はコンパイルを通るので、ここで人力の突き合わせを肩代わりする。
+    #[test]
+    fn release_notes_line_up_across_languages() {
+        for r in RELEASES {
+            assert_eq!(
+                r.ja.len(),
+                r.en.len(),
+                "id={} で日英の項目数が食い違っている",
+                r.id
+            );
+            for s in r.ja.iter().chain(r.en.iter()) {
+                assert!(!s.is_empty(), "id={} に空の項目がある", r.id);
+            }
+        }
+    }
+
+    /// 新しい順で id が厳密減少する（`core::unseen_releases` が prefix 切り出しの前提にしている）。
+    #[test]
+    fn release_ids_run_strictly_downward() {
+        for pair in RELEASES.windows(2) {
+            assert!(
+                pair[0].id > pair[1].id,
+                "id={} の次に id={} が来ている（新しい順・厳密減少ではない）",
+                pair[0].id,
+                pair[1].id
+            );
+        }
+    }
+
+    /// `RELEASES` が非空。**空だと `None` が永久に残る**（`whatsnew::bootstrap` が
+    /// `latest_release_id` を引けず基準値を書かないため、次のリリースも出なくなる）。
+    #[test]
+    fn there_is_always_at_least_one_release() {
+        assert!(!RELEASES.is_empty(), "RELEASES を空のまま出荷しない");
+    }
+
+    /// ★ `assert_ne!(banner(1), banner(2))` では**何も検証できない**。`n` が本文に
+    ///   埋まるので数字だけで必ず異なり、`plural` を外しても通ってしまう。語形そのものを見る。
+    #[test]
+    fn the_whatsnew_banner_switches_at_one() {
+        // 前後の空白まで含めて見る。`" feature "` は "features to see" には一致しない
+        assert!(
+            Lang::En.whatsnew_banner(1).contains(" feature "),
+            "英語の 1 件が単数形になっていない"
+        );
+        assert!(
+            Lang::En.whatsnew_banner(2).contains(" features "),
+            "英語の 2 件が複数形になっていない"
+        );
+        // 日本語は単複で語形が変わらない。数字以外が同形であることを確かめる
+        assert_eq!(
+            Lang::Ja.whatsnew_banner(1).replace('1', "N"),
+            Lang::Ja.whatsnew_banner(2).replace('2', "N"),
+            "日本語で数字以外が変わっている"
+        );
     }
 }

@@ -3,11 +3,13 @@
 stroke-linejoin) は剥がし、viewBox とパスの座標だけを残しています。線の色と太さは
 public/styles.css の `.icon > svg` が与えます (ADR-0041 / ADR-0050)。
 
-収録: chevron-left.svg / chevron-right.svg / download.svg / pencil.svg /
-      trash-2.svg / upload.svg / x.svg
+収録: arrow-down-wide-narrow.svg / chevron-left.svg / chevron-right.svg /
+      download.svg / pencil.svg / plus.svg / trash-2.svg / upload.svg / x.svg
 
-このうち chevron-left / chevron-right / download / trash-2 / upload / x は Feather
-由来なので MIT も併記します (pencil は lucide オリジナルで ISC のみ)。Feather 由来か
+このうち chevron-left / chevron-right / download / plus / trash-2 / upload / x は
+Feather 由来なので MIT も併記します (pencil と arrow-down-wide-narrow は lucide
+オリジナルで ISC のみ。Feather の矢印は arrow-down / -circle / -left / -right の
+4 つだけで、幅の違う横線を並べた並び替え系のアイコンを持たない)。Feather 由来か
 どうかは上流の icons/<name>.json の contributors に colebemis (Feather の作者) が
 入っているかで判別できます。
 

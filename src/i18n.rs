@@ -1427,6 +1427,20 @@ impl ReleaseNote {
 /// （clippy::redundant_static_lifetimes。`presets::PRESETS` と同じ書き方）。
 pub const RELEASES: &[ReleaseNote] = &[
     ReleaseNote {
+        id: 4,
+        date: "2026-09-11",
+        ja: &[
+            "種目ごとにラベルを作れるようにしました。記録タブでラベルを選ぶと、そのラベルの前回だけが出て、「前回をコピー」もそのラベルの前回から入ります。",
+            "ドロップセットを記録できるようにしました。セット行の回数欄の右にあるアイコンから段を足せます。推移タブは既定で段を含めません。",
+            "設定タブに「使い方」を足しました。気づきにくい操作を図つきでまとめてあります。",
+        ],
+        en: &[
+            "Exercises can now have labels. Pick one on the Record tab and you see only that label's last session, and \"Copy last time\" takes its sets from there too.",
+            "Drop sets can now be recorded. Add a stage from the icon to the right of a set row's reps field. The Progress tab leaves them out by default.",
+            "Added \"How to use\" to the Settings tab — a rundown of the parts that are easy to miss, with screenshots.",
+        ],
+    },
+    ReleaseNote {
         id: 3,
         date: "2026-09-10",
         ja: &[

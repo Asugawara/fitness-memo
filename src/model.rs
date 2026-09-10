@@ -244,6 +244,21 @@ pub struct Group {
 pub struct Label {
     pub id: LabelId,
     pub name: String,
+    /// 推移タブのデータ点の色（`#rrggbb`）。
+    /// adr/ux/label-colour-on-the-progress-dots.md
+    ///
+    /// ★ **既定色の門番は [`crate::core::clean_labels`] の 1 箇所だけ。** 空文字や
+    /// `#rrggbb` でない値はそこで [`crate::core::next_label_color`] に置き換わるので、
+    /// 画面側は「有効な色が必ず入っている」前提で読める。逆に**有効な色は同色でも
+    /// 触らない** — 利用者が選んだ色を黙って書き換えない。
+    ///
+    /// ★ **`skip_serializing_if` を付けない。** [`Exercise::labels`] 自体が
+    /// `skip_serializing_if` なので、ラベルを使っていない利用者の JSON は
+    /// このフィールドが増えても 1 バイトも変わらない。付けると「色が空のラベル」と
+    /// 「色を持たない旧版のラベル」が JSON 上で区別できなくなり、書き出しの
+    /// バイト一致テストが表現できる形も 2 通りに割れる。
+    #[serde(default)]
+    pub color: String,
 }
 
 /// 種目。
@@ -1020,10 +1035,11 @@ mod tests {
         ex.labels.push(Label {
             id: L::from_bits(0x1_0001),
             name: "P".into(),
+            color: "#e0524a".into(),
         });
         let json = serde_json::to_string(&ex).expect("直列化できる");
         assert!(
-            json.ends_with(r#","labels":[{"id":"000000002001","name":"P"}]}"#),
+            json.ends_with(r##","labels":[{"id":"000000002001","name":"P","color":"#e0524a"}]}"##),
             "{json}"
         );
     }
@@ -1090,6 +1106,7 @@ mod tests {
         let label = Label {
             id: L::from_bits(0x1_0001),
             name: "高重量ローレップ".into(),
+            color: "#7a56c9".into(),
         };
         let json = serde_json::to_string(&label).expect("直列化できる");
         assert_eq!(
@@ -1097,6 +1114,20 @@ mod tests {
             label,
             "{json}"
         );
+    }
+
+    /// ★ 色を足しても schema を上げずに済む根拠（`#[serde(default)]`）。旧版が書いた
+    /// ラベルは色を持たないので、読めなければ `migrate` が Err を返して退避パスへ
+    /// 落ち、**ラベルを使っている利用者だけが旧世代へ降格する**。
+    ///
+    /// 空で読めた色は [`crate::core::clean_labels`] が正規化のたびにパレットから
+    /// 埋めるので、画面に空の色が出ることはない。
+    #[test]
+    fn a_label_reads_json_written_before_colours_existed() {
+        let label: Label = serde_json::from_str(r#"{"id":"000000002001","name":"P"}"#)
+            .expect("色以前の形も読める");
+        assert_eq!(label.name, "P");
+        assert_eq!(label.color, "", "色の無い形は空で読む（埋めるのは core）");
     }
 
     /// 入力欄の `maxlength`（UTF-16 コードユニット）と [`MAX_LABEL_LEN`]（char）の

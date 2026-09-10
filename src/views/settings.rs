@@ -1335,6 +1335,15 @@ fn ExerciseEditor(
                 rs.iter()
                     .map(|r| Label {
                         id: r.id,
+                        // ★ C5 で行の色（`r.color`）に差し替える。それまでは保存値を
+                        //   写す — `String::new()` を送ると `clean_labels` が
+                        //   毎 commit パレットから振り直し、**1 打鍵ごとに色が
+                        //   ローテーションする**
+                        color: saved
+                            .iter()
+                            .find(|l| l.id == r.id)
+                            .map(|l| l.color.clone())
+                            .unwrap_or_default(),
                         name: if r.name.trim().is_empty() {
                             saved
                                 .iter()

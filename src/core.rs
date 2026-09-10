@@ -430,7 +430,11 @@ pub enum LabelFilter {
 
 impl LabelFilter {
     /// そのログを通すか。
-    fn passes(self, log: &ExerciseLog) -> bool {
+    ///
+    /// ★ `pub(crate)` にしてあるのは推移タブの**記録テーブル**が呼ぶため。あちらは
+    /// [`pick_points`] を通らず `db.sessions` を直接走るので、グラフと同じ絞りを
+    /// 掛けるには同じ述語が要る（規則を 2 本に割らない）。
+    pub(crate) fn passes(self, log: &ExerciseLog) -> bool {
         match self {
             Self::Any => true,
             Self::Only(id) => log.label == Some(id),
@@ -1071,7 +1075,58 @@ fn sessions_in(
         .filter(move |(date, _)| *date >= from && *date <= to)
 }
 
+/// 推移の 1 点。**ラベルを載せた `(date, value)`。**
+/// adr/ux/label-colour-on-the-progress-dots.md
+///
+/// ★ `(NaiveDate, f64, Option<LabelId>)` の組にしない。推移タブは点の色と記録
+/// テーブルの絞りで同じ列を 2 度使うので、添字ではなく名前で読めるほうが安全。
+///
+/// ★ **ラベル名も色も持たない。** 名前と色は種目の `labels` にあり、そこが
+/// 唯一の真実源（[`label_name`] の「解決は必ずその種目の `labels` の中」）。
+/// 点に写すと改名・色替えのたびに系列が古くなる。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeriesPoint {
+    pub date: NaiveDate,
+    pub value: f64,
+    /// その日のログに付いていたラベル。無ければ `None`。
+    pub label: Option<LabelId>,
+}
+
+/// 種目別の推移（ラベル付き・絞り込みあり）。
+///
+/// ★ **絞りは `find` の述語に入れる**（[`logs_before`] と同じ形）。後ろで
+/// `filter` すると「その日にその種目のログはあるがラベルが違う」場合に
+/// `find` が先に当たって**日が丸ごと落ちる**のは同じだが、1 日 1 種目 1 ログの
+/// 不変条件があるので結果は変わらない。述語に入れておくほうが規則が 1 本。
+pub fn exercise_points(
+    db: &Db,
+    ex: ExerciseId,
+    m: Metric,
+    from: NaiveDate,
+    to: NaiveDate,
+    d: Drops,
+    filter: LabelFilter,
+) -> Vec<SeriesPoint> {
+    sessions_in(db, from, to)
+        .filter_map(|(date, session)| {
+            let log = session
+                .logs
+                .iter()
+                .find(|l| l.exercise_id == ex && !l.sets.is_empty() && filter.passes(l))?;
+            Some(SeriesPoint {
+                date,
+                value: log_value_of(m, log, d),
+                label: log.label,
+            })
+        })
+        .collect()
+}
+
 /// 種目別の推移。
+///
+/// ★ **ラベルで絞らない。** 「旧名は旧挙動、新名がパラメータ付き」という
+/// [`last_log_before`] / [`last_log_before_with`] と同じ作法で、この名前で呼んだ
+/// 側の挙動は今までと 1 バイトも変わらない。
 pub fn exercise_series(
     db: &Db,
     ex: ExerciseId,
@@ -1080,14 +1135,9 @@ pub fn exercise_series(
     to: NaiveDate,
     d: Drops,
 ) -> Vec<(NaiveDate, f64)> {
-    sessions_in(db, from, to)
-        .filter_map(|(date, session)| {
-            let log = session
-                .logs
-                .iter()
-                .find(|l| l.exercise_id == ex && !l.sets.is_empty())?;
-            Some((date, log_value_of(m, log, d)))
-        })
+    exercise_points(db, ex, m, from, to, d, LabelFilter::Any)
+        .into_iter()
+        .map(|p| (p.date, p.value))
         .collect()
 }
 
@@ -1104,6 +1154,27 @@ pub fn group_series(
     to: NaiveDate,
     d: Drops,
 ) -> Vec<(NaiveDate, f64)> {
+    group_points(db, g, m, from, to, d)
+        .into_iter()
+        .map(|p| (p.date, p.value))
+        .collect()
+}
+
+/// [`group_series`] の [`SeriesPoint`] 版。
+///
+/// ★ **ラベルを見ない（`label` は常に `None`）。** ラベルは**種目ごとに独立**した
+/// 分類体系なので、複数種目を合算した 1 点に載せられる `LabelId` が存在しない
+/// （ベンチの `P` とスクワットの `P` は別 ID）。推移タブのチップ行も
+/// 「種目を選んでいるときだけ」出す（`views::progress` の門番）ので、この枝に
+/// 絞りが届くことはない。引数に `LabelFilter` を取らないのはその型での表明。
+fn group_points(
+    db: &Db,
+    g: GroupId,
+    m: Metric,
+    from: NaiveDate,
+    to: NaiveDate,
+    d: Drops,
+) -> Vec<SeriesPoint> {
     let ids = db.exercise_ids_of_group(g);
     if ids.is_empty() {
         return Vec::new();
@@ -1119,7 +1190,11 @@ pub fn group_series(
                 hit = true;
                 total += log_value_of(m, log, d);
             }
-            hit.then_some((date, total))
+            hit.then_some(SeriesPoint {
+                date,
+                value: total,
+                label: None,
+            })
         })
         .collect()
 }
@@ -1321,9 +1396,30 @@ pub fn pick_series(
     to: NaiveDate,
     d: Drops,
 ) -> Vec<(NaiveDate, f64)> {
+    pick_points(db, p, m, from, to, d, LabelFilter::Any)
+        .into_iter()
+        .map(|p| (p.date, p.value))
+        .collect()
+}
+
+/// [`pick_series`] の [`SeriesPoint`] 版（ラベル絞り込みつき）。
+///
+/// ★ **絞りが効くのは種目の枝だけ。** 部位の枝は [`group_points`] が
+/// ラベルを見ない（合算にラベルは載らない）。呼び側の門番が「種目を選んで
+/// いるときだけ `Only`」に倒しているので、ここで `Only` が部位の枝へ届くことは
+/// 無いが、届いても**黙って無視する**（0 件にして空グラフを見せない）。
+pub fn pick_points(
+    db: &Db,
+    p: Pick,
+    m: Metric,
+    from: NaiveDate,
+    to: NaiveDate,
+    d: Drops,
+    filter: LabelFilter,
+) -> Vec<SeriesPoint> {
     match (p.exercise, p.group) {
-        (Some(ex), _) => exercise_series(db, ex, m, from, to, d),
-        (None, Some(g)) => group_series(db, g, m, from, to, d),
+        (Some(ex), _) => exercise_points(db, ex, m, from, to, d, filter),
+        (None, Some(g)) => group_points(db, g, m, from, to, d),
         (None, None) => Vec::new(),
     }
 }
@@ -1373,6 +1469,38 @@ pub fn aggregate_weekly(series: &[(NaiveDate, f64)]) -> Vec<(NaiveDate, f64)> {
         *weeks.entry(week_start(*date)).or_insert(0.0) += *value;
     }
     weeks.into_iter().collect()
+}
+
+/// [`aggregate_weekly`] の [`SeriesPoint`] 版。値の集約は**まったく同じ（合計）**。
+///
+/// ★ **ラベルは「週内の全点が同じ 1 つのラベル」のときだけ残す。** それ以外は
+/// `None` = 既定色。「すべて」表示で H / P / S が混ざった週に 1 色を選ぶと、
+/// **その週の色が嘘になる**（3 分の 1 だけを指す色が週全体の点に付く）。
+/// 逆に `Only` で絞っていれば週内は全部同じラベルなので、「全期間」でも
+/// ちゃんとそのラベルの色が出る — チップで絞ったときに色が消えない。
+///
+/// ★ 加算の順序は [`aggregate_weekly`] と同じ（呼び側が日付昇順で渡す）。
+/// f64 の加算は非結合なので、順序を変えると同じ入力で 1 ulp ずれる。
+pub fn aggregate_weekly_points(series: &[SeriesPoint]) -> Vec<SeriesPoint> {
+    // (合計, 最初に見たラベル, 週内で食い違ったか)
+    let mut weeks: BTreeMap<NaiveDate, (f64, Option<LabelId>, bool)> = BTreeMap::new();
+    for p in series {
+        let slot = weeks
+            .entry(week_start(p.date))
+            .or_insert((0.0, p.label, false));
+        slot.0 += p.value;
+        if slot.1 != p.label {
+            slot.2 = true;
+        }
+    }
+    weeks
+        .into_iter()
+        .map(|(date, (value, label, mixed))| SeriesPoint {
+            date,
+            value,
+            label: (!mixed).then_some(label).flatten(),
+        })
+        .collect()
 }
 
 // ── 体重（グラフの第2軸）──────────────────────────────────────────────────
@@ -1887,6 +2015,41 @@ pub fn set_interval(db: &mut Db, id: ExerciseId, sec: Option<u32>) {
     }
 }
 
+/// `#rrggbb` か。**色の妥当性判定はこの 1 本を通す。**
+///
+/// ★ `pub` にしてあるのは `views::progress` が CSS 変数へ載せる直前にもう一度
+/// 通すため。`--dot:` に空文字が載ると `var(--dot, var(--accent))` の
+/// フォールバックが**効かず点が黒くなる**（`var()` は「値が空」を「未定義」と
+/// 見ない）ので、`Db` を信じきらずに描画の直前でも確かめる。
+///
+/// 3 桁（`#abc`）や名前付きの色（`red`）は通さない。`<input type="color">` が
+/// 返すのは常に 6 桁の小文字なので、通す形を狭くしても画面から入る値は落ちない。
+pub fn is_hex_color(s: &str) -> bool {
+    s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// まだ使われていないラベル色。**新しいラベルの既定色はここから採る。**
+/// adr/ux/label-colour-on-the-progress-dots.md
+///
+/// ★ **位置ベース（`used.len() % 6`）にしない。** ✕ で 1 本消してから ＋ で足すと
+/// 残った行と同じ色が生まれ、推移タブで 2 本のラベルが見分けられなくなる。
+/// 「未使用の最初の色」なら、6 本までは必ず全部違う色になる。
+///
+/// ★ 大文字小文字を無視して比べる。手編集の JSON や取り込みで `#E0524A` が
+/// 入っていても「使用済み」と数える（同じ色なのに違う扱いにしない）。
+///
+/// 6 色を使い切ったら重複を許して `n % 6` に落ちる。[`crate::model::MAX_LABELS`]
+/// まで色を増やすほうが不便で、7 本目からは名前で見分ける前提。
+pub fn next_label_color<'a>(used: impl IntoIterator<Item = &'a str>) -> &'static str {
+    let used: Vec<String> = used.into_iter().map(|c| c.to_ascii_lowercase()).collect();
+    let palette = crate::presets::LABEL_COLOR_CHOICES;
+    palette
+        .iter()
+        .find(|c| !used.iter().any(|u| u == *c))
+        .copied()
+        .unwrap_or(palette[used.len() % palette.len()])
+}
+
 /// [`normalize_exercises`] と [`set_labels`] が共有する 1 種目ぶんの規則。
 ///
 /// ★ **2 経路に分けて書かない**（[`clean_pins`] と同じ理由）。食い違うと「画面で
@@ -1902,6 +2065,8 @@ pub fn set_interval(db: &mut Db, id: ExerciseId, sec: Option<u32>) {
 ///   それ以外では保持する** — 設定タブの改名で ID が変わらないことの土台で、
 ///   ここを緩めると 1 打鍵で過去ログが全部宙に浮く
 /// - **同名は潰さない**（`merge_db` が正当に生む）。**並べ替えない**（`Vec` 順 = 表示順）
+/// - **色が `#rrggbb` でなければ [`next_label_color`] で埋める**（旧版の JSON・TSV 取込・
+///   手編集の入口をここ 1 箇所で塞ぐ）。有効な色は同色でも書き換えない
 fn clean_labels(labels: Vec<Label>, ids: &mut IdGen) -> Vec<Label> {
     let mut out: Vec<Label> = Vec::with_capacity(labels.len().min(MAX_LABELS));
     for mut l in labels {
@@ -1915,6 +2080,11 @@ fn clean_labels(labels: Vec<Label>, ids: &mut IdGen) -> Vec<Label> {
         l.name = l.name.chars().take(MAX_LABEL_LEN).collect();
         if out.iter().any(|o| o.id == l.id) {
             l.id = ids.alloc();
+        }
+        // ★ **有効な色は同色でも触らない。** 利用者が 2 本を同じ色にしたなら、それは
+        //   選択であって壊れた値ではない。埋めるのは「持っていない」ときだけ
+        if !is_hex_color(&l.color) {
+            l.color = next_label_color(out.iter().map(|o| o.color.as_str())).into();
         }
         out.push(l);
     }
@@ -2002,6 +2172,10 @@ fn fill_interval(existing: &mut Exercise, incoming: &Exercise) {
 ///
 /// ★ `Conflict` は積まない（[`fill_pins`] と同じ粒度）。
 ///
+/// ★ **色は新規追加の枝でだけ触る。** 同名寄せの枝は `alias` を張って取り込み側の
+/// 定義を捨てるので、こちらの色が勝つ（自分が選んだ色が古いファイル 1 枚で
+/// 巻き戻らない）。新規の枝は「こちらに既に居る色と衝突するなら塗り替える」。
+///
 /// 返すのは `(追加した数, MAX_LABELS で落とした数)`。落とした数を数えるのは、落ちると
 /// そのログは取り込み直しても二度と生き返らない dangling になるのに、数も `Conflict` も
 /// 出ないと気づけないため。
@@ -2028,7 +2202,21 @@ fn merge_labels(
             dropped += 1;
             continue;
         }
-        existing.labels.push(l.clone());
+        // ★ **こちらに同じ色が既に居るなら塗り替える。** `merge_db` は `normalize` を
+        //   呼ばないので [`clean_labels`] の門を通らず、2 台で独立に定義した
+        //   1 本目どうし（どちらもパレットの先頭色）がそのまま並ぶと、推移タブで
+        //   区別できない 2 本になる。不正な色も同じ枝で埋める。
+        //   ★ 衝突していない有効な色は**そのまま採る** — あちらの端末で選んだ色を
+        //     取り込みで黙って捨てない（同名寄せの枝で自分の色が勝つのと対称）
+        let mut l = l.clone();
+        let clash = existing
+            .labels
+            .iter()
+            .any(|x| x.color.eq_ignore_ascii_case(&l.color));
+        if !is_hex_color(&l.color) || clash {
+            l.color = next_label_color(existing.labels.iter().map(|x| x.color.as_str())).into();
+        }
+        existing.labels.push(l);
         added += 1;
     }
     (added, dropped)
@@ -3463,9 +3651,15 @@ fn resolve_label(
     if let Some(e) = out.exercises.iter_mut().find(|e| e.id == ex_id)
         && !e.labels.iter().any(|l| l.id == id)
     {
+        // ★ 色は TSV に無いので**ここで振る**（部位の `resolve_group` と同じ作法）。
+        //   その種目に既に居るラベルの色を避けるので、1 ファイルで H / P / S が
+        //   入ってきても 3 色に散る。`normalize` の [`clean_labels`] でも埋まるが、
+        //   あちらは「出力位置基準」なので取り込み側の既存色を見ない
+        let color = next_label_color(e.labels.iter().map(|l| l.color.as_str())).to_string();
         e.labels.push(Label {
             id,
             name: name.to_string(),
+            color,
         });
     }
     cache.insert(key, id);
@@ -10908,10 +11102,21 @@ mod tests {
         db
     }
 
+    /// 色は空。**`clean_labels` を通す経路のテストでは埋まる**ので、色を見ないテストは
+    /// このまま使い、色そのものを見るテストだけ [`colored`] で明示する。
     fn label(n: u64, name: &str) -> Label {
         Label {
             id: lb(n),
             name: name.into(),
+            color: String::new(),
+        }
+    }
+
+    /// 色を明示したラベル。
+    fn colored(n: u64, name: &str, color: &str) -> Label {
+        Label {
+            color: color.into(),
+            ..label(n, name)
         }
     }
 
@@ -11264,6 +11469,378 @@ mod tests {
         assert_eq!(s.logs[0].label, Some(lb(1)));
     }
 
+    // ── 色 ──────────────────────────────────────────────────────────────────
+    // adr/ux/label-colour-on-the-progress-dots.md
+
+    /// パレット。テストが `LABEL_COLOR_CHOICES` の綴りを写さないように 1 本で引く。
+    fn palette(i: usize) -> &'static str {
+        crate::presets::LABEL_COLOR_CHOICES[i]
+    }
+
+    /// ★ **色の門番は `clean_labels` の 1 箇所だけ**という主張。旧版の JSON（空）も、
+    /// 手編集の壊れた値も、ここを通れば必ず `#rrggbb` になる。
+    #[test]
+    fn clean_labels_fills_a_missing_colour_from_the_palette() {
+        let got = clean_labels(
+            vec![
+                colored(1, "H", ""),
+                colored(2, "P", "red"),
+                colored(3, "S", "#xyzxyz"),
+                colored(4, "T", "#e0524a12"),
+            ],
+            &mut ids(),
+        );
+        assert_eq!(
+            got.iter().map(|l| l.color.as_str()).collect::<Vec<_>>(),
+            [palette(0), palette(1), palette(2), palette(3)],
+            "名前付きの色・16 進でない値・8 桁は全部「持っていない」扱い"
+        );
+    }
+
+    /// ★ **利用者が設定した有効な色は同色でも触らない。** 2 本を同じ色にしたのは
+    /// 選択であって壊れた値ではない。ここで「重複だから」と塗り替えると、設定
+    /// シートで選んだ色が次の正規化で黙って変わる。
+    #[test]
+    fn clean_labels_keeps_a_valid_colour_even_when_it_repeats() {
+        let got = clean_labels(
+            vec![
+                colored(1, "H", "#123456"),
+                colored(2, "P", "#123456"),
+                // 大文字も有効な `#rrggbb`。小文字へ正規化もしない
+                colored(3, "S", "#ABCDEF"),
+            ],
+            &mut ids(),
+        );
+        assert_eq!(
+            got.iter().map(|l| l.color.as_str()).collect::<Vec<_>>(),
+            ["#123456", "#123456", "#ABCDEF"]
+        );
+    }
+
+    #[test]
+    fn next_label_color_skips_colours_already_in_use() {
+        // 先頭が空いていれば先頭
+        assert_eq!(next_label_color(std::iter::empty()), palette(0));
+        // 使用済みを飛ばす（並び順ではなく「未使用の最初」）
+        assert_eq!(next_label_color([palette(0), palette(2)]), palette(1));
+        // 大文字小文字を無視して「使用済み」と数える
+        assert_eq!(
+            next_label_color([palette(0).to_uppercase().as_str()]),
+            palette(1)
+        );
+        // 6 色を使い切ったら重複を許して `n % 6` に落ちる
+        let all: Vec<&str> = crate::presets::LABEL_COLOR_CHOICES.to_vec();
+        assert_eq!(next_label_color(all.clone()), palette(0));
+        let mut seven = all;
+        seven.push(palette(0));
+        assert_eq!(next_label_color(seven), palette(1));
+    }
+
+    /// ★ **位置ベース（`out.len() % 6`）では駄目**という主張。✕ で 1 本消してから
+    /// ＋ で足したときに残った行と同じ色が生まれる形を、ここで固定する。
+    /// 併せて、基準が**入力ではなく出力の並び**であること（空名の行は数に入らない）。
+    #[test]
+    fn a_new_label_never_repeats_a_colour_already_on_the_exercise() {
+        // 空名の行を先頭に混ぜても、残る 2 本の色はパレットの先頭 2 色
+        let got = clean_labels(
+            vec![colored(1, "", ""), colored(2, "H", ""), colored(3, "P", "")],
+            &mut ids(),
+        );
+        assert_eq!(
+            got.iter().map(|l| l.color.as_str()).collect::<Vec<_>>(),
+            [palette(0), palette(1)],
+            "落とした行を数に入れている（出力位置が基準）"
+        );
+
+        // 2 色目を消してから足す → 空いた色が戻ってきて、残った行とは重ならない
+        let got = clean_labels(
+            vec![colored(1, "H", palette(0)), colored(3, "S", palette(2))],
+            &mut ids(),
+        );
+        let mut kept = got;
+        kept.push(colored(4, "新", ""));
+        let got = clean_labels(kept, &mut ids());
+        let colors: Vec<&str> = got.iter().map(|l| l.color.as_str()).collect();
+        assert_eq!(colors, [palette(0), palette(2), palette(1)]);
+        assert_eq!(
+            colors
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            3,
+            "同じ色のラベルが 2 本並んだ"
+        );
+    }
+
+    /// 同名寄せの枝は `alias` を張って取り込み側の定義を捨てる = **自分の色が勝つ**。
+    /// 古いファイル 1 枚で自分が選んだ色が巻き戻らない（ログの `label` と同じ規則）。
+    #[test]
+    fn merge_keeps_my_colour_when_a_label_matches_by_name() {
+        let mut mine = preset_db_with_labels(vec![colored(1, "P", "#123456")]);
+        merge_db(
+            &mut mine,
+            preset_db_with_labels(vec![colored(7, "P", "#abcdef")]),
+        );
+
+        assert_eq!(bench_colors(&mine), ["#123456"], "自分の色が上書きされた");
+    }
+
+    /// 新規追加の枝は**衝突しない有効な色をそのまま採る**。あちらの端末で選んだ色を
+    /// 取り込みで黙って捨てない。
+    #[test]
+    fn merge_carries_the_colour_of_a_newly_added_label() {
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        merge_db(
+            &mut mine,
+            preset_db_with_labels(vec![colored(1, "H", "#123456"), colored(2, "P", "#abcdef")]),
+        );
+
+        assert_eq!(bench_colors(&mine), ["#123456", "#abcdef"]);
+    }
+
+    /// ★ **`merge_db` は `normalize` を呼ばない**ので `clean_labels` の門を通らない。
+    /// 2 台で独立に定義した 1 本目どうしはどちらもパレットの先頭色なので、そのまま
+    /// 足すと推移タブで区別できない 2 本になる。新規追加の枝で塗り替える。
+    #[test]
+    fn merge_recolours_an_incoming_label_that_clashes_with_mine() {
+        let mut mine = preset_db_with_labels(vec![colored(1, "H", palette(0))]);
+        merge_db(
+            &mut mine,
+            // 別名・同色（大文字違いも衝突と見る）+ 壊れた色
+            preset_db_with_labels(vec![
+                colored(2, "P", palette(0).to_uppercase().as_str()),
+                colored(3, "S", "red"),
+            ]),
+        );
+
+        assert_eq!(bench_colors(&mine), [palette(0), palette(1), palette(2)]);
+    }
+
+    /// TSV に色列は無い（部位と同じ）。取り込みで生まれたラベルにも色が付き、
+    /// **同じ種目の中で重ならない**。
+    #[test]
+    fn tsv_import_gives_a_new_label_a_colour() {
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let incoming = parse_import(
+            "日付\t部位\t種目\tセット\t重量kg\t回数\tラベル\n\
+             2026-08-01\t胸\tベンチプレス\t1\t70\t10\tH\n\
+             2026-08-08\t胸\tベンチプレス\t1\t100\t3\tP\n",
+            &mut ids(),
+            &mine,
+        )
+        .expect("読める");
+
+        assert_eq!(bench_colors(&incoming), [palette(0), palette(1)]);
+    }
+
+    /// 画面からの書き込みと取り込みで色の規則が食い違わないこと
+    /// （`set_labels_normalizes_the_same_way_as_normalize` の色版）。
+    #[test]
+    fn set_labels_fills_the_colour_like_normalize_does() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let raw = vec![
+            colored(1, "H", ""),
+            colored(2, "P", "#123456"),
+            colored(3, "S", "壊れた"),
+        ];
+
+        let mut through_ui = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_labels(&mut through_ui, bench, raw.clone(), &mut ids());
+
+        let mut through_import = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        if let Some(x) = through_import.exercises.iter_mut().find(|x| x.id == bench) {
+            x.labels = raw;
+        }
+        normalize_exercises(&mut through_import, &mut ids());
+
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").labels,
+            through_import.exercise(bench).expect("種目").labels,
+            "画面からの書き込みと取り込みで色の規則がずれている"
+        );
+        assert_eq!(
+            bench_colors(&through_ui),
+            [palette(0), "#123456", palette(1)],
+            "有効な色は据え置き、無い色だけ未使用のパレット色で埋める"
+        );
+    }
+
+    // ── 推移タブの絞り込み ──────────────────────────────────────────────────
+    // adr/ux/label-colour-on-the-progress-dots.md
+
+    /// hps_db の日ごとの値（`Metric::Volume`）。
+    const HPS_VALUES: [(u32, f64); 4] = [(1, 700.0), (2, 300.0), (5, 640.0), (8, 315.0)];
+
+    fn hps_points(p: Pick, filter: LabelFilter) -> Vec<SeriesPoint> {
+        pick_points(
+            &hps_db(),
+            p,
+            Metric::Volume,
+            d(2026, 8, 1),
+            d(2026, 8, 31),
+            Drops::Include,
+            filter,
+        )
+    }
+
+    fn bench_pick() -> Pick {
+        Pick::default().with_exercise(&hps_db(), Some(e(10)))
+    }
+
+    #[test]
+    fn pick_points_filters_the_exercise_branch_by_label() {
+        let got = hps_points(bench_pick(), LabelFilter::Only(lb(2)));
+        assert_eq!(
+            got.iter().map(|p| (p.date, p.value)).collect::<Vec<_>>(),
+            vec![(d(2026, 8, 2), 300.0), (d(2026, 8, 8), 315.0)],
+            "P の日だけが残る"
+        );
+        assert!(
+            got.iter().all(|p| p.label == Some(lb(2))),
+            "残った点に P 以外のラベルが載っている"
+        );
+        // ラベルなしの日（8/5）は `Only` では出ない
+        assert!(!got.iter().any(|p| p.date == d(2026, 8, 5)));
+    }
+
+    /// ★ **旧名は旧挙動。** `pick_series` を委譲に変えたことで既存利用者の画面が
+    /// 1 バイトも変わらないことの主張。
+    #[test]
+    fn pick_points_is_identical_to_pick_series_when_unfiltered() {
+        let db = hps_db();
+        for p in [
+            bench_pick(),
+            Pick {
+                group: Some(g(1)),
+                exercise: None,
+            },
+        ] {
+            for m in [Metric::Volume, Metric::Sets, Metric::Reps] {
+                let points = pick_points(
+                    &db,
+                    p,
+                    m,
+                    d(2026, 8, 1),
+                    d(2026, 8, 31),
+                    Drops::Include,
+                    LabelFilter::Any,
+                );
+                assert_eq!(
+                    points.iter().map(|p| (p.date, p.value)).collect::<Vec<_>>(),
+                    pick_series(&db, p, m, d(2026, 8, 1), d(2026, 8, 31), Drops::Include),
+                );
+            }
+        }
+        // ラベルは無絞りでも載る（点の色に使う）
+        let got = hps_points(bench_pick(), LabelFilter::Any);
+        assert_eq!(
+            got.iter().map(|p| p.label).collect::<Vec<_>>(),
+            vec![Some(lb(1)), Some(lb(2)), None, Some(lb(2))]
+        );
+        assert_eq!(
+            got.iter()
+                .map(|p| (p.date.day(), p.value))
+                .collect::<Vec<_>>(),
+            HPS_VALUES.to_vec()
+        );
+    }
+
+    /// ★ **部位の枝はラベルを見ない。** ラベルは種目ごとに独立した体系なので、
+    /// 複数種目の合算に載せられる `LabelId` が無い。`Only` が届いても黙って無視して
+    /// 従来どおりの合算を返す（0 件にして空グラフを見せない）。
+    #[test]
+    fn pick_points_ignores_labels_on_the_group_branch() {
+        let chest = Pick {
+            group: Some(g(1)),
+            exercise: None,
+        };
+        let any = hps_points(chest, LabelFilter::Any);
+        let only = hps_points(chest, LabelFilter::Only(lb(2)));
+
+        assert_eq!(any, only, "部位の枝で絞りが効いてしまっている");
+        assert_eq!(
+            any.iter()
+                .map(|p| (p.date.day(), p.value))
+                .collect::<Vec<_>>(),
+            HPS_VALUES.to_vec()
+        );
+        assert!(
+            any.iter().all(|p| p.label.is_none()),
+            "合算の点にラベルが載っている"
+        );
+    }
+
+    /// ★ **週内の全点が同じラベルのときだけ残す。** 混ざった週に 1 色を選ぶと、
+    /// 3 分の 1 だけを指す色がその週全体の点に付いて**色が嘘になる**。
+    #[test]
+    fn aggregate_weekly_points_keeps_a_label_only_when_the_whole_week_agrees() {
+        let sp = |day: u32, label: Option<u64>| SeriesPoint {
+            date: d(2026, 8, day),
+            value: 1.0,
+            label: label.map(lb),
+        };
+
+        // 同一ラベルの週 → 残る
+        let got = aggregate_weekly_points(&[sp(2, Some(2)), sp(5, Some(2))]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].label, Some(lb(2)));
+
+        // 別 ID が混ざる → 既定色へ落とす
+        let got = aggregate_weekly_points(&[sp(2, Some(1)), sp(5, Some(2))]);
+        assert_eq!(got[0].label, None);
+
+        // `None` が混ざる（どちら向きでも）→ 既定色へ落とす
+        assert_eq!(
+            aggregate_weekly_points(&[sp(2, Some(2)), sp(5, None)])[0].label,
+            None
+        );
+        assert_eq!(
+            aggregate_weekly_points(&[sp(2, None), sp(5, Some(2))])[0].label,
+            None
+        );
+
+        // 全部 `None` の週は `None`（「混ざった」ではないが結果は同じ）
+        assert_eq!(
+            aggregate_weekly_points(&[sp(2, None), sp(5, None)])[0].label,
+            None
+        );
+
+        // ★ `Only` で絞れば週内は必ず同じラベル = 「全期間」でも色が消えない
+        let weekly = aggregate_weekly_points(&hps_points(bench_pick(), LabelFilter::Only(lb(2))));
+        assert_eq!(
+            weekly
+                .iter()
+                .map(|p| (p.date, p.value, p.label))
+                .collect::<Vec<_>>(),
+            vec![(d(2026, 8, 2), 615.0, Some(lb(2)))]
+        );
+    }
+
+    /// 値の集約は [`aggregate_weekly`] と**まったく同じ**（週キーも合計も）。
+    /// ずれると指標と体重（`aggregate_weekly_avg`）の週キーが噛み合わなくなる。
+    #[test]
+    fn aggregate_weekly_points_sums_like_aggregate_weekly() {
+        let points = hps_points(bench_pick(), LabelFilter::Any);
+        let plain: Vec<(NaiveDate, f64)> = points.iter().map(|p| (p.date, p.value)).collect();
+
+        assert_eq!(
+            aggregate_weekly_points(&points)
+                .iter()
+                .map(|p| (p.date, p.value))
+                .collect::<Vec<_>>(),
+            aggregate_weekly(&plain)
+        );
+        // 混ざった週は既定色（8/2 の週に P と ラベルなしが同居する）
+        assert_eq!(
+            aggregate_weekly_points(&points)
+                .iter()
+                .map(|p| p.label)
+                .collect::<Vec<_>>(),
+            vec![Some(lb(1)), None]
+        );
+        assert!(aggregate_weekly_points(&[]).is_empty());
+    }
+
     // ── ラベルのマージ ──────────────────────────────────────────────────────
 
     /// ラベル付きのプリセット Db。ベンチプレスに指定の定義を入れる。
@@ -11274,6 +11851,17 @@ mod tests {
             x.labels = labels;
         }
         db
+    }
+
+    /// ベンチプレスのラベルの色（並び順そのまま）。
+    fn bench_colors(db: &Db) -> Vec<String> {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        db.exercise(bench)
+            .expect("種目")
+            .labels
+            .iter()
+            .map(|l| l.color.clone())
+            .collect()
     }
 
     fn bench_labels(db: &Db) -> Vec<(LabelId, String)> {

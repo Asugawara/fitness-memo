@@ -105,8 +105,9 @@
      ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
      OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-     収録アイコンのうち chevron-left / chevron-right / download / trash-2 / upload / x は
-     Feather 由来なので MIT も適用される（pencil は lucide オリジナルで ISC のみ）。
+     収録アイコンのうち chevron-left / chevron-right / download / plus / trash-2 /
+     upload / x は Feather 由来なので MIT も適用される（pencil と
+     arrow-down-wide-narrow は lucide オリジナルで ISC のみ）。
 
      Feather — The MIT License (MIT)
 
@@ -131,7 +132,7 @@
      SOFTWARE.
      ──────────────────────────────────────────────────────────────────── -->
 
-<link rel="stylesheet" href="/fitness-memo/styles-b50ec5ebc5fa2a1b.css" integrity="sha384-tNZFsDRoZzeLixdUcN04F/5C4b0fyiguSHY3C1RExNAn36eXVrmKyuUisgcQL71K"/>
+<link rel="stylesheet" href="/fitness-memo/styles-1a885113b1dca402.css" integrity="sha384-RH5XuLufT25w6AqZ6ZW3L1OY1QftIlWIdjJ0GN1YVDnTiw86IOdu8snwYmiChdtM"/>
 
 
 <!-- og:image の実体。クローラ専用なので stamp-sw.sh が SW のシェルから除外している -->
@@ -139,8 +140,8 @@
 
 
 <script type="module">
-import init, * as bindings from '/fitness-memo/fitness-memo-b39aa75e07eac7bf.js';
-const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-b39aa75e07eac7bf_bg.wasm' });
+import init, * as bindings from '/fitness-memo/fitness-memo-be31fcd04f17ed03.js';
+const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-be31fcd04f17ed03_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -149,7 +150,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-<link rel="modulepreload" href="/fitness-memo/fitness-memo-b39aa75e07eac7bf.js" crossorigin="anonymous" integrity="sha384-8aWlnVEyXywtr6LQYwmg31Hu0vJQxvq0NNm5hX9F5IEZDRNLYowFwsgtm9xO+g2Z"><link rel="preload" href="/fitness-memo/fitness-memo-b39aa75e07eac7bf_bg.wasm" crossorigin="anonymous" integrity="sha384-T40ogjBNE90YVG5jKqKo+vL8JiT2M+yNBm6JOlu6nUG6ZETJ/QpWvU6FUyIb39t2" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/fitness-memo/fitness-memo-be31fcd04f17ed03.js" crossorigin="anonymous" integrity="sha384-BkdA+n5/K+TAT0KJK1+reLP64fD+yZROv9g8RJRpbq9y9xTvRJdhVrU05ZlezPn1"><link rel="preload" href="/fitness-memo/fitness-memo-be31fcd04f17ed03_bg.wasm" crossorigin="anonymous" integrity="sha384-Zqz0nAOoAQDM2AhEriWhLjj3eEJHhO96v7d30tZGDoqXH0q2J1hubHckWduD0nw/" as="fetch" type="application/wasm"></head>
 <body>
 <!-- CSR なので配信される HTML の body にはテキストが 1 文字も無い。Googlebot は JS を
      実行するので通常は問題にならないが、**JS を実行しないクローラ（LLM 系の多くを含む）

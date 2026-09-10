@@ -13,7 +13,7 @@
 
 自動化の置き場は 1 つしかない。[ワークフローファイルを書かない（ただし Actions 機能は無効化しない）](no-workflow-files.md) が `.github/workflows/` を一切書かないと決めているので、**`.githooks/pre-commit` が唯一の CI である**（[CI を `.githooks/pre-commit` で回す](ci-in-pre-commit.md)）。
 
-問題は毎コミット撮ると git が膨らむことである。ADR や `Cargo.toml` だけを触ったコミットでも撮り直すなら、10 枚 190KB のバイナリが履歴に積まれ続ける。[マージ方式を merge コミットのみに固定する](force-merge-commit-only.md) で squash しないと決めているので、**PR の中間コミットの blob も永久に残る**。
+問題は毎コミット撮ると git が膨らむことである。ADR や `Cargo.toml` だけを触ったコミットでも撮り直すなら、12 枚 約 214KiB のバイナリが履歴に積まれ続ける。[マージ方式を merge コミットのみに固定する](force-merge-commit-only.md) で squash しないと決めているので、**PR の中間コミットの blob も永久に残る**。
 
 ## 決定
 
@@ -47,10 +47,10 @@ fi
 ## 理由
 
 - **時計の固定がこの機能を成立させている。** `shots.mjs` のシードは `daysAgo` 基準なので、固定しないと **UI を 1 文字も変えていない「日を跨いだコミット」でも**カレンダーの当日位置・経過表示・X 軸の右端が動く。自動 `git add` する設計でそれをやると、毎日ノイズ diff が出て履歴に blob が積まれ続ける。**オフセット（`+09:00`）を必ず書く**のも同じ話で、付けないと Node のローカル TZ で解釈され、マシン TZ が UTC のとき JST 19:30 になる。
-- **実測で差分ゼロを確認した。** 図が入った後の最初の実走（コミット #4）で、撮り直しても **1 バイトも変わらず `git add` が no-op** になった。`public/manual/` は `git status` に出ない。これが設計どおり動いている証拠で、**ここが壊れると UI を触るコミットごとに 190KB の blob が積まれ始める**。
+- **実測で差分ゼロを確認した。** 図が入った後の最初の実走（コミット #4）で、撮り直しても **1 バイトも変わらず `git add` が no-op** になった。`public/manual/` は `git status` に出ない。これが設計どおり動いている証拠で、**ここが壊れると UI を触るコミットごとに約 214KiB の blob が積まれ始める**。
 - **`UI_PATHS` の基準は「利用者が見るものが変わりうるか」。** `src/` を丸ごと入れているのは、`views` だけでなく `chart_layout`（折れ線の座標）・`core`（図に写る指標値）・`presets`（種目名）も図に出るからである。`assets/icons/` は lucide のグリフがシェブロンや鉛筆として写る。`package*.json` は Playwright を上げると Chromium が変わって全枚数が churn する。逆に `adr/` `Cargo.*` `Trunk.toml` `e2e/` は入れない（利用者の体験が変わらないので、撮っても差分が出ないぶんの時間が無駄になる）。
 - **`-z | tr '\0' '\n'` を通すのは `core.quotePath` のため。** 既定 true なので `git diff --name-only` は非 ASCII を含むパスを `"src/…"` と引用符で囲んで出す。そのままだと `^src/` が当たらず、日本語ファイル名を含む UI 変更で撮影が黙って走らない。
-- **README の 3 枚を pre-commit で撮らない。** README の PNG は 1 回の撮り直しで **383KB**（143,101 + 158,114 + 82,268）で、`assets/1-record.png` は既に 6 世代ある。UI を触りながら 5 コミット積む PR ではその 5 世代が履歴に残り、[マージ方式を merge コミットのみに固定する](force-merge-commit-only.md) により squash で消えない。マニュアルの図 10 枚（計 190KB、うち差分が出るのは変わった枚数だけ）とは桁が違う。**代わりに「UI を触った PR は最後のコミットで `--only=readme` を手で撮る」を規則にし、ドリフトは `--check` が捕まえる。**
+- **README の 3 枚を pre-commit で撮らない。** README の PNG は 1 回の撮り直しで **383KB**（143,101 + 158,114 + 82,268）で、`assets/1-record.png` は既に 6 世代ある。UI を触りながら 5 コミット積む PR ではその 5 世代が履歴に残り、[マージ方式を merge コミットのみに固定する](force-merge-commit-only.md) により squash で消えない。マニュアルの図 12 枚（計約 214KiB、うち差分が出るのは変わった枚数だけ）とは桁が違う。**代わりに「UI を触った PR は最後のコミットで `--only=readme` を手で撮る」を規則にし、ドリフトは `--check` が捕まえる。**
 - **`SHOTS=0` が要るのは `SKIP_HOOKS=1` が粗すぎるから。** `SKIP_HOOKS=1` は fmt / clippy / test / playwright まで全部飛ばすので、「今は撮り直したくないが検証は通したい」（撮影が壊れている、図を別コミットに分けたい）に使えない。脱出口が 1 つしかないと、撮影を飛ばしたい人が検証ごと飛ばすようになる。
 - **判定を `= "1"` ではなく `!= "0"` にする。** `= "1"` だと `SHOTS=yes` / `SHOTS=2` / `SHOTS=true` と書いた人の撮影が**黙って**飛ぶ。止めたい人だけが `"0"` を書く形にして、綴りを間違えたら撮影が走る側へ倒す。
 - **2 回目の `trunk build` ではなく `cp -R` で足りる。** `index.html` の `copy-dir public/manual` はファイル名にハッシュを付けない素のコピーで、`manual` は SW のシェルから外してあるので `sw.js` の再スタンプも要らない。`trunk build` は cargo が no-op でも wasm-bindgen を 62MB の debug wasm に走らせる。
@@ -68,8 +68,11 @@ fi
   | #6 マニュアル UI | `src/views/` 他 | なし（旧 hook） | 247 件 | 1.1 分 |
   | #3 hook 自身 | `.githooks/` | なし（`UI_PATHS` に当たらない） | 248 件 | 59.6 秒 |
   | **#4 図 + 寸法** | `public/manual/` `src/` | **あり（10 枚）** | 248 件 | **57.6 秒**（うち Playwright 52.2 秒） |
+  | 3 章 + 図 12 枚（rebase 後） | `src/` `public/manual/` | あり（12 枚） | 305 件 | 67 秒 |
 
   **[CI を `.githooks/pre-commit` で回す](ci-in-pre-commit.md) の「実測が 60 秒を超えたら Playwright を release 側へ移す判断になる」という閾値は、この PR より前から超えていた。** 撮影なしのコミットが 59.6 秒〜1.8 分かかっている。主因は E2E が 262 件（本 PR で +15）に増えたことで、**撮影の責任ではない。** 撮影の増分は、差分ゼロのとき数秒に留まる（`--only=manual` 単体で 3.4 秒、`cp -R` が走らないため）。閾値を評価するときはこの 2 つを混ぜないこと。
+
+  **rebase 後の実測でも同じ構図が繰り返された。** `main` から 3 機能（ドロップセット・種目ごとのラベル・新機能のお知らせ）が入り、マニュアルの章が 3 本・図が 2 枚増えた状態で計測すると、`node scripts/shots.mjs --only=manual` は **10 枚 3.51s → 12 枚 3.65s（+0.14s）**、hook 全体は **67 秒（E2E 305 件・図 12 枚）**。**60 秒を超えたが、増分の内訳は撮影 +0.14 秒・テスト件数 248 → 305 件で、支配項は今回もテストの件数である。** [CI を `.githooks/pre-commit` で回す](ci-in-pre-commit.md) の「60 秒を超えたら Playwright を release 側へ移す判断になる」という条件には到達したが、**判断そのものはこの PR では下さず、到達した事実と帰属を記録するに留める**（E2E の実行場所を動かすのは範囲外）。
 - **rebase とマージでは走らない。** `git help rebase` は pre-rebase 以外の hook を約束しておらず、`git rebase --continue` の競合解消後は sequencer が `-n` を付けるので **pre-commit は走らない**（`cherry-pick --continue` は走る）。マージのコミットに掛かるのは `pre-merge-commit` で、それは `.githooks/` に置いていない。**GitHub 上のマージはそもそもローカル hook を通らない。** したがって次の穴が開く。
 
   | 経路 | pre-commit | 図の撮り直し |

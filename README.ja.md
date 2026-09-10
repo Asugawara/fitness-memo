@@ -35,19 +35,19 @@ iPhone のホーム画面から起動して完全オフラインで動く、個�
 
 ## アプリ内マニュアル
 
-設定タブに新しい行「使い方」が増えた（ホーム画面への追加のしかたのすぐ下、言語のすぐ上）。シートではなく節として開くので、タブを往復しても開いていた場所を覚えている。中身は 8 章の折りたたみ一覧で、同時に開くのは 1 つ — 種目一覧と同じ形（[使い方マニュアルを設定タブの節にし、開く章は 1 つだけにする](adr/ux/manual-as-a-settings-section-with-one-open-chapter.md)）: 推移タブの絞り込み・グラフの読み取り欄・前回をコピー・「＋ メモ」で開く4つ・空の日から始める・部位の折りたたみ・並び替え・書き出しと読み込み。記録タブにも初回だけ使い方への手掛かりを小さく出す — ホーム画面への追加の注意書きとは並べて出さないので、常にどちらか一方だけが見える。
+設定タブに新しい行「使い方」が増えた（ホーム画面への追加のしかたのすぐ下、言語のすぐ上）。シートではなく節として開くので、タブを往復しても開いていた場所を覚えている。中身は 11 章の折りたたみ一覧で、同時に開くのは 1 つ — 種目一覧と同じ形（[使い方マニュアルを設定タブの節にし、開く章は 1 つだけにする](adr/ux/manual-as-a-settings-section-with-one-open-chapter.md)）: 推移タブの絞り込み・グラフの読み取り欄・前回をコピー・種目ごとのラベル・「＋ メモ」で開く4つ・ドロップセット・空の日から始める・部位の折りたたみ・並び替え・書き出しと読み込み・新機能のお知らせ。記録タブにも初回だけ使い方への手掛かりを小さく出す — ホーム画面への追加の注意書きとは並べて出さないので、常にどちらか一方だけが見える。
 
-8 章のうち 5 章は実際の画面のスクリーンショットを日英両方で持つ — `public/manual/{ja,en}/` の下に計 10 枚の `.webp`。撮影は常に**ライトテーマ固定**（[使い方マニュアルの図を手描きの模式図ではなくアプリ自身のスクリーンショットにする](adr/architecture/manual-figures-as-served-screenshots.md)）。残り 3 章（絞り込み・並び替え・書き出し）は図を持たない — 閉じた `<select>` 2 個やドラッグ操作は静止画では何も伝わらず、書き出しの章は文章だけで既に足りているため。撮り直しはいつ行っても安全 — 時計とタイムゾーンを `scripts/shots.mjs` の中で固定してあるので、何か月後に撮り直しても「今日」が動かず、中身が変わっていなければバイト単位で同じ画像になる:
+11 章のうち 6 章は実際の画面のスクリーンショットを日英両方で持つ — `public/manual/{ja,en}/` の下に計 12 枚の `.webp`。撮影は常に**ライトテーマ固定**（[使い方マニュアルの図を手描きの模式図ではなくアプリ自身のスクリーンショットにする](adr/architecture/manual-figures-as-served-screenshots.md)）。残り 5 章は図を持たない — 絞り込みは閉じた `<select>` 2 個しか写らない、ラベルは定義（設定タブの編集シート）と選択（記録タブのカード）が 2 画面にまたがり 1 枚では両方を写せないので文章に任せる、並び替えはドラッグ操作が静止画では伝わらない、書き出しは文章だけで既に足りている、新機能のお知らせは帯を押すと出るシートで読み終えると二度と出ないので図を残す価値が薄い。ドロップセットには図がある — 段を足す口が文字ラベルを持たないアイコン 1 個（`arrow-down-wide-narrow`）で、「回数欄のすぐ右」という位置は図でしか特定できないため（[ドロップセットの段はメインセットの下の箱に出し、推移では既定で外す](adr/ux/drop-sets-as-a-box-under-the-main-set.md) 決定 1）。撮り直しはいつ行っても安全 — 時計とタイムゾーンを `scripts/shots.mjs` の中で固定してあるので、何か月後に撮り直しても「今日」が動かず、中身が変わっていなければバイト単位で同じ画像になる:
 
 ```sh
-node scripts/shots.mjs                     # 全部：README の 3 枚 + マニュアルの 10 枚
-node scripts/shots.mjs --only=manual       # マニュアルの 10 枚だけ（pre-commit が呼ぶのはこれ）
+node scripts/shots.mjs                     # 全部：README の 3 枚 + マニュアルの 12 枚
+node scripts/shots.mjs --only=manual       # マニュアルの 12 枚だけ（pre-commit が呼ぶのはこれ）
 node scripts/shots.mjs --only=readme       # README の 3 枚だけ（UI が落ち着いたら手で叩く）
 node scripts/shots.mjs --only=manual:<id>  # 1 章だけ日英両方、例: --only=manual:copy-last
 node scripts/shots.mjs --check             # 一時ディレクトリに撮ってバイト比較。差があれば exit 1
 ```
 
-`.githooks/pre-commit` が呼ぶのは常に `--only=manual` で、しかも UI に関わるパスを触ったコミットのときだけ。README の 3 枚は意図的に手動・不定期の作業にしてあり、撮り忘れは `scripts/release.sh` の `--check` がリリース前に捕まえる想定（[マニュアルの図は pre-commit で撮り直すが、UI に関わるパスを触ったコミットに限る](adr/deploy/screenshots-in-pre-commit-on-ui-paths.md)）。図は合計で約 190KB になるが、Service Worker のオフラインシェルには一度も入れていない — オフラインでは図が欠けることをマニュアル自身が本文で伝える設計なので、開かない人にまで毎回のインストールで背負わせる理由が無い。
+`.githooks/pre-commit` が呼ぶのは常に `--only=manual` で、しかも UI に関わるパスを触ったコミットのときだけ。README の 3 枚は意図的に手動・不定期の作業にしてあり、撮り忘れは `scripts/release.sh` の `--check` がリリース前に捕まえる想定（[マニュアルの図は pre-commit で撮り直すが、UI に関わるパスを触ったコミットに限る](adr/deploy/screenshots-in-pre-commit-on-ui-paths.md)）。図は合計で約 214KiB になるが、Service Worker のオフラインシェルには一度も入れていない — オフラインでは図が欠けることをマニュアル自身が本文で伝える設計なので、開かない人にまで毎回のインストールで背負わせる理由が無い。
 
 ## アイコンと共有画像
 
@@ -143,7 +143,7 @@ npx playwright test                     # 全 project（Chromium / iPhone 15 Pro
 
 `.githooks/pre-commit` は `main` への `docs/` 混入をガードしたうえで、`cargo fmt --all -- --check` → `cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings` → `cargo test` → `trunk build` →（UI に関わるパスを触ったコミットのときだけ）`node scripts/shots.mjs --only=manual` → `npx playwright test --project=chromium --project=harness` を順に実行する。緊急時は `SKIP_HOOKS=1 git commit` でフック全体を飛ばせる。`SHOTS=0 git commit` はそれより狭く、**撮り直しだけ**を飛ばして fmt / clippy / test / build / E2E はそのまま走らせる — 撮影そのものが壊れているときや、コードと図のコミットを分けたいときに使う。
 
-マニュアルの図を 1 章だけ直しているときは、`node scripts/shots.mjs --only=manual:<id>`（例: `--only=manual:copy-last`）でその章だけを日英両方撮り直せる。10 枚全部は回らない。
+マニュアルの図を 1 章だけ直しているときは、`node scripts/shots.mjs --only=manual:<id>`（例: `--only=manual:copy-last`）でその章だけを日英両方撮り直せる。12 枚全部は回らない。
 
 `playwright.config.mjs` は `locale: 'ja-JP'` を固定しているので既存の spec は日本語 UI を見る。英語 UI は `e2e/i18n.spec.mjs` が `en-US` に切り替えて見る。
 

@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-09-09
 - **カテゴリ**: data-model
-- **関連**: [チップでラベルを選ぶと履歴とコピーが切り替わる](../ux/label-chips-switch-the-history-and-the-copy.md)（画面側の決定）, [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](notes-on-logs-and-sets.md)（粒度の 3 つ目の軸）, [ID を 60 bit の乱数にして 2 台のデータを安全に混ぜる](random-ids-for-safe-merge.md)（合流の梯子を継ぐ相手）, [トレーニングメニューを名前付きの種目リストとして持つ](routines-as-named-exercise-lists.md)（宙に浮いた参照を残す規則）, [「1日1種目1ログ」を不変条件にする](one-log-per-exercise-per-day.md), [指標を種目の属性ではなくグラフの表示設定にする](metric-is-a-view-setting.md)（既定を配らない根拠）, [取り込みは「足すだけ」に固定する](../storage/import-is-merge-only.md), [表計算で開ける TSV で書き出す](../storage/tsv-export-for-spreadsheets.md), [TSV の見出しは UI の言語に従う](../storage/tsv-header-follows-the-ui-language.md), [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](../ux/machine-pins-on-the-exercise.md)（「種目に貼り付く棚」の先例）, [手書きの文言表を 1 ファイルに置く](../architecture/i18n-hand-rolled-string-table.md)
+- **関連**: [チップでラベルを選ぶと履歴とコピーが切り替わる](../ux/label-chips-switch-the-history-and-the-copy.md)（画面側の決定）, [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](notes-on-logs-and-sets.md)（粒度の 3 つ目の軸）, [ID を 60 bit の乱数にして 2 台のデータを安全に混ぜる](random-ids-for-safe-merge.md)（合流の梯子を継ぐ相手）, [トレーニングメニューを名前付きの種目リストとして持つ](routines-as-named-exercise-lists.md)（宙に浮いた参照を残す規則）, [「1日1種目1ログ」を不変条件にする](one-log-per-exercise-per-day.md), [指標を種目の属性ではなくグラフの表示設定にする](metric-is-a-view-setting.md)（既定を配らない根拠）, [取り込みは「足すだけ」に固定する](../storage/import-is-merge-only.md), [表計算で開ける TSV で書き出す](../storage/tsv-export-for-spreadsheets.md), [TSV の見出しは UI の言語に従う](../storage/tsv-header-follows-the-ui-language.md), [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](../ux/machine-pins-on-the-exercise.md)（「種目に貼り付く棚」の先例）, [手書きの文言表を 1 ファイルに置く](../architecture/i18n-hand-rolled-string-table.md), [ラベルに色を持たせ、推移タブのデータ点をその色で描く](../ux/label-colour-on-the-progress-dots.md)（`Label.color` を足し「推移タブはラベルを見ない」を改訂した相手）
 
 ## 背景
 
@@ -146,6 +146,8 @@ pub label: Option<LabelId>,
 **`normalize_exercises` が `&mut IdGen` を取るようになった。** 重複 ID の再採番に要る。`normalize` は既に `ids` を持っているので呼び出しは 1 行だが、テストからの直接呼び出し 2 箇所は書き換えた。
 
 **推移タブはラベルを見ない。** グラフも記録テーブルも全ログを混ぜて描く。別 PR（`exercise_series` / `pick_series` / `UiState.progress_*` に一切触っていない）。
+
+> **改訂**（2026-09-10）: その別 PR が [ラベルに色を持たせ、推移タブのデータ点をその色で描く](../ux/label-colour-on-the-progress-dots.md)。`Label` に `color: String`（`#rrggbb`、`#[serde(default)]`、`skip_serializing_if` なし）が加わり、推移タブがチップでラベルを絞れるようになった。**この ADR の不変条件はどれも変わっていない** — 定義は種目に貼り付いたまま、参照は ID のまま、ラベルだけのログは書かないまま、TSV には色列を足していない（部位の色と同じ扱い）。既定色の門番は `clean_labels` の 1 箇所で、`Exercise.labels` を書く 5 経路がすべてそこに寄る。
 
 ## 検討した代替案
 

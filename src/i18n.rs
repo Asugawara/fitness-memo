@@ -1113,6 +1113,18 @@ impl ReleaseNote {
 /// （clippy::redundant_static_lifetimes。`presets::PRESETS` と同じ書き方）。
 pub const RELEASES: &[ReleaseNote] = &[
     ReleaseNote {
+        id: 3,
+        date: "2026-09-10",
+        ja: &[
+            "ラベルごとに色を選べるようにしました。設定タブ → 種目 のラベルの行に色見本が出ます。新しいラベルには互いに重ならない色が自動で付きます。",
+            "推移タブでラベルを絞り込めるようにしました。種目を選ぶとラベルのチップが並び、押すとグラフの点も記録の表もそのラベルだけになります。「すべて」ではラベルの付いた日がその色の点で出ます。",
+        ],
+        en: &[
+            "Labels can have a colour. A swatch now sits on each label row under Settings › Exercises, and new labels get colours that never repeat each other.",
+            "The Progress tab can be filtered by label. Pick an exercise and its labels appear as chips; tapping one narrows both the graph and the records table to that label. Under \"All labels\", labelled days are drawn in their label's colour.",
+        ],
+    },
+    ReleaseNote {
         id: 2,
         date: "2026-09-09",
         ja: &[

@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-09-09
 - **カテゴリ**: ux
-- **関連**: [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](../data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)（データ側の決定）, [前回までの記録を日付で出し、何回分出すかを表示設定にする](past-records-by-date-with-a-count-setting.md)（決定 1 と 6 を守ったうえで 4 列目を足した相手）, [「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md)（フォールバックしない根拠）, [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（決定 4 の 4 つ目の適用先）, [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](machine-pins-on-the-exercise.md)（隣人だが逆の判断をした相手）, [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（縦の予算）, [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](settings-as-a-list-of-sections.md)（管理 UI の置き場所）, [`color-scheme` を宣言し、クラスなしの `<button>` を作らない](declare-color-scheme-for-ua-widgets.md), [記録タブのカードとセットをドラッグで並び替え、`Vec` の並びをそのまま保存する](drag-to-reorder-in-record-tab.md)（`.card-head` が掴み口である制約）, [手書きの文言表を 1 ファイルに置く](../architecture/i18n-hand-rolled-string-table.md)
+- **関連**: [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](../data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)（データ側の決定）, [前回までの記録を日付で出し、何回分出すかを表示設定にする](past-records-by-date-with-a-count-setting.md)（決定 1 と 6 を守ったうえで 4 列目を足した相手）, [「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md)（フォールバックしない根拠）, [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（決定 4 の 4 つ目の適用先）, [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](machine-pins-on-the-exercise.md)（隣人だが逆の判断をした相手）, [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（縦の予算）, [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](settings-as-a-list-of-sections.md)（管理 UI の置き場所）, [`color-scheme` を宣言し、クラスなしの `<button>` を作らない](declare-color-scheme-for-ua-widgets.md), [記録タブのカードとセットをドラッグで並び替え、`Vec` の並びをそのまま保存する](drag-to-reorder-in-record-tab.md)（`.card-head` が掴み口である制約）, [手書きの文言表を 1 ファイルに置く](../architecture/i18n-hand-rolled-string-table.md), [ラベルに色を持たせ、推移タブのデータ点をその色で描く](label-colour-on-the-progress-dots.md)（決定 13 と却下案「ラベルに色を持たせる」を改訂した相手）
 
 ## 背景
 
@@ -175,6 +175,8 @@ let has_labels = Memo::new(move |_| labels.with(|ls| !ls.is_empty()));
 
 グラフも記録テーブルもラベルを見ない。別 PR（`exercise_series` / `group_series` / `pick_series` / `restore_pick` / `UiState.progress_*` に一切触っていない）。
 
+> **改訂**（2026-09-10）: その別 PR が [ラベルに色を持たせ、推移タブのデータ点をその色で描く](label-colour-on-the-progress-dots.md)。推移タブにラベルのチップ行が付き、グラフの点と記録テーブルがそれに従う。`pick_series` などは**シグネチャも挙動も変えず**、ラベルを載せた `*_points` への委譲になっている（`UiState` は今も触っていない — 絞り込みは保存しない）。
+
 ## 理由
 
 **チップを選ぶと履歴とコピーが同時に切り替わる**という 1 つの操作に畳んだのが、この機能の中心。ラベルごとにコピーボタンを並べる案（`[H をコピー][P をコピー][S をコピー]`）は同じことを 3 つのボタンで言うが、(a) 44px × 3 が縦に増え、(b) 履歴表示が「どれをコピーするか」と一致しなくなり、(c) 押す前に「前回はどうだったか」が読めない。**表示と行き先が常に一致していること**が、[「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md) が守った性質そのものなので、そこに乗せた。
@@ -232,6 +234,8 @@ let has_labels = Memo::new(move |_| labels.with(|ls| !ls.is_empty()));
 **記録タブのチップ行に `＋` を置いて、その場でラベルを作れるようにする。** マシンの前で思いついた狙いをすぐ足せる。しかし (a) 44px の標的が 1 つ増え、(b) IME 付きの入力欄がカードの中に生えてキーボードがボトムタブを覆い、(c) 重複チェックと上限の警告をカード内に出す場所が無い。定義は生涯 1 回なので設定タブで足りる。却下（決定 11）。
 
 **ラベルに色を持たせる。** チップが一目で区別でき、履歴行も色で読める。しかし部位の `--chip-0..3` の 4 段濃淡と意味が競合し（「色 = 部位」という既存の読み方が崩れる）、色覚の配慮も別に要る。`--accent` 1 色で「選択中」を表すほうが既存の絵と揃う。却下。
+
+> **改訂**（2026-09-10）: [ラベルに色を持たせ、推移タブのデータ点をその色で描く](label-colour-on-the-progress-dots.md) がこの却下を覆した。3 つの理由はいずれも**記録タブの中でだけ**成り立つもので、色が出る面（設定シートの行と推移タブ）には部位の色も `--chip-0..3` の濃淡も 1 つも出ていない。**記録タブのチップには今も色を出さない**（カードの頭に部位の `.dot` が居るので、1 枚に 2 つの色体系を置かない）ので、この却下理由が守っていた性質はそのまま残っている。色覚については、チップが名前を持ち線・軸・体重の色を変えないので、色は冗長な符号に留まる。
 
 **ラベルの並べ替え（D&D）を持たせる。** 使用頻度順に並べられる。要素が 2〜4 個なので ✕ → ＋ の 2 タップで足り、[記録タブのカードとセットをドラッグで並び替え、`Vec` の並びをそのまま保存する](drag-to-reorder-in-record-tab.md) の機構をシートの中に持ち込む対価に見合わない。却下。
 

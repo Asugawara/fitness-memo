@@ -247,7 +247,7 @@ test('英語で書き出した TSV は英語の見出しで、日本語の見出
     return await f.text();
   });
   expect(tsv.split('\n')[0]).toBe(
-    'Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec\tLabel',
+    'Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tDrop set\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec\tLabel',
   );
 
   // ★ 過去に日本語で書き出したファイルが、英語に切り替えた端末でも読める。
@@ -338,4 +338,20 @@ test('記録がまったく無い種目は英語で "No records" と出る', asy
   await pickFromAddSheet(page, 'Bench Press');
 
   await expect(page.getByTestId('last-log')).toHaveText('No records');
+});
+
+// ★ 新機能のお知らせバナー本体は e2e/whatsnew.spec.mjs が持つ。ここで足すのは
+//   英語 UI での文言だけ（CTA とシート見出し）。release_seen: 0 を初回起動前から
+//   仕込むので addInitScript を使う（boot() は最初のナビゲーションを自分で行う）
+test('新機能のお知らせバナーの CTA とシート見出しが英語で出る', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('fitness-memo/ui/v1', JSON.stringify({ release_seen: 0 }));
+  });
+  await boot(page);
+
+  await expect(page.getByTestId('whatsnew-banner')).toBeVisible();
+  await expect(page.getByTestId('whatsnew-banner-open')).toContainText("See what's new");
+
+  await page.getByTestId('whatsnew-banner-open').click();
+  await expect(page.getByTestId('whatsnew-sheet')).toContainText("What's new");
 });

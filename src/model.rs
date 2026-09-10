@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 /// ★ 逆に **`#[serde(default)]` を持つフィールドの追加では上げない**。旧版は
 /// `deny_unknown_fields` を付けていないので未知フィールドを黙って無視し、`migrate` が
 /// `Err` を返さないので退避パスにも落ちない。[`SetEntry::note`] / [`ExerciseLog::note`] /
-/// [`Db::routines`] がこれで通っている。ここで上げると逆に旧版が
+/// [`Db::routines`] / [`SetEntry::drops`] がこれで通っている。ここで上げると逆に旧版が
 /// `RestoreError::Unsupported` で退避するので、**前方互換を積極的に壊す側になる**。
 pub const SCHEMA: u32 = 3;
 
@@ -426,7 +426,42 @@ pub struct SetEntry {
     pub reps: u32,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// **このメインセットから重量を落として続けた段**
+    /// （adr/data-model/drop-sets-as-stages-under-the-main-set.md）。
+    ///
+    /// 空が普通。ドロップセットをやった日のそのセットにだけ 1〜[`MAX_DROPS`] 段入る。
+    /// **メインセットの重量・回数はこの `Vec` に入らない** — 上の `weight` / `reps` が
+    /// メインセットで、ここは落とした段だけ。だから推移から段を外してもメインセットは残る。
+    ///
+    /// ★ **`note` とまったく同じ扱いで「同じセットか」の判定には入れない。**
+    /// [`crate::core::same_sets`] は重量と回数だけを見る。識別に入れると、段の差だけで
+    /// [`crate::core::merge_db`] が食い違い扱いになり、`log_rank` は同点なので差し替えの
+    /// 分岐にも入れず、負けた側のセットメモが `Conflict` も出さずに消える。
+    ///
+    /// ★ **`skip_serializing_if` を外してはいけない。** `note` と同じ理由で、段を
+    /// 入れていない利用者の JSON は今までとバイト単位で同一でなければならない
+    /// （`e2e/smoke.spec.mjs` の「保存 JSON にキーが増えていない」が主張している）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drops: Vec<DropStage>,
 }
+
+/// ドロップセットの 1 段。**メインセット（[`SetEntry`]）にぶら下がる。**
+///
+/// メモを持たないのは、段ごとに書くことが実際に無いため（書きたいことはメインセットの
+/// [`SetEntry::note`] に付く）。フィールドを足すときは [`SetEntry`] と同じ規則
+/// （`#[serde(default)]` を持たせ、`SCHEMA` は上げない）に従う。
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct DropStage {
+    pub weight: f32,
+    pub reps: u32,
+}
+
+/// 1 メインセットに付けられる段数の上限。
+///
+/// ★ **4 で止める。** 実際のドロップセットは 1〜3 段で、4 段目から先は「セットを分けた
+/// ほうが読める」領域。上限があること自体は [`MAX_PINS`] と同じ理由（取り込みの門番で
+/// あり、localStorage 単一キーの見積りを無制限にしないため）。
+pub const MAX_DROPS: usize = 4;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ExerciseLog {
@@ -697,7 +732,7 @@ mod tests {
         let set = SetEntry {
             weight: 60.0,
             reps: 10,
-            note: String::new(),
+            ..Default::default()
         };
         assert_eq!(
             serde_json::to_string(&set).expect("直列化できる"),
@@ -712,6 +747,48 @@ mod tests {
         assert_eq!(set.weight, 60.0);
         assert_eq!(set.reps, 10);
         assert_eq!(set.note, "");
+        // ★ ドロップの印より前に書かれた JSON も同じ 1 行が守る。`#[serde(default)]` を
+        //   外すと `core::legacy` の schema ≤2 読み込みまで `missing field` で落ちる
+        assert!(set.drops.is_empty());
+    }
+
+    #[test]
+    fn set_entry_writes_the_drop_stages_only_when_there_are_any() {
+        // ★ バイト一致で見る。段を入れていない利用者の保存データが 1 バイトも
+        //   変わらないことが、`skip_serializing_if` を外させないための唯一の歯止め
+        let dropped = SetEntry {
+            weight: 60.0,
+            reps: 6,
+            note: String::new(),
+            drops: vec![
+                DropStage {
+                    weight: 50.0,
+                    reps: 5,
+                },
+                DropStage {
+                    weight: 40.0,
+                    reps: 4,
+                },
+            ],
+        };
+        assert_eq!(
+            serde_json::to_string(&dropped).expect("直列化できる"),
+            r#"{"weight":60.0,"reps":6,"drops":[{"weight":50.0,"reps":5},{"weight":40.0,"reps":4}]}"#
+        );
+    }
+
+    #[test]
+    fn set_entry_reads_back_the_drop_stages() {
+        let set: SetEntry =
+            serde_json::from_str(r#"{"weight":60.0,"reps":6,"drops":[{"weight":50.0,"reps":5}]}"#)
+                .expect("段付きも読める");
+        assert_eq!(
+            set.drops,
+            vec![DropStage {
+                weight: 50.0,
+                reps: 5
+            }]
+        );
     }
 
     #[test]
@@ -734,7 +811,7 @@ mod tests {
             vec![SetEntry {
                 weight: 60.0,
                 reps: 10,
-                note: String::new(),
+                ..Default::default()
             }]
         };
         assert!(log_of(Vec::new(), "").is_empty());

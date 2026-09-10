@@ -4,12 +4,14 @@ use chrono::{Months, NaiveDate};
 use leptos::prelude::*;
 
 use crate::core;
-use crate::core::{Metric, Pick};
+use crate::core::{Drops, Metric, Pick};
 use crate::model::{Db, ExerciseId, GroupId};
 use crate::storage;
 
 use super::chart::Chart;
-use super::{cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, grp_name, t, use_dates, use_db};
+use super::{
+    cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, grp_name, t, use_dates, use_db, use_drops,
+};
 use crate::i18n::Lang;
 
 /// 記録テーブルの表示上限。超えた分は件数を明示して省く（黙って切らない）。
@@ -197,6 +199,7 @@ pub fn Progress() -> impl IntoView {
     let t = t();
     let db = use_db();
     let dates = use_dates();
+    let drops = use_drops();
 
     let opts = Memo::new(move |_| db.with(options));
 
@@ -265,10 +268,11 @@ pub fn Progress() -> impl IntoView {
         let today = dates.today.get();
         let period = period.get();
         let m = metric.get();
+        let drops = drops.get();
         db.with(|d| {
             let (from, to) = bounds(period, today, earliest_session(d));
             // 種目 / 部位 / どちらも「すべて」の分岐は `core::pick_series` に 1 本化してある
-            let raw = core::pick_series(d, p, m, from, to);
+            let raw = core::pick_series(d, p, m, from, to, drops);
             // ★「全期間」は週単位集約（1 年分 100 点超をそのまま描くと潰れる）
             if period == Period::All {
                 core::aggregate_weekly(&raw)
@@ -293,6 +297,26 @@ pub fn Progress() -> impl IntoView {
             } else {
                 raw
             }
+        })
+    });
+
+    // 集計から外したドロップセットがあるか。**外したことを黙らない。**
+    //
+    // ★ 記録タブは常に全部を数える（設定は「推移の見せ方」なので）。黙って外すと、
+    //   同じ日なのに記録タブとセット数・合計が違う理由が画面のどこにも出ない。
+    let hidden = Memo::new(move |_| {
+        let p = pick.get();
+        if !p.is_set() {
+            return false;
+        }
+        let today = dates.today.get();
+        let period = period.get();
+        let drops = drops.get();
+        db.with(|d| {
+            let (from, to) = bounds(period, today, earliest_session(d));
+            // ★ 「段が在るか」はデータの事実、それを注記にするかは画面の設定。
+            //   合成をここでやる（`Period` を `(from, to)` に解くのと同じ線）
+            drops == Drops::Exclude && core::any_drops_in_scope(d, p, from, to)
         })
     });
 
@@ -322,6 +346,7 @@ pub fn Progress() -> impl IntoView {
         let today = dates.today.get();
         let period = period.get();
         let m = metric.get();
+        let drops = drops.get();
         db.with(|d| {
             let (from, to) = bounds(period, today, earliest_session(d));
             let unit = m.unit(cur_lang());
@@ -348,8 +373,15 @@ pub fn Progress() -> impl IntoView {
                         let Some(log) = session.log_of(ex).filter(|l| !l.sets.is_empty()) else {
                             continue;
                         };
-                        let detail = log.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  ");
-                        rows.push((date, detail, show(core::log_value(m, log))));
+                        // ★ 詳細列も設定に従う。数字だけ外して段を並べると、表の中で
+                        //   「見えているセットの合計」と値が食い違う
+                        let detail = log
+                            .sets
+                            .iter()
+                            .map(|s| fmt_set(s, drops))
+                            .collect::<Vec<_>>()
+                            .join("  ");
+                        rows.push((date, detail, show(core::log_value_of(m, log, drops))));
                     }
                     (None, Some(g)) => {
                         let ids = d.exercise_ids_of_group(g);
@@ -359,7 +391,7 @@ pub fn Progress() -> impl IntoView {
                         for log in &session.logs {
                             if ids.contains(&log.exercise_id) && !log.sets.is_empty() {
                                 hit = true;
-                                total += core::log_value(m, log);
+                                total += core::log_value_of(m, log, drops);
                                 if let Some(e) = d.exercise(log.exercise_id) {
                                     names.push(ex_name(e).to_string());
                                 }
@@ -429,10 +461,29 @@ pub fn Progress() -> impl IntoView {
                         })
                 }}
 
+                // ★ **`weekly_note` の隣に無条件で置く。** 下の `chart-metric-empty` は
+                //   「体重が 1 件でもある」で括られているので、その中に入れると体重を
+                //   量っていない人には出ない。ドロップだけの種目でグラフが空になる
+                //   行き止まりを説明するのもこの 1 行
+                {move || {
+                    hidden
+                        .get()
+                        .then(|| {
+                            view! {
+                                <p class="muted note" data-testid="drops-hidden">
+                                    {t.progress.drops_hidden_note}
+                                </p>
+                            }
+                        })
+                }}
+
                 // ★ その期間にその種目の記録が無くても体重の点線は出る。左軸が消えているので
                 //   何のグラフか分からなくなるのを 1 行で補う
+                //
+                // ★ ドロップを外して空になったときは上の注記のほうが具体的なので出さない
+                //   （「この種目の記録はありません」だけだと理由が嘘になる）
                 {move || {
-                    (series.get().is_empty() && !weight.get().is_empty())
+                    (series.get().is_empty() && !weight.get().is_empty() && !hidden.get())
                         .then(|| {
                             view! {
                                 <p class="muted note" data-testid="chart-metric-empty">

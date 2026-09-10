@@ -7,11 +7,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{Datelike, NaiveDate, TimeDelta};
 
-use crate::i18n::Lang;
+use crate::i18n::{Lang, ReleaseNote};
 use crate::model::{
-    Db, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, Label, LabelId, MAX_INTERVAL_SEC,
-    MAX_LABEL_LEN, MAX_LABELS, MAX_PIN_LEN, MAX_PINS, Routine, RoutineId, SCHEMA, Session,
-    SetEntry,
+    Db, DropStage, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, Label, LabelId,
+    MAX_DROPS, MAX_INTERVAL_SEC, MAX_LABEL_LEN, MAX_LABELS, MAX_PIN_LEN, MAX_PINS, Routine,
+    RoutineId, SCHEMA, Session, SetEntry,
 };
 
 /// `Db::sessions` のキー書式。ゼロ埋め ISO なので辞書順 = 時系列順になる。
@@ -70,6 +70,25 @@ impl Metric {
     }
 }
 
+/// 推移タブの集計にドロップセットの段を入れるか。**既定は入れない。**
+///
+/// [`Metric`] と同じく**種目の属性ではなく画面の表示設定**で、保存先も `Db` ではなく
+/// `fitness-memo/ui/v1`（adr/storage/ui-state-in-separate-key.md）。
+///
+/// ★ 効くのは**推移タブだけ**。記録タブの当日合計・カレンダーの月合計・`summarize` は
+/// 常に入れる（[`log_value`] を通る）。設定は「推移の見せ方」であって記録ではないので、
+/// その日やった仕事の合計から落としてはいけない。
+///
+/// ★ `bool` ではなく enum にするのは、[`exercise_series`] / [`group_series`] /
+/// [`pick_series`] の 3 本に旗を通すことになるため。呼び出し側で
+/// `pick_series(.., true)` と書かれると、真が「入れる」なのか「除く」なのか読めない。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Drops {
+    #[default]
+    Exclude,
+    Include,
+}
+
 /// 1 セットのボリューム。**重量が入っていないセットは重量 1 として数える。**
 ///
 /// これで自重種目は自然に「総レップ数」、時間種目は「総秒数」になり、
@@ -77,17 +96,66 @@ impl Metric {
 ///
 /// ★ `max(1.0)` にするのは単調性のため。0.5kg を 0.5 倍で扱うと
 /// 「重量を足したのに指標が下がる」が起きて、グラフの上下が負荷の増減を表さなくなる。
-pub fn set_volume(s: &crate::model::SetEntry) -> f64 {
-    f64::from(s.weight).max(1.0) * f64::from(s.reps)
+///
+/// ★ **メインセットぶんだけを返す。** 落とした段は [`log_value_of`] が
+/// [`counted_drops`] を通して別に数える。ここに段を足し込むと、推移タブから段を外す
+/// 設定が効かなくなる（`Metric::Sets` が `sets` の本数を数えるので、値を 0 にする
+/// やり方では成立しない）。
+pub fn set_volume(s: &SetEntry) -> f64 {
+    volume(s.weight, s.reps)
 }
 
-/// 1 ログ（= その日のその種目）の指標。
+/// 重量 × 回数のボリューム。**メインセットも段もこの 1 本を通す。**
+///
+/// ★ 式を 2 つ書かない。`max(1.0)`（[`set_volume`] の doc にある単調性の理由）を
+/// 片方だけ直すと、自重の段が古い規則のまま残る。
+fn volume(weight: f32, reps: u32) -> f64 {
+    f64::from(weight).max(1.0) * f64::from(reps)
+}
+
+/// 集計に数える段。`Drops::Exclude` なら空。
+///
+/// ★ **「段を数えるか」の分岐をここ 1 箇所に閉じる。** [`log_value_of`] の 3 つの腕が
+/// それぞれ `if` を持つと、腕を 1 つ足したときに片方だけ段を数え忘れられる —
+/// それがまさに doc で防ごうとしている食い違い。
+fn counted_drops(s: &SetEntry, d: Drops) -> &[DropStage] {
+    if d == Drops::Include { &s.drops } else { &[] }
+}
+
+/// 1 ログ（= その日のその種目）の指標。**段も数える。**
+///
+/// 記録タブ・カレンダー・`log_rank` の入口。推移タブは [`log_value_of`] を使う。
 pub fn log_value(m: Metric, l: &ExerciseLog) -> f64 {
-    match m {
-        Metric::Volume => l.sets.iter().map(set_volume).sum(),
-        Metric::Sets => l.sets.len() as f64,
-        Metric::Reps => l.sets.iter().map(|s| f64::from(s.reps)).sum(),
-    }
+    log_value_of(m, l, Drops::Include)
+}
+
+/// 1 ログの指標。段を数えるかを選べる版。
+///
+/// ★ **3 指標すべてで段の扱いを揃える。** `Sets` だけ段を数えない、のような食い違いを
+/// 作ると、同じ設定で「ボリュームは増えたのにセット数は変わらない」が起きて、
+/// 利用者は設定が効いているのか壊れているのか区別できない。分岐を
+/// [`counted_drops`] に畳んであるので、腕はどれも「メインセット + 段」の同じ形になる。
+pub fn log_value_of(m: Metric, l: &ExerciseLog, d: Drops) -> f64 {
+    l.sets
+        .iter()
+        .map(|s| match m {
+            Metric::Volume => {
+                volume(s.weight, s.reps)
+                    + counted_drops(s, d)
+                        .iter()
+                        .map(|x| volume(x.weight, x.reps))
+                        .sum::<f64>()
+            }
+            Metric::Sets => 1.0 + counted_drops(s, d).len() as f64,
+            Metric::Reps => {
+                f64::from(s.reps)
+                    + counted_drops(s, d)
+                        .iter()
+                        .map(|x| f64::from(x.reps))
+                        .sum::<f64>()
+            }
+        })
+        .sum()
 }
 
 // ── 数値の整形 / パース ─────────────────────────────────────────────────────
@@ -147,10 +215,20 @@ pub fn parse_interval(s: &str) -> Option<u32> {
 /// 「同じセットか」を問うときは必ずここを通すこと。`==` を使ってよいのは
 /// 「メモまで含めてまったく同じか」を問うときだけ。
 fn same_sets(a: &[SetEntry], b: &[SetEntry]) -> bool {
-    a.len() == b.len()
-        && a.iter()
-            .zip(b)
-            .all(|(x, y)| x.weight == y.weight && x.reps == y.reps)
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same_set(x, y))
+}
+
+/// セット 1 本の同一性。**重量と回数だけ**を見る。
+///
+/// ★ [`same_sets`] の doc が言う「必ずここを通す」の実体。要素単位で問う場所
+/// （[`merge_set_notes_unordered`] / [`merge_set_drops_unordered`]）が式を書き直すと、
+/// 「メモも段も同一性に入らない」という [`SetEntry::drops`] の不変条件が
+/// 手書きの式の数だけ増える。
+///
+/// 重量は `to_bits` で比べる。`==` は NaN を不一致にするので、
+/// [`drop_unrepresentable_weights`] が先に走る前提が崩れた瞬間に挙動が分かれる。
+fn same_set(a: &SetEntry, b: &SetEntry) -> bool {
+    a.weight.to_bits() == b.weight.to_bits() && a.reps == b.reps
 }
 
 /// 並びを無視したセット列の一致。**メモは見ない。**
@@ -190,9 +268,7 @@ fn merge_set_notes_unordered(mine: &mut [SetEntry], theirs: &[SetEntry]) -> usiz
         let found = mine
             .iter()
             .enumerate()
-            .find(|(i, m)| {
-                !used[*i] && m.weight.to_bits() == t.weight.to_bits() && m.reps == t.reps
-            })
+            .find(|(i, m)| !used[*i] && same_set(m, t))
             .map(|(i, _)| i);
         if let Some(i) = found {
             used[i] = true;
@@ -202,6 +278,60 @@ fn merge_set_notes_unordered(mine: &mut [SetEntry], theirs: &[SetEntry]) -> usiz
         }
     }
     added
+}
+
+/// 重量・回数が同じセット同士を突き合わせて**ドロップの段**を合流させる。埋めた数を返す。
+///
+/// [`merge_set_notes_unordered`] とは**別のパスにする**。あちらは
+/// `filter(|t| !t.note.trim().is_empty())` でメモを持つ相手だけを回すので `used` の
+/// 取り合いが違い、共有すると `notes_added` が変わる（同じ重量・回数の行が複数ある
+/// 記録で、メモが隣の行に二重に付く）。
+///
+/// **段が空のセットにだけ入れる。** 両方に段があって中身が違うときは取り込み先を残す
+/// （`append_note` の「同じ文が既に入っていれば足さない」と同じ、足さない側に倒す判断）。
+/// `Conflict` も出さない — 出すと同じファイルを 2 回入れるたびに同じ食い違いを報告する。
+///
+/// ★ **2 段で組む。** 素朴に「段付きの相手を、同じ重量・回数の未使用な先頭に入れる」と、
+/// **同一のデータを初めて取り込んだだけで無関係なセットに段が付く**:
+///
+/// ```text
+/// mine   = [(60,10,"A"), (60,10,段あり), (70,5)]
+/// theirs = [(70,5),      (60,10,段あり), (60,10,"A")]   // 並べ替えただけの同じ記録
+/// → theirs の段付きが mine[0]（段なし）に当たり、段が 2 セットに付く
+/// ```
+///
+/// だから先に**同じ段を既に持っている相手**へ寄せ、余ったものだけが段の無い相手に入る。
+/// これで自分のファイルを何度取り込んでも増えない（冪等）。
+fn merge_set_drops_unordered(mine: &mut [SetEntry], theirs: &[SetEntry]) -> usize {
+    let mut used = vec![false; mine.len()];
+    let mut filled = 0;
+    // 第 1 段: 同じ段を既に持っている相手に寄せる（何も変えないので数えない）
+    let mut leftover = Vec::new();
+    for t in theirs.iter().filter(|t| !t.drops.is_empty()) {
+        let found = mine
+            .iter()
+            .enumerate()
+            .find(|(i, m)| !used[*i] && m.drops == t.drops && same_set(m, t))
+            .map(|(i, _)| i);
+        match found {
+            Some(i) => used[i] = true,
+            None => leftover.push(t),
+        }
+    }
+    // 第 2 段: 余ったものが、段の無い相手に入る
+    for t in leftover {
+        let found = mine
+            .iter()
+            .enumerate()
+            .find(|(i, m)| !used[*i] && m.drops.is_empty() && same_set(m, t))
+            .map(|(i, _)| i);
+        if let Some(i) = found {
+            used[i] = true;
+            mine[i].drops = t.drops.clone();
+            filled += 1;
+        }
+    }
+    filled
 }
 
 /// メモの合流。**同じ文が既に入っていれば足さない。** 足したら `true`。
@@ -248,6 +378,19 @@ fn fold_ws(s: &str) -> String {
 ///
 /// これが無いと `" "` が `skip_serializing_if = "String::is_empty"` をすり抜けて
 /// 保存され続け、`ExerciseLog::is_empty()`（`trim` する）と JSON の見え方がずれる。
+/// 回数が 0 の段と、上限を超えた段を落とす。**「段が在る」を 1 箇所で決める。**
+///
+/// ★ これが無いと、取り込みや手編集で入った `reps: 0` の段が `drops` を非空にして、
+/// 推移タブの注記（「ドロップセットは含めていません」）が**何も外していないのに出る**。
+/// 重量が `f32` で表せない段は `drop_unrepresentable_weights` が別に落とす。
+fn prune_empty_drops(s: &mut Session) {
+    for log in &mut s.logs {
+        for set in &mut log.sets {
+            set.drops = clean_drops(std::mem::take(&mut set.drops));
+        }
+    }
+}
+
 fn blank_notes_to_empty(s: &mut Session) {
     if s.note.trim().is_empty() {
         s.note.clear();
@@ -406,6 +549,68 @@ pub fn history_count(saved: Option<i64>) -> usize {
         return DEFAULT_HISTORY;
     };
     n.clamp(1, MAX_HISTORY as i64) as usize
+}
+
+/// ドロップセットの既定の落とし幅（%）。**メインセットから 20% 落とす。**
+///
+/// 20 なのは、実際のドロップセットで最も普通な刻み（60 → 50 / 100 → 80）に当たるため。
+pub const DEFAULT_DROP_PCT: f32 = 20.0;
+
+/// 落とし幅の上限（%）。
+///
+/// ★ 自由入力だが**上限は要る**。100 を入れると計算結果が 0kg になり、`set_volume` の
+/// 「重量なし = 重量 1」に化けて自重種目の扱いになる。95 で止めれば、どんな入力でも
+/// 「メインセットより軽い正の重量」に落ちる。
+pub const MAX_DROP_PCT: f32 = 95.0;
+
+/// 保存値 → 実際に使う落とし幅（%）。**小数点以下 1 桁に丸め、`0..=MAX_DROP_PCT` に収める。**
+///
+/// ★ 範囲外は捨てずに `clamp` する（`history_count` と同じ規則）。0 は「落とさない」で
+/// 有効な選択なので弾かない — 段の重量がメインセットと同じになるだけ。
+pub fn drop_pct(saved: Option<f64>) -> f32 {
+    let Some(p) = saved else {
+        return DEFAULT_DROP_PCT;
+    };
+    if !p.is_finite() {
+        return DEFAULT_DROP_PCT;
+    }
+    round1((p as f32).clamp(0.0, MAX_DROP_PCT))
+}
+
+/// 小数点以下 1 桁に丸める。**落とし幅と、そこから出す重量の両方に使う。**
+fn round1(v: f32) -> f32 {
+    (v * 10.0).round() / 10.0
+}
+
+/// メインセットの重量から、落とし幅ぶん引いた段の重量。**小数点以下 1 桁。**
+///
+/// ★ 適用するのは**そのセットの 1 段目だけ**（呼び出し側の責任）。2 段目は落とす元が
+/// 1 段目になるので基準が変わり、同じ式では出せない。
+///
+/// 重量の入っていないメインセット（自重種目）は `None`。掛ける相手が無いので、
+/// 0 を入れるより空のままにして利用者に打たせるほうが正しい。
+pub fn dropped_weight(main_weight: f32, pct: f32) -> Option<f32> {
+    if main_weight <= 0.0 {
+        return None;
+    }
+    Some(round1(main_weight * (1.0 - pct / 100.0)))
+}
+
+/// 保存値 → 推移タブがドロップセットを数えるか。**既定は数えない。**
+///
+/// 符号化は `0` = 除く / `1` = 入れる。引数が `Option<i64>` なのは
+/// `storage::UiState` の受け口に合わせたもので、`Option<bool>` にしない理由は
+/// そちらの doc にある（狭い型は `UiState` 全体のパースを落とす）。
+///
+/// ★ **`Some(1)` だけを `Include` にする。** 知らない値で集計を広げてはいけない —
+/// 壊れた値が「入れる」に倒れると、既定が除外だと思っている利用者のグラフが黙って
+/// 上がる。`history_count` が `clamp` なのは 1..=3 のどれもが妥当な選択肢だからで、
+/// ここは 2 択なので「知らない値 = 既定」に落とすほうが正しい。
+pub fn drops_setting(saved: Option<i64>) -> Drops {
+    match saved {
+        Some(1) => Drops::Include,
+        _ => Drops::Exclude,
+    }
 }
 
 // ── 並び替え ────────────────────────────────────────────────────────────────
@@ -580,8 +785,8 @@ struct Seed {
 impl Seed {
     /// コピー元のログから**運んでよいものだけ**を取り出す。**コピーの規則はここ 1 箇所。**
     ///
-    /// 運ぶのはセット（重量・回数・セットメモ）と種目メモ。`at` は運ばない（呼び出し側が
-    /// 渡す）。体重と体調メモは [`Session`] の側なのでそもそもここには届かない。
+    /// 運ぶのはセット（重量・回数・セットメモ・ドロップの段）と種目メモ。`at` は運ばない
+    /// （呼び出し側が渡す）。体重と体調メモは [`Session`] の側なのでここには届かない。
     fn carry(src: &ExerciseLog) -> Self {
         // ★ **分解して受ける。** フィールドで読むと、`ExerciseLog` に足した新しい
         //   フィールドがここを黙って素通りする — 「コピーが何を運ぶか」を決める場所が
@@ -602,7 +807,30 @@ impl Seed {
         } = src;
         Self {
             exercise_id: *exercise_id,
-            sets: sets.clone(),
+            // ★ **セットも分解して組み直す。** `sets.clone()` だと `ExerciseLog` の
+            //   ガードが 1 階層下で破れる — `SetEntry` に足したフィールドは
+            //   コンパイルエラーにならずに黙って運ばれる。ドロップの段は運ぶと
+            //   決めた（過去のログを再現する操作なので）が、次に足すものは
+            //   ここで判断させる
+            sets: sets
+                .iter()
+                .map(|s| {
+                    let SetEntry {
+                        weight,
+                        reps,
+                        note,
+                        drops,
+                    } = s;
+                    SetEntry {
+                        weight: *weight,
+                        reps: *reps,
+                        note: note.clone(),
+                        // ★ 段も運ぶ。閉じていても行に見えるので、違えばその場で消せる
+                        //   （adr/ux/copy-carries-the-notes.md と同じ規則）
+                        drops: drops.clone(),
+                    }
+                })
+                .collect(),
             note: note.clone(),
             label: *label,
         }
@@ -850,6 +1078,7 @@ pub fn exercise_series(
     m: Metric,
     from: NaiveDate,
     to: NaiveDate,
+    d: Drops,
 ) -> Vec<(NaiveDate, f64)> {
     sessions_in(db, from, to)
         .filter_map(|(date, session)| {
@@ -857,7 +1086,7 @@ pub fn exercise_series(
                 .logs
                 .iter()
                 .find(|l| l.exercise_id == ex && !l.sets.is_empty())?;
-            Some((date, log_value(m, log)))
+            Some((date, log_value_of(m, log, d)))
         })
         .collect()
 }
@@ -873,6 +1102,7 @@ pub fn group_series(
     m: Metric,
     from: NaiveDate,
     to: NaiveDate,
+    d: Drops,
 ) -> Vec<(NaiveDate, f64)> {
     let ids = db.exercise_ids_of_group(g);
     if ids.is_empty() {
@@ -887,7 +1117,7 @@ pub fn group_series(
                     continue;
                 }
                 hit = true;
-                total += log_value(m, log);
+                total += log_value_of(m, log, d);
             }
             hit.then_some((date, total))
         })
@@ -1089,12 +1319,46 @@ pub fn pick_series(
     m: Metric,
     from: NaiveDate,
     to: NaiveDate,
+    d: Drops,
 ) -> Vec<(NaiveDate, f64)> {
     match (p.exercise, p.group) {
-        (Some(ex), _) => exercise_series(db, ex, m, from, to),
-        (None, Some(g)) => group_series(db, g, m, from, to),
+        (Some(ex), _) => exercise_series(db, ex, m, from, to, d),
+        (None, Some(g)) => group_series(db, g, m, from, to, d),
         (None, None) => Vec::new(),
     }
+}
+
+/// その対象・期間に**ドロップセットの段があるか**。
+///
+/// 推移タブの注記に使う。外したことを黙っていると、記録タブの合計と食い違う理由が
+/// どこにも出ないまま「グラフが実際より低い」ように見える。
+///
+/// ★ **`Drops` を受け取らない。** 「段が在るか」はデータの事実で、それを注記に
+/// するかどうかは画面の設定。`Period` を `(from, to)` に解いて渡すのと同じ線で、
+/// 合成は `views::progress` 側でやる。
+///
+/// ★ 部位の ID 集合は `sessions_in` の**外**で 1 回だけ引く。`Db::exercise_ids_of_group`
+/// は毎回 `Vec` を作るので、ログごとに呼ぶと 2 年ぶんで千回単位の確保になる
+/// （[`group_series`] が同じ理由で外に出している）。
+pub fn any_drops_in_scope(db: &Db, p: Pick, from: NaiveDate, to: NaiveDate) -> bool {
+    if !p.is_set() {
+        return false;
+    }
+    let ids = p
+        .exercise
+        .is_none()
+        .then(|| p.group.map(|g| db.exercise_ids_of_group(g)));
+    let in_scope = |log: &ExerciseLog| match (p.exercise, ids.as_ref()) {
+        (Some(ex), _) => log.exercise_id == ex,
+        (None, Some(Some(ids))) => ids.contains(&log.exercise_id),
+        _ => false,
+    };
+    sessions_in(db, from, to).any(|(_, session)| {
+        session
+            .logs
+            .iter()
+            .any(|log| in_scope(log) && log.sets.iter().any(|s| !s.drops.is_empty()))
+    })
 }
 
 /// 週の始まりは**日曜**（カレンダー画面の 日〜土 グリッドに合わせる）。
@@ -1377,6 +1641,32 @@ pub fn recency_class(e: Option<Elapsed>) -> &'static str {
     }
 }
 
+// ── お知らせ（新機能バナー） ────────────────────────────────────────────────
+
+/// 未読のお知らせ。`notes` は新しい順、`last_seen` は `UiState.release_seen` の生値。
+///
+/// ★ `None`（未設定）は「全部既読」に倒す。新規利用者にも、この機能が乗る前からの
+///   利用者にも過去分を出さないため（基準値を書くのは `whatsnew::bootstrap`）。
+///
+/// 引数を `&'static` にしていない。呼出側が `i18n::RELEASES` を渡せば省略記法で
+/// `'static` が返るので、この形のほうがテストからローカルの配列を渡せて素直になる。
+pub fn unseen_releases(notes: &[ReleaseNote], last_seen: Option<i64>) -> &[ReleaseNote] {
+    let Some(last_seen) = last_seen else {
+        return &[];
+    };
+    // notes は新しい順なので、未読は先頭からの連続 prefix
+    let n = notes
+        .iter()
+        .take_while(|r| i64::from(r.id) > last_seen)
+        .count();
+    &notes[..n]
+}
+
+/// 最新のお知らせ番号。`notes` が空なら `None`。
+pub fn latest_release_id(notes: &[ReleaseNote]) -> Option<u32> {
+    notes.first().map(|r| r.id)
+}
+
 // ── 復元 ────────────────────────────────────────────────────────────────────
 
 /// 復元の失敗。**「壊れている」と「新しすぎる」を分ける。**
@@ -1460,6 +1750,7 @@ fn normalize(db: &mut Db, ids: &mut IdGen) {
         // ★ dedupe_logs より**先**。あちらは空白だけのメモを「ある」と見るので、
         //   先に潰さないと「保存する価値の無いログ」が残る
         blank_notes_to_empty(session);
+        prune_empty_drops(session);
         dedupe_logs(session);
     }
     sessions.retain(|_, s| !s.is_empty());
@@ -1535,6 +1826,27 @@ fn normalize_exercises(db: &mut Db, ids: &mut IdGen) {
 /// 消さないと「1 日 1 種目 1 ログ」が破れる）。
 ///
 /// ★ 並べ替えない。`Vec` の順が「上から下へ触る順」そのもの。
+/// ドロップの段の正規化。**「段が在る」を決めるのはここ 1 箇所。**
+///
+/// ★ [`clean_pins`] / [`clean_interval`] と**同じ理由で共有する**。画面（`views::day` の
+/// `commit`）・取り込み（`parse_drops_cell` → [`normalize`]）・読み込み
+/// （[`prune_empty_drops`]）の 3 経路が別々に規則を持つと、「画面から打てるのに取り込みで
+/// 丸められる」「取り込みで残るのに画面で消える」が起きる。
+///
+/// 落とすのは 3 つ:
+///
+/// - **回数 0**。挙げていないものは段ではない
+/// - **`f32` で表せない重量**。残すと `"weight":null` が保存され、次回起動の `Db` の
+///   パースが丸ごと落ちる（メインセットで潰した経路と同型）
+/// - **[`MAX_DROPS`] を超えた分**
+fn clean_drops(drops: Vec<DropStage>) -> Vec<DropStage> {
+    drops
+        .into_iter()
+        .filter(|d| d.reps > 0 && d.weight.is_finite() && d.weight >= 0.0)
+        .take(MAX_DROPS)
+        .collect()
+}
+
 fn clean_pins(pins: Vec<String>) -> Vec<String> {
     pins.iter()
         .flat_map(|p| p.split_whitespace())
@@ -1740,6 +2052,8 @@ fn merge_labels(
 /// ここが発火するのは `3.5e38` のような壊れた取り込みだけで、UI からは入らない。
 fn drop_unrepresentable_weights(s: &mut Session) {
     for log in &mut s.logs {
+        // ★ 段の重量は [`clean_drops`] が同じ門を通す（[`prune_empty_drops`] 経由）。
+        //   ここで二重に書くと「段が在る」の規則が 2 本に割れる
         log.sets
             .retain(|set| set.weight.is_finite() && set.weight >= 0.0);
     }
@@ -2045,13 +2359,18 @@ pub const TSV_MIME: &str = "text/tab-separated-values";
 
 /// 見出し行（日本語）。**この並びと綴りが外部仕様**なので、テストがバイト一致で
 /// 固定している。**1 文字も変えてはいけない** — 過去に書き出したファイルが読めなくなる。
-const TSV_HEADER_JA: [&str; 15] = [
+const TSV_HEADER_JA: [&str; 16] = [
     "日付",
     "部位",
     "種目",
     "セット",
     "重量kg",
     "回数",
+    // ★ 同じく後から足した列。**セット単位**の列なので回数の隣に置く（種目単位の
+    //   「ピン」「インターバル秒」と混ざると、シートで縦に読んだときに意味の階層が崩れる）。
+    //   セルは `50×5 40×4` のように段を半角空白で並べる（「ピン」列と同じ流儀）。
+    //   位置が変わっても取り込みは `tsv_header` が名前で引くので壊れない
+    "ドロップ",
     "体重kg",
     "セットメモ",
     "種目メモ",
@@ -2068,7 +2387,7 @@ const TSV_HEADER_JA: [&str; 15] = [
     //   セルは裸の数字（単位は見出しに入れる — `重量kg` / `体重kg` と同じ流儀）
     "インターバル秒",
     // ★ 同じく後から足した列。**位置は末尾**（`e2e/backup.spec.mjs` が
-    //   `split('\t')[2] === 'ベンチプレス'` と位置参照しているので既存 14 列の
+    //   `split('\t')[2] === 'ベンチプレス'` と位置参照しているので既存 15 列の
     //   インデックスを動かさない）。
     //
     // ★ セルは ID ではなく**名前**（TSV の存在意義がスプレッドシートで読めること。
@@ -2085,13 +2404,17 @@ const TSV_HEADER_JA: [&str; 15] = [
 /// ★ TSV は版番号を持てないので、**この綴りも足した時点で永久の外部仕様**になる
 /// （adr/storage/tsv-header-follows-the-ui-language.md）。日本語版と同じ強度で
 /// バイト一致テストが固定している。
-const TSV_HEADER_EN: [&str; 15] = [
+const TSV_HEADER_EN: [&str; 16] = [
     "Date",
     "Muscle group",
     "Exercise",
     "Set",
     "Weight kg",
     "Reps",
+    // ★ `Drop` 単独にしない。`is_known_header_cell` が `NotDb`（うちのファイルでは
+    //   ない）と `NoHeader`（うちのファイルだが壊れている）を分けるのにこの配列を使う
+    //   ので、ありふれた列名を入れると無関係な TSV が「壊れたうちのファイル」に化ける
+    "Drop set",
     "Body weight kg",
     "Set note",
     "Exercise note",
@@ -2109,7 +2432,7 @@ const TSV_HEADER_EN: [&str; 15] = [
 /// （adr/storage/tsv-export-for-spreadsheets.md）で、読めない言語の列名はその意義を
 /// 失わせる。取り込み側は [`is_known_header_cell`] のとおり日英どちらも受けるので、
 /// 言語を切り替えても過去のファイルは読める。
-pub fn tsv_header_row(lang: Lang) -> [&'static str; 15] {
+pub fn tsv_header_row(lang: Lang) -> [&'static str; 16] {
     match lang {
         Lang::Ja => TSV_HEADER_JA,
         Lang::En => TSV_HEADER_EN,
@@ -2137,7 +2460,7 @@ fn flatten_cell(s: &str) -> String {
 }
 
 /// 1 行書く。★ 引数 11 個の関数を作らないための入れ物（`clippy::too_many_arguments`）。
-fn push_row(out: &mut String, cells: [&str; 15]) {
+fn push_row(out: &mut String, cells: [&str; 16]) {
     for (i, cell) in cells.iter().enumerate() {
         if i > 0 {
             out.push('\t');
@@ -2263,6 +2586,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                         "",
                         "",
                         "",
+                        "",
                         day_weight,
                         "",
                         log_note,
@@ -2288,6 +2612,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                     String::new()
                 };
                 let reps = set.reps.to_string();
+                let drops = drops_cell(set);
                 push_row(
                     &mut out,
                     [
@@ -2297,6 +2622,8 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                         &no,
                         &w,
                         &reps,
+                        // ★ 段はセット単位なので、書くのはこの行だけ
+                        &drops,
                         day_weight,
                         &set.note,
                         log_note,
@@ -2323,7 +2650,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
             push_row(
                 &mut out,
                 [
-                    key, "", "", "", "", "", day_weight, "", "", day_note, "", "", "", "", "",
+                    key, "", "", "", "", "", "", day_weight, "", "", day_note, "", "", "", "", "",
                 ],
             );
         }
@@ -2356,6 +2683,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                 "",
                 group,
                 crate::presets::exercise_name(ex.id, &ex.name, lang),
+                "",
                 "",
                 "",
                 "",
@@ -2402,6 +2730,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                 "",
                 "",
                 "",
+                "",
             ],
         );
     }
@@ -2423,7 +2752,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
             push_row(
                 &mut out,
                 [
-                    "", "", "", "", "", "", "", "", "", "", "", &r.name, "", "", "",
+                    "", "", "", "", "", "", "", "", "", "", "", "", &r.name, "", "", "",
                 ],
             );
             continue;
@@ -2457,6 +2786,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                     group,
                     crate::presets::exercise_name(ex.id, &ex.name, lang),
                     &pos,
+                    "",
                     "",
                     "",
                     "",
@@ -2598,6 +2928,7 @@ struct TsvCols {
     weight: Option<usize>,
     reps: Option<usize>,
     body_weight: Option<usize>,
+    drop: Option<usize>,
     set_note: Option<usize>,
     log_note: Option<usize>,
     day_note: Option<usize>,
@@ -2626,6 +2957,10 @@ fn tsv_header(line: &str) -> Option<TsvCols> {
             "セット" | "セット番号" | "Set" | "Set no" => &mut cols.set_no,
             "重量kg" | "重量" | "Weight kg" | "Weight" => &mut cols.weight,
             "回数" | "Reps" => &mut cols.reps,
+            // ★ 書き出す綴りは「ドロップ」/「Drop set」。`Drop` と「ドロップセット」は
+            //   **読み取り専用の別名**（「重量」と同じ手）で、見出し配列には入れない
+            //   ので `is_known_header_cell` の `NotDb` 判定は広がらない
+            "ドロップ" | "ドロップセット" | "Drop set" | "Drop" => &mut cols.drop,
             "体重kg" | "体重" | "Body weight kg" | "Body weight" => &mut cols.body_weight,
             "セットメモ" | "Set note" => &mut cols.set_note,
             "種目メモ" | "Exercise note" => &mut cols.log_note,
@@ -2690,6 +3025,68 @@ fn parse_cell_count(s: &str) -> Option<u32> {
         return None;
     }
     Some(v.round() as u32)
+}
+
+/// 「重量×回数」の 1 セット分の表記。**重量が入っていなければ回数だけ。**
+///
+/// ★ 表示（`views::fmt_set`）と書き出し（[`drops_cell`]）で同じ 1 本を通す。
+/// `×` の綴りと「重量 0 = 重量なし」の約束は [`set_volume`] と共有する規範なので、
+/// 書き分けると片方だけ直る。
+pub fn fmt_wr(weight: f32, reps: u32) -> String {
+    if weight > 0.0 {
+        format!("{}×{}", fmt_weight(weight), reps)
+    } else {
+        reps.to_string()
+    }
+}
+
+/// 段の並びを 1 セルに落とす。`50×5 40×4` のように**半角空白区切り**。
+///
+/// ★ `ピン` 列と同じ流儀（1 セル 1 要素にせず空白で並べる）。段は 1 セットに
+/// 最大 [`MAX_DROPS`] 個なので、列を段数ぶん増やすより 1 セルに畳むほうが
+/// 「1 セット 1 行」を壊さない（adr/storage/tsv-export-for-spreadsheets.md）。
+///
+/// 重量が 0 の段は `×5` のように重量を省く（`重量kg` 列で 0 を空セルにするのと同じ）。
+fn drops_cell(s: &SetEntry) -> String {
+    s.drops
+        .iter()
+        .map(|d| {
+            if d.weight > 0.0 {
+                fmt_wr(d.weight, d.reps)
+            } else {
+                // ★ 自重の段は `×5`。回数だけにすると `parse_drops_cell` が
+                //   区切りと区別できず往復が閉じない（表示側の `fmt_wr` と違う点）
+                format!("×{}", d.reps)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// [`drops_cell`] の逆。読めない要素は**黙って捨てる**（行ごと落とすほどではない）。
+///
+/// ★ 区切りは空白 / 読点 / カンマを受け、掛け算記号は `×` `x` `X` `*` を受ける。
+/// スプレッドシートで手で書き足す人が居るので、綴りは書き出しより広く取る。
+/// 回数は [`parse_cell_count`] と同じ寛容さ（`5.0` を受ける）。
+///
+/// ★ **ここで [`MAX_DROPS`] を切らない。** 上限は [`clean_drops`] の仕事で、
+/// [`parse_tsv`] は最後に必ず [`normalize`] を通る。ここで別に切ると規則が 2 本に割れる
+/// （`parse_interval` が上限で丸めないのと同じ理由）。
+fn parse_drops_cell(cell: &str) -> Vec<DropStage> {
+    cell.split([' ', '\t', '、', ',', ';'])
+        .filter(|part| !part.trim().is_empty())
+        .filter_map(|part| {
+            let (w, r) = part
+                .trim()
+                .split_once(['×', 'x', 'X', '*'])
+                .map(|(a, b)| (a.trim(), b.trim()))?;
+            // 重量は空を許す（自重の段）。回数は必須
+            Some(DropStage {
+                weight: parse_weight(w),
+                reps: parse_cell_count(r)?,
+            })
+        })
+        .collect()
 }
 
 /// 並べ直す前のセット。`(セット番号, 行番号, セット)`。
@@ -2905,6 +3302,7 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
                     weight: parse_weight(at(cols.weight)),
                     reps,
                     note: at(cols.set_note).to_string(),
+                    drops: parse_drops_cell(at(cols.drop)),
                 },
             ));
         } else if !reps_cell.is_empty() {
@@ -3281,6 +3679,13 @@ pub struct MergeReport {
     /// 画面が「新しく取り込むものはありませんでした」と嘘をつく。メモの冪等性を
     /// **数で**見る口でもある（追記は `conflicts` に出ないので、他に見る手段が無い）。
     pub notes_added: usize,
+    /// 新しく段が入ったセットの数。
+    ///
+    /// ★ [`notes_added`](Self::notes_added) と同じ理由で必要。段だけが増えたマージは
+    /// `conflicts` に出ない（`same_sets` が段を見ないと決めたので）のに**推移タブの
+    /// 数字が動く**ので、数えないと [`MergeReport::is_noop`] が真になって画面が
+    /// 「新しく取り込むものはありませんでした」と嘘をつく。
+    pub drops_added: usize,
     /// 追加したトレーニングメニューの本数。
     pub routines_added: usize,
     /// 増えたラベル（**定義の追加とログへの付与の合算**。`notes_added` が既に
@@ -3306,7 +3711,7 @@ pub struct MergeReport {
 impl MergeReport {
     /// 何も足さなかったか。
     ///
-    /// ★ **ここに数を足したら `views::backup::report_text` にも必ず足すこと。**
+    /// ★ **ここに数を足したら `views::backup::added_text` にも必ず足すこと。**
     /// 片方だけだと `is_noop` が偽なのに文言の部品が空になり、画面に
     /// 「 を追加しました」だけが出る。
     pub fn is_noop(&self) -> bool {
@@ -3315,6 +3720,7 @@ impl MergeReport {
             && self.sessions_added == 0
             && self.logs_added == 0
             && self.notes_added == 0
+            && self.drops_added == 0
             && self.routines_added == 0
             && self.labels_added == 0
     }
@@ -3586,6 +3992,14 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
                     if append_note(&mut mine.note, &theirs.note) {
                         report.notes_added += 1;
                     }
+                    // ★ ドロップの段も同じ理由で合流させる。`same_sets` が段を見ない
+                    //   （= 段の差だけでは食い違いにしない）ので、ここで運ばないと
+                    //   他端末で入れた段が `Conflict` も出さずに黙って消える。
+                    //   **空のときだけ入れる**（両方に段があれば取り込み先を残す）
+                    if mine.drops.is_empty() && !theirs.drops.is_empty() {
+                        mine.drops = theirs.drops.clone();
+                        report.drops_added += 1;
+                    }
                 }
                 continue;
             }
@@ -3601,6 +4015,7 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             //     メモを落とす理由が無い
             if same_sets_unordered(&existing.sets, &log.sets) {
                 report.notes_added += merge_set_notes_unordered(&mut existing.sets, &log.sets);
+                report.drops_added += merge_set_drops_unordered(&mut existing.sets, &log.sets);
                 continue;
             }
             // 取り込む側が強いときだけ差し替える。逆向きは黙って捨てる
@@ -3654,7 +4069,7 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Exercise, Group, SetEntry};
+    use crate::model::{DropStage, Exercise, Group, SetEntry};
     use chrono::Weekday;
 
     const HOUR_MS: i64 = 3_600_000;
@@ -3741,7 +4156,7 @@ mod tests {
                 .map(|(weight, reps)| SetEntry {
                     weight: *weight,
                     reps: *reps,
-                    note: String::new(),
+                    ..Default::default()
                 })
                 .collect(),
             at,
@@ -3765,6 +4180,7 @@ mod tests {
                     weight: *weight,
                     reps: *reps,
                     note: set_note.to_string(),
+                    ..Default::default()
                 })
                 .collect(),
             at,
@@ -3812,6 +4228,22 @@ mod tests {
         }
     }
 
+    /// ドロップの段が付いたメインセット。段は `(重量, 回数)` の並びで渡す。
+    fn drop_set(weight: f32, reps: u32, stages: &[(f32, u32)]) -> SetEntry {
+        SetEntry {
+            weight,
+            reps,
+            drops: stages
+                .iter()
+                .map(|(w, r)| DropStage {
+                    weight: *w,
+                    reps: *r,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn set_volume_treats_missing_weight_as_one() {
         // 重量あり = 素直な積
@@ -3822,6 +4254,119 @@ mod tests {
         assert_eq!(set_volume(&set(0.0, 60)), 60.0);
         // 空のログは 0
         assert_eq!(log_value(Metric::Volume, &log(10, &[], None)), 0.0);
+    }
+
+    /// ★ **3 指標すべてで段の扱いを揃える。** `Sets` だけ段を数えないような食い違いを
+    ///   作ると、同じ設定で「ボリュームは増えたのにセット数は変わらない」が起きて、
+    ///   利用者は設定が効いているのか壊れているのか区別できない。
+    #[test]
+    fn log_value_of_counts_the_drop_stages_only_when_asked() {
+        // 60×10 + 60×6 で、2 セット目に 50×5 / 40×4 の段が付いている
+        let l = ExerciseLog {
+            exercise_id: e(10),
+            sets: vec![set(60.0, 10), drop_set(60.0, 6, &[(50.0, 5), (40.0, 4)])],
+            label: None,
+            at: None,
+            note: String::new(),
+        };
+
+        for (m, all, main_only) in [
+            (Metric::Volume, 1370.0, 960.0),
+            (Metric::Sets, 4.0, 2.0),
+            (Metric::Reps, 25.0, 16.0),
+        ] {
+            assert_eq!(log_value_of(m, &l, Drops::Include), all, "{m:?} を含める側");
+            assert_eq!(
+                log_value_of(m, &l, Drops::Exclude),
+                main_only,
+                "{m:?} を除く側"
+            );
+            // 記録タブ・カレンダーの入口は常に段も数える
+            assert_eq!(log_value(m, &l), all, "{m:?} の既定が変わっている");
+        }
+    }
+
+    /// ★ 段はメインセットにぶら下がるので、`set_volume` は**メインセットぶんだけ**を
+    ///   返さなければならない。ここに足し込むと `Metric::Sets` に効かせられない。
+    #[test]
+    fn set_volume_excludes_the_stages() {
+        let s = drop_set(60.0, 6, &[(50.0, 5), (40.0, 4)]);
+        assert_eq!(set_volume(&s), 360.0);
+
+        let l = ExerciseLog {
+            exercise_id: e(10),
+            sets: vec![s],
+            label: None,
+            at: None,
+            note: String::new(),
+        };
+        // 段のぶんは 50×5 + 40×4 = 410
+        assert_eq!(log_value_of(Metric::Volume, &l, Drops::Include), 770.0);
+        // 段のほうも「重量なし = 重量 1」が効く（自重の段）
+        let bodyweight = ExerciseLog {
+            exercise_id: e(10),
+            sets: vec![drop_set(60.0, 6, &[(0.0, 8)])],
+            label: None,
+            at: None,
+            note: String::new(),
+        };
+        assert_eq!(
+            log_value_of(Metric::Volume, &bodyweight, Drops::Include),
+            368.0
+        );
+    }
+
+    /// ★ 既定は「入れない」。ここが逆に倒れると、設定を触っていない利用者の
+    ///   グラフが黙って上がる。
+    #[test]
+    fn drops_setting_only_includes_on_an_exact_one() {
+        assert_eq!(drops_setting(None), Drops::Exclude, "未設定は除く");
+        assert_eq!(drops_setting(Some(0)), Drops::Exclude);
+        assert_eq!(drops_setting(Some(1)), Drops::Include);
+        // ★ 知らない値で集計を広げてはいけない（2 択なので clamp ではなく既定へ）
+        for weird in [2, 7, -1, i64::MAX, i64::MIN] {
+            assert_eq!(
+                drops_setting(Some(weird)),
+                Drops::Exclude,
+                "知らない値 {weird} を含める側に倒している"
+            );
+        }
+        assert_eq!(Drops::default(), Drops::Exclude);
+    }
+
+    /// ★ 落とし幅は自由入力なので、**丸めと clamp をここで閉じる**。100 を通すと
+    ///   計算結果が 0kg になり `set_volume` の「重量なし = 重量 1」に化ける。
+    #[test]
+    fn drop_pct_rounds_to_one_decimal_and_clamps() {
+        assert_eq!(drop_pct(None), DEFAULT_DROP_PCT);
+        assert_eq!(drop_pct(Some(20.0)), 20.0);
+        assert_eq!(drop_pct(Some(12.5)), 12.5);
+        // 小数点以下 2 桁目は丸める
+        assert_eq!(drop_pct(Some(12.46)), 12.5);
+        assert_eq!(drop_pct(Some(12.44)), 12.4);
+        // 0 は「落とさない」で有効
+        assert_eq!(drop_pct(Some(0.0)), 0.0);
+        // 範囲外は clamp（捨てない）
+        assert_eq!(drop_pct(Some(-5.0)), 0.0);
+        assert_eq!(drop_pct(Some(100.0)), MAX_DROP_PCT);
+        assert_eq!(drop_pct(Some(1e9)), MAX_DROP_PCT);
+        // 壊れた値は既定へ
+        assert_eq!(drop_pct(Some(f64::NAN)), DEFAULT_DROP_PCT);
+        assert_eq!(drop_pct(Some(f64::INFINITY)), DEFAULT_DROP_PCT);
+    }
+
+    /// ★ プリフィルは**そのセットの 1 段目だけ**（呼び出し側の責任）。ここは式だけを見る。
+    #[test]
+    fn dropped_weight_takes_the_percentage_off_the_main_set() {
+        assert_eq!(dropped_weight(60.0, 20.0), Some(48.0));
+        assert_eq!(dropped_weight(100.0, 12.5), Some(87.5));
+        // 小数点以下 1 桁に丸める（62.5 の 20% 引きは 50.0）
+        assert_eq!(dropped_weight(62.5, 20.0), Some(50.0));
+        // 0% は落とさない
+        assert_eq!(dropped_weight(60.0, 0.0), Some(60.0));
+        // ★ 重量の無いメインセット（自重種目）は `None`。0 を入れるより空のまま
+        //   利用者に打たせるほうが正しい
+        assert_eq!(dropped_weight(0.0, 20.0), None);
     }
 
     /// ★ 単調性: 重量を足して指標が下がってはいけない。
@@ -3893,7 +4438,7 @@ mod tests {
             vec![SetEntry {
                 weight: 55.0,
                 reps: 10,
-                note: String::new(),
+                ..Default::default()
             }]
         );
 
@@ -4616,6 +5161,50 @@ mod tests {
         );
     }
 
+    /// ★ `Seed::carry` は `SetEntry` まで分解して組み直すので、印を運ぶ / 運ばないは
+    ///   必ず判断を通る。運ぶと決めたのは、コピーが「過去のログを再現する」操作で、
+    ///   しかも印は**メモを閉じていても行に見える**ので違えばその場で外せるから。
+    ///   `apply_routine`（メニューから始める）も同じ経路を通るので一緒に固定する。
+    #[test]
+    fn copy_day_and_apply_routine_carry_the_drop_stages() {
+        let mut db = routine_db();
+        db.sessions.insert(
+            date_key(d(2026, 8, 5)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: e(10),
+                    sets: vec![set(60.0, 10), drop_set(60.0, 6, &[(50.0, 5)])],
+                    label: None,
+                    at: None,
+                    note: String::new(),
+                }],
+                ..Session::default()
+            },
+        );
+        let stages = |db: &Db, day: NaiveDate| {
+            db.sessions[&date_key(day)].logs[0]
+                .sets
+                .iter()
+                .map(|s| s.drops.len())
+                .collect::<Vec<_>>()
+        };
+
+        copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None);
+        assert_eq!(
+            stages(&db, d(2026, 8, 8)),
+            vec![0, 1],
+            "コピーで段が落ちている"
+        );
+
+        // メニューは前回のログ（8/5）を種にするので、段もそこから来る
+        apply_routine(&mut db, r(1), d(2026, 8, 9), None);
+        assert_eq!(
+            stages(&db, d(2026, 8, 9)),
+            vec![0, 1],
+            "メニューから始めたときに段が落ちている"
+        );
+    }
+
     #[test]
     fn copy_day_refuses_a_target_that_only_holds_a_note_only_log() {
         // メモだけのログがある日に書き足すと exercise_id が重複しうる。
@@ -4992,7 +5581,14 @@ mod tests {
         );
         put(&mut db, d(2026, 8, 9), vec![log(10, &[(70.0, 10)], None)]);
 
-        let series = exercise_series(&db, e(10), Metric::Volume, d(2026, 8, 1), d(2026, 8, 8));
+        let series = exercise_series(
+            &db,
+            e(10),
+            Metric::Volume,
+            d(2026, 8, 1),
+            d(2026, 8, 8),
+            Drops::Include,
+        );
         assert_eq!(
             series,
             vec![(d(2026, 8, 1), 500.0), (d(2026, 8, 8), 1080.0)]
@@ -5000,11 +5596,27 @@ mod tests {
 
         // 未知の種目は空
         assert!(
-            exercise_series(&db, e(999), Metric::Volume, d(2026, 8, 1), d(2026, 8, 8)).is_empty()
+            exercise_series(
+                &db,
+                e(999),
+                Metric::Volume,
+                d(2026, 8, 1),
+                d(2026, 8, 8),
+                Drops::Include
+            )
+            .is_empty()
         );
         // from > to でもパニックしない
         assert!(
-            exercise_series(&db, e(10), Metric::Volume, d(2026, 8, 8), d(2026, 8, 1)).is_empty()
+            exercise_series(
+                &db,
+                e(10),
+                Metric::Volume,
+                d(2026, 8, 8),
+                d(2026, 8, 1),
+                Drops::Include
+            )
+            .is_empty()
         );
     }
 
@@ -5016,7 +5628,7 @@ mod tests {
             d(2026, 8, 8),
             vec![log(10, &[(60.0, 10), (60.0, 8)], None)],
         );
-        let at = |m| exercise_series(&db, e(10), m, d(2026, 8, 1), d(2026, 8, 8));
+        let at = |m| exercise_series(&db, e(10), m, d(2026, 8, 1), d(2026, 8, 8), Drops::Include);
 
         assert_eq!(at(Metric::Volume), vec![(d(2026, 8, 8), 1080.0)]);
         assert_eq!(at(Metric::Sets), vec![(d(2026, 8, 8), 2.0)]);
@@ -5036,7 +5648,7 @@ mod tests {
         );
         put(&mut db, d(2026, 8, 2), vec![log(20, &[(0.0, 60)], None)]);
 
-        let chest = |m| group_series(&db, g(1), m, d(2026, 8, 1), d(2026, 8, 2));
+        let chest = |m| group_series(&db, g(1), m, d(2026, 8, 1), d(2026, 8, 2), Drops::Include);
 
         // ★ 旧実装は Kind ごとに単位が違って足せず「セット数」固定だった。
         //   式が 1 本になったので、重量を使う種目と使わない種目を混ぜて合算できる
@@ -5046,11 +5658,28 @@ mod tests {
 
         // 体幹（重量を使わない種目だけ）でも 0 に潰れない
         assert_eq!(
-            group_series(&db, g(2), Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)),
+            group_series(
+                &db,
+                g(2),
+                Metric::Volume,
+                d(2026, 8, 1),
+                d(2026, 8, 2),
+                Drops::Include
+            ),
             vec![(d(2026, 8, 2), 60.0)]
         );
         // 種目が 1 つも無い部位は空
-        assert!(group_series(&db, g(3), Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)).is_empty());
+        assert!(
+            group_series(
+                &db,
+                g(3),
+                Metric::Volume,
+                d(2026, 8, 1),
+                d(2026, 8, 2),
+                Drops::Include
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -5060,7 +5689,17 @@ mod tests {
         put(&mut db, d(2026, 8, 2), vec![log(10, &[], None)]); // 空セット = 未実施
 
         // 胸の点は 1 つも立たない（0 の点を置くと「やったが 0」と区別できない）
-        assert!(group_series(&db, g(1), Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)).is_empty());
+        assert!(
+            group_series(
+                &db,
+                g(1),
+                Metric::Volume,
+                d(2026, 8, 1),
+                d(2026, 8, 2),
+                Drops::Include
+            )
+            .is_empty()
+        );
     }
 
     // ── used_exercise_ids ───────────────────────────────────────────────────
@@ -5400,9 +6039,109 @@ mod tests {
         let db = picks_db();
         let p = Pick::default().with_exercise(&db, Some(e(10)));
         assert_eq!(
-            pick_series(&db, p, Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)),
-            exercise_series(&db, e(10), Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)),
+            pick_series(
+                &db,
+                p,
+                Metric::Volume,
+                d(2026, 8, 1),
+                d(2026, 8, 2),
+                Drops::Include
+            ),
+            exercise_series(
+                &db,
+                e(10),
+                Metric::Volume,
+                d(2026, 8, 1),
+                d(2026, 8, 2),
+                Drops::Include
+            ),
         );
+    }
+
+    /// ★ 段はメインセットにぶら下がるので、「段だけの日」は構造上作れない。
+    ///   系列が見るのは日ごとの値が設定に従うことだけ。
+    #[test]
+    fn series_follow_the_drops_setting() {
+        let mut db = test_db();
+        put(&mut db, d(2026, 8, 1), vec![log(10, &[(60.0, 10)], None)]);
+        db.sessions.insert(
+            date_key(d(2026, 8, 2)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: e(10),
+                    sets: vec![drop_set(60.0, 6, &[(50.0, 5)])],
+                    label: None,
+                    at: None,
+                    note: String::new(),
+                }],
+                ..Session::default()
+            },
+        );
+
+        let range = (d(2026, 8, 1), d(2026, 8, 2));
+        assert_eq!(
+            exercise_series(&db, e(10), Metric::Volume, range.0, range.1, Drops::Exclude),
+            vec![(d(2026, 8, 1), 600.0), (d(2026, 8, 2), 360.0)],
+            "除く側で段が混ざっている"
+        );
+        assert_eq!(
+            exercise_series(&db, e(10), Metric::Volume, range.0, range.1, Drops::Include),
+            vec![(d(2026, 8, 1), 600.0), (d(2026, 8, 2), 610.0)]
+        );
+
+        // 部位の枝も同じ
+        assert_eq!(
+            group_series(&db, g(1), Metric::Sets, range.0, range.1, Drops::Exclude),
+            vec![(d(2026, 8, 1), 1.0), (d(2026, 8, 2), 1.0)]
+        );
+        assert_eq!(
+            group_series(&db, g(1), Metric::Sets, range.0, range.1, Drops::Include),
+            vec![(d(2026, 8, 1), 1.0), (d(2026, 8, 2), 2.0)]
+        );
+    }
+
+    /// ★ 外したことを黙ると、記録タブの合計と食い違う理由が画面のどこにも出ない。
+    ///   「段が在るか」はデータの事実なので、設定との合成は画面側が持つ。
+    #[test]
+    fn any_drops_in_scope_answers_only_when_a_stage_is_there() {
+        let mut db = test_db();
+        put(&mut db, d(2026, 8, 1), vec![log(10, &[(60.0, 10)], None)]);
+        let range = (d(2026, 8, 1), d(2026, 8, 2));
+        let p = Pick::default().with_exercise(&db, Some(e(10)));
+
+        assert!(
+            !any_drops_in_scope(&db, p, range.0, range.1),
+            "段が 1 つも無いのに注記を出している"
+        );
+
+        db.sessions.insert(
+            date_key(d(2026, 8, 2)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: e(10),
+                    sets: vec![set(60.0, 10), drop_set(60.0, 6, &[(50.0, 5)])],
+                    label: None,
+                    at: None,
+                    note: String::new(),
+                }],
+                ..Session::default()
+            },
+        );
+        assert!(any_drops_in_scope(&db, p, range.0, range.1));
+
+        // 対象外の種目の段は数えない
+        let other = Pick::default().with_exercise(&db, Some(e(20)));
+        assert!(!any_drops_in_scope(&db, other, range.0, range.1));
+        // 期間外の段も数えない
+        assert!(!any_drops_in_scope(&db, p, d(2026, 8, 1), d(2026, 8, 1)));
+        // 部位で選んでいても効く
+        let grp = Pick {
+            group: Some(g(1)),
+            exercise: None,
+        };
+        assert!(any_drops_in_scope(&db, grp, range.0, range.1));
+        // 何も選んでいなければ偽
+        assert!(!any_drops_in_scope(&db, Pick::default(), range.0, range.1));
     }
 
     #[test]
@@ -5414,7 +6153,14 @@ mod tests {
         };
         // 胸は 8/2 にベンチ 60×10 と プッシュアップ 20（重量なし）で 620
         assert_eq!(
-            pick_series(&db, p, Metric::Volume, d(2026, 8, 1), d(2026, 8, 2)),
+            pick_series(
+                &db,
+                p,
+                Metric::Volume,
+                d(2026, 8, 1),
+                d(2026, 8, 2),
+                Drops::Include
+            ),
             vec![(d(2026, 8, 2), 620.0)],
         );
     }
@@ -5428,7 +6174,8 @@ mod tests {
                 Pick::default(),
                 Metric::Volume,
                 d(2026, 8, 1),
-                d(2026, 8, 2)
+                d(2026, 8, 2),
+                Drops::Include
             )
             .is_empty()
         );
@@ -5525,7 +6272,14 @@ mod tests {
         put_weight(&mut db, d(2026, 8, 3), Some(70.4), vec![]); // 休養日
 
         let weight = body_weight_series(&db, d(2026, 8, 1), d(2026, 8, 3));
-        let metric = exercise_series(&db, e(10), Metric::Volume, d(2026, 8, 1), d(2026, 8, 3));
+        let metric = exercise_series(
+            &db,
+            e(10),
+            Metric::Volume,
+            d(2026, 8, 1),
+            d(2026, 8, 3),
+            Drops::Include,
+        );
         assert_eq!(weight.len(), 3);
         assert_eq!(metric.len(), 1);
         // 体重の方が後ろまで伸びる
@@ -5993,6 +6747,61 @@ mod tests {
         assert_eq!(recency_class(Some(Elapsed::days_only(7))), "old");
     }
 
+    // ── unseen_releases / latest_release_id ─────────────────────────────────
+
+    /// 生値の異常系をここで全部潰す。`UiState.release_seen` は `Option<i64>` で
+    /// 範囲を絞らずに受けているので、ここが唯一の検証地点になる。
+    #[test]
+    fn unseen_releases_handles_every_raw_last_seen_value() {
+        // 新しい順（id は 5..=1）。本文はテストに関係ないのでダミーで揃える
+        let notes: Vec<ReleaseNote> = (1..=5)
+            .rev()
+            .map(|id| ReleaseNote {
+                id,
+                date: "2026-01-01",
+                ja: &["x"],
+                en: &["x"],
+            })
+            .collect();
+
+        assert_eq!(unseen_releases(&notes, None).len(), 0, "未設定は空");
+        assert_eq!(unseen_releases(&notes, Some(5)).len(), 0, "最新と同値は空");
+        assert_eq!(
+            unseen_releases(&notes, Some(4)).len(),
+            1,
+            "1 つ古いなら 1 件"
+        );
+        assert_eq!(
+            unseen_releases(&notes, Some(2)).len(),
+            3,
+            "3 つ古いなら 3 件"
+        );
+        assert_eq!(unseen_releases(&notes, Some(-1)).len(), 5, "負値は全件");
+        assert_eq!(
+            unseen_releases(&notes, Some(i64::MAX)).len(),
+            0,
+            "桁溢れしない"
+        );
+        assert_eq!(
+            unseen_releases(&notes, Some(100)).len(),
+            0,
+            "未来の番号（最新より大きい）は空"
+        );
+        assert_eq!(unseen_releases(&[], Some(0)).len(), 0, "notes が空なら空");
+    }
+
+    #[test]
+    fn latest_release_id_is_the_first_entry_or_none() {
+        let notes = [ReleaseNote {
+            id: 7,
+            date: "2026-01-01",
+            ja: &["x"],
+            en: &["x"],
+        }];
+        assert_eq!(latest_release_id(&notes), Some(7));
+        assert_eq!(latest_release_id(&[]), None);
+    }
+
     // ── migrate ─────────────────────────────────────────────────────────────
 
     #[test]
@@ -6044,12 +6853,12 @@ mod tests {
                 SetEntry {
                     weight: 60.0,
                     reps: 10,
-                    note: String::new(),
+                    ..Default::default()
                 },
                 SetEntry {
                     weight: 60.0,
                     reps: 8,
-                    note: String::new(),
+                    ..Default::default()
                 }
             ]
         );
@@ -6308,6 +7117,7 @@ mod tests {
                 weight: 60.0,
                 reps: 10,
                 note: "きつい".into(),
+                ..Default::default()
             },
             set(60.0, 8),
         ];
@@ -6318,6 +7128,40 @@ mod tests {
         assert!(!same_sets(&a, &[set(60.0, 10)]), "長さが違う");
         assert!(!same_sets(&a, &[set(62.0, 10), set(60.0, 8)]), "重量が違う");
         assert!(!same_sets(&a, &[set(60.0, 10), set(60.0, 6)]), "回数が違う");
+    }
+
+    /// ★ 印を識別に入れると、印の差だけで `merge_db` が食い違い扱いになり、
+    ///   rank が同点なので差し替えの分岐にも入れず、負けた側のセットメモが消える。
+    #[test]
+    fn same_sets_and_log_rank_ignore_the_drop_stages() {
+        let plain = vec![set(60.0, 10), set(50.0, 5)];
+        let marked = vec![set(60.0, 10), drop_set(50.0, 5, &[(50.0, 5)])];
+        assert!(
+            same_sets(&plain, &marked),
+            "印の違いで不一致にしてはいけない"
+        );
+        assert!(same_sets_unordered(&plain, &marked));
+        assert_ne!(plain, marked, "== は印を見る（だから same_sets が要る）");
+
+        let a = ExerciseLog {
+            exercise_id: e(10),
+            sets: plain,
+            label: None,
+            at: None,
+            note: String::new(),
+        };
+        let b = ExerciseLog {
+            exercise_id: e(10),
+            sets: marked,
+            label: None,
+            at: None,
+            note: String::new(),
+        };
+        assert_eq!(
+            log_rank(&a),
+            log_rank(&b),
+            "印の有無で勝ち負けが決まってはいけない"
+        );
     }
 
     #[test]
@@ -6455,7 +7299,7 @@ mod tests {
                 sets: vec![SetEntry {
                     weight: 60.0,
                     reps: 10,
-                    note: String::new(),
+                    ..Default::default()
                 }],
                 at: Some(1_800_000_000_000),
                 note: String::new(),
@@ -6518,12 +7362,13 @@ mod tests {
                         SetEntry {
                             weight: 60.0,
                             reps: 10,
-                            note: String::new(),
+                            ..Default::default()
                         },
                         SetEntry {
                             weight: 62.5,
                             reps: 8,
                             note: "きつい".into(),
+                            ..Default::default()
                         },
                     ],
                     at: None,
@@ -6542,6 +7387,18 @@ mod tests {
         tsv.lines().map(|l| l.split('\t').collect()).collect()
     }
 
+    /// 見出し名から列の位置を引く。**本文のセルを位置で読まないための入口。**
+    ///
+    /// ★ 位置で読むと、列を 1 本足すたびに関係の無いテストが軒並み落ちる。しかも
+    /// ずれた添字が隣の列を指すので、**落ちずに通ってしまう**組み合わせがある
+    /// （「体重kg」と「セットメモ」はどちらも空セルになる行が多い）。[`TsvCols`] が
+    /// 取り込み側で「位置ではなく名前で引く」と決めているのと同じ規範を、テストにも通す。
+    fn col(r: &[Vec<&str>], name: &str) -> usize {
+        r[0].iter()
+            .position(|c| *c == name)
+            .unwrap_or_else(|| panic!("{name} 列がある"))
+    }
+
     /// ★ 見出しは外部仕様。並びが変わると既存のシートの数式が全部ずれるので、
     ///   バイト一致で固定する（形式の進化規則 1「列は足すだけ」の実行部）。
     #[test]
@@ -6553,7 +7410,7 @@ mod tests {
         );
         assert_eq!(
             tsv.lines().next().expect("見出し行"),
-            "日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル"
+            "日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル"
         );
     }
 
@@ -6568,7 +7425,7 @@ mod tests {
         );
         assert_eq!(
             tsv.lines().next().expect("見出し行"),
-            "Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec\tLabel"
+            "Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tDrop set\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec\tLabel"
         );
     }
 
@@ -6647,7 +7504,7 @@ mod tests {
                     sets: vec![SetEntry {
                         weight: 60.0,
                         reps: 10,
-                        note: String::new(),
+                        ..Default::default()
                     }],
                     at: None,
                     note: String::new(),
@@ -6685,7 +7542,7 @@ mod tests {
                     sets: vec![SetEntry {
                         weight: 60.0,
                         reps: 10,
-                        note: String::new(),
+                        ..Default::default()
                     }],
                     at: None,
                     note: String::new(),
@@ -6732,7 +7589,7 @@ mod tests {
                     sets: vec![SetEntry {
                         weight: 60.0,
                         reps: 10,
-                        note: String::new(),
+                        ..Default::default()
                     }],
                     at: None,
                     note: String::new(),
@@ -6761,7 +7618,7 @@ mod tests {
                     sets: vec![SetEntry {
                         weight: 60.0,
                         reps: 10,
-                        note: String::new(),
+                        ..Default::default()
                     }],
                     at: None,
                     note: String::new(),
@@ -6917,7 +7774,11 @@ mod tests {
             r[2][0..6],
             ["2026-08-01", "胸", "ベンチプレス", "2", "62.5", "8"]
         );
-        assert_eq!(r[2][7], "きつい", "セットメモが行に付いていない");
+        assert_eq!(
+            r[2][col(&r, "セットメモ")],
+            "きつい",
+            "セットメモが行に付いていない"
+        );
     }
 
     /// ★ 毎行書くとシート側の `AVERAGE` が「セット数で重み付けした平均」になり、
@@ -6927,10 +7788,21 @@ mod tests {
         let tsv = export_tsv(&tsv_sample(), jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
         assert_eq!(
-            (r[1][6], r[1][8], r[1][9]),
+            (
+                r[1][col(&r, "体重kg")],
+                r[1][col(&r, "種目メモ")],
+                r[1][col(&r, "体調メモ")],
+            ),
             ("72.5", "肩が良い", "よく寝た")
         );
-        assert_eq!((r[2][6], r[2][8], r[2][9]), ("", "", ""));
+        assert_eq!(
+            (
+                r[2][col(&r, "体重kg")],
+                r[2][col(&r, "種目メモ")],
+                r[2][col(&r, "体調メモ")],
+            ),
+            ("", "", "")
+        );
     }
 
     /// 自重種目。`set_volume` も `fmt_set` も 0 を「重量なし」として扱うので、
@@ -6947,7 +7819,7 @@ mod tests {
                     sets: vec![SetEntry {
                         weight: 0.0,
                         reps: 12,
-                        note: String::new(),
+                        ..Default::default()
                     }],
                     at: None,
                     note: String::new(),
@@ -6986,7 +7858,7 @@ mod tests {
         let r = rows(&tsv);
         assert_eq!(r[1][2], "ベンチプレス");
         assert_eq!((r[1][3], r[1][5]), ("", ""), "セットが立っている");
-        assert_eq!(r[1][8], "肩が痛いのでやめた");
+        assert_eq!(r[1][col(&r, "種目メモ")], "肩が痛いのでやめた");
     }
 
     /// 体重・体調メモだけの日も 1 行残す（`Session::is_empty` が残すと決めた形）。
@@ -7004,7 +7876,7 @@ mod tests {
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
         assert_eq!(r[1][0], "2026-08-04");
-        assert_eq!((r[1][2], r[1][6]), ("", "71"));
+        assert_eq!((r[1][2], r[1][col(&r, "体重kg")]), ("", "71"));
     }
 
     /// ★ 未使用の自作種目を黙って失わない。手つかずのプリセットは書かない
@@ -7044,6 +7916,7 @@ mod tests {
                         weight: 60.0,
                         reps: 10,
                         note: "前半\tきつい".into(),
+                        ..Default::default()
                     }],
                     at: None,
                     note: "1 本目\n2 本目".into(),
@@ -7056,9 +7929,9 @@ mod tests {
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         assert_eq!(tsv.lines().count(), 2, "改行でレコードが割れている: {tsv}");
         let r = rows(&tsv);
-        assert_eq!(r[1].len(), 15, "タブで列がずれている");
-        assert_eq!(r[1][7], "前半 きつい");
-        assert_eq!(r[1][8], "1 本目 2 本目");
+        assert_eq!(r[1].len(), 16, "タブで列がずれている");
+        assert_eq!(r[1][col(&r, "セットメモ")], "前半 きつい");
+        assert_eq!(r[1][col(&r, "種目メモ")], "1 本目 2 本目");
     }
 
     /// `at` はその行の日付と同じ暦日のときだけ出す。壊れたデータ由来の `at` を
@@ -7080,7 +7953,7 @@ mod tests {
             sets: vec![SetEntry {
                 weight: 60.0,
                 reps: 10,
-                note: String::new(),
+                ..Default::default()
             }],
             at,
             note: String::new(),
@@ -7105,8 +7978,12 @@ mod tests {
         );
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
-        assert_eq!(r[1][10], "18:32");
-        assert_eq!(r[2][10], "", "日付と食い違う at を時刻として出している");
+        assert_eq!(r[1][col(&r, "時刻")], "18:32");
+        assert_eq!(
+            r[2][col(&r, "時刻")],
+            "",
+            "日付と食い違う at を時刻として出している"
+        );
     }
 
     /// ★ この機能の生命線その 2。書き出した TSV が、そのまま記録に戻る。
@@ -7131,17 +8008,190 @@ mod tests {
                 SetEntry {
                     weight: 60.0,
                     reps: 10,
-                    note: String::new()
+                    ..Default::default()
                 },
                 SetEntry {
                     weight: 62.5,
                     reps: 8,
-                    note: "きつい".into()
+                    note: "きつい".into(),
+                    ..Default::default()
                 },
             ]
         );
         // ★ 時刻列は書き出し専用。取り込みでは必ず落ちる
         assert_eq!(log.at, None, "TSV から at を復元してしまっている");
+    }
+
+    /// メインセット 2 本で、2 本目に段が 2 つぶら下がった記録。
+    fn drop_sample() -> Db {
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        db.sessions.insert(
+            date_key(d(2026, 8, 1)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: bench,
+                    sets: vec![set(60.0, 10), drop_set(60.0, 6, &[(50.0, 5), (40.0, 4)])],
+                    label: None,
+                    at: None,
+                    note: String::new(),
+                }],
+                body_weight: None,
+                note: String::new(),
+            },
+        );
+        db
+    }
+
+    /// ★ 段はセット単位。ピン / インターバルの「その種目の初出行にだけ書く」を
+    ///   真似て 1 行にまとめると、どのセットから落としたのかがシートから読めなくなる。
+    #[test]
+    fn export_tsv_writes_the_stages_on_the_row_they_hang_from() {
+        let tsv = export_tsv(&drop_sample(), jst(), crate::i18n::Lang::Ja);
+        let r = rows(&tsv);
+        let c = col(&r, "ドロップ");
+        assert_eq!(
+            (r[1][c], r[2][c]),
+            ("", "50×5 40×4"),
+            "段が別の行に書かれている: {tsv}"
+        );
+    }
+
+    /// ★ 書き出しで落ちると、機種変更でドロップの段が静かに消える。
+    ///   消えたぶんは推移に混ざり直すので、グラフが後から勝手に増える。
+    #[test]
+    fn tsv_round_trips_the_drop_stages() {
+        let db = drop_sample();
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
+        merge_db(&mut mine, incoming);
+
+        let s = mine.sessions.get("2026-08-01").expect("その日がある");
+        assert_eq!(s.logs[0].sets, db.sessions["2026-08-01"].logs[0].sets);
+    }
+
+    /// ★ 列を足す前に書き出したファイルは今も読める（形式の進化規則 2）。
+    ///   `tsv_header` が名前で引くので、無い列は `None` のまま空に落ちる。
+    #[test]
+    fn tsv_import_reads_a_file_written_before_the_drop_column_existed() {
+        let old = "日付\t部位\t種目\tセット\t重量kg\t回数\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\n\
+                   2026-08-01\t胸\tベンチプレス\t1\t60\t10\t\t\t\t\t\t\t\t\n";
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let db = parse_import(old, &mut ids(), &mine).expect("旧 14 列も読める");
+        let s = db.sessions.get("2026-08-01").expect("その日がある");
+        assert!(
+            s.logs[0].sets[0].drops.is_empty(),
+            "無い列から段が生えている"
+        );
+    }
+
+    /// ★ セルの綴りは書き出しより広く受ける。シートで手で書き足す人が居るので、
+    ///   区切りと掛け算記号を取り違えると打った段が黙って落ちる。
+    #[test]
+    fn parse_drops_cell_reads_the_spellings_a_sheet_can_produce() {
+        let want = vec![
+            DropStage {
+                weight: 50.0,
+                reps: 5,
+            },
+            DropStage {
+                weight: 40.0,
+                reps: 4,
+            },
+        ];
+        for cell in [
+            "50×5 40×4",
+            "50x5 40x4",
+            "50X5 40X4",
+            "50*5 40*4",
+            "50×5,40×4",
+            "50×5、40×4",
+            " 50×5   40×4 ",
+            "50×5.0 40×4.0",
+        ] {
+            assert_eq!(parse_drops_cell(cell), want, "読めていない: {cell:?}");
+        }
+
+        // 空セルは段なし
+        assert!(parse_drops_cell("").is_empty());
+        assert!(parse_drops_cell("  ").is_empty());
+        // ★ 読めない要素は黙って捨てる（行ごと落とすほどではない）
+        assert_eq!(parse_drops_cell("50×5 ゴミ 40×4"), want);
+        // 回数が無い要素は捨てる（重量だけでは段にならない）
+        assert!(parse_drops_cell("50").is_empty());
+        assert!(parse_drops_cell("50×").is_empty());
+        // 重量なしの段（自重）は受ける
+        assert_eq!(
+            parse_drops_cell("×8"),
+            vec![DropStage {
+                weight: 0.0,
+                reps: 8
+            }]
+        );
+        // ★ 上限はここで切らない（`clean_drops` の仕事）。`parse_tsv` は最後に
+        //   `normalize` を通るので、取り込み結果としては 4 段に収まる
+        assert_eq!(parse_drops_cell("1×1 2×1 3×1 4×1 5×1").len(), 5);
+    }
+
+    /// ★ 回数 0 の段が `drops` を非空にすると、何も外していないのに推移タブの注記が出る。
+    ///   上限も同じ 1 箇所（`clean_drops`）が切ることを一緒に固定する。
+    #[test]
+    fn normalize_prunes_stages_that_cannot_be_a_set() {
+        let mut db = test_db();
+        db.sessions.insert(
+            date_key(d(2026, 8, 1)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: e(10),
+                    sets: vec![drop_set(60.0, 6, &[(50.0, 0), (40.0, 4)])],
+                    label: None,
+                    at: None,
+                    note: String::new(),
+                }],
+                ..Session::default()
+            },
+        );
+
+        normalize(&mut db, &mut ids());
+
+        assert_eq!(
+            db.sessions["2026-08-01"].logs[0].sets[0].drops,
+            vec![DropStage {
+                weight: 40.0,
+                reps: 4
+            }],
+            "回数 0 の段が残っている"
+        );
+    }
+
+    /// ★ 上限を切るのも `clean_drops` の 1 箇所。取り込みのパーサ側で切らないので、
+    ///   ここが唯一の門になる。
+    #[test]
+    fn normalize_caps_the_stages_at_the_limit() {
+        let many: Vec<(f32, u32)> = (1..=MAX_DROPS as u32 + 2).map(|n| (10.0, n)).collect();
+        let mut db = test_db();
+        db.sessions.insert(
+            date_key(d(2026, 8, 1)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: e(10),
+                    sets: vec![drop_set(60.0, 6, &many)],
+                    label: None,
+                    at: None,
+                    note: String::new(),
+                }],
+                ..Session::default()
+            },
+        );
+
+        normalize(&mut db, &mut ids());
+
+        assert_eq!(
+            db.sessions["2026-08-01"].logs[0].sets[0].drops.len(),
+            MAX_DROPS
+        );
     }
 
     /// ★ メニューを書かないと**機種変更でメニューだけ消える**。記録は行に出るので
@@ -7357,7 +8407,7 @@ mod tests {
         let set = |weight, reps| SetEntry {
             weight,
             reps,
-            note: String::new(),
+            ..Default::default()
         };
         mine.sessions.insert(
             date_key(d(2026, 8, 1)),
@@ -7498,7 +8548,7 @@ mod tests {
         let set = |reps| SetEntry {
             weight: 60.0,
             reps,
-            note: String::new(),
+            ..Default::default()
         };
         let day = |sets: Vec<SetEntry>, at| Session {
             logs: vec![ExerciseLog {
@@ -7557,7 +8607,7 @@ mod tests {
             vec![SetEntry {
                 weight: 60.0,
                 reps: 10,
-                note: String::new()
+                ..Default::default()
             }]
         );
     }
@@ -7731,7 +8781,7 @@ mod tests {
                     sets: vec![SetEntry {
                         weight: 60.0,
                         reps: 10,
-                        note: String::new(),
+                        ..Default::default()
                     }],
                     at: Some(1_800_000_000_000),
                     note: String::new(),
@@ -7869,12 +8919,12 @@ mod tests {
                         SetEntry {
                             weight: 60.0,
                             reps: 10,
-                            note: String::new(),
+                            ..Default::default()
                         },
                         SetEntry {
                             weight: 60.0,
                             reps: 8,
-                            note: String::new(),
+                            ..Default::default()
                         },
                     ],
                     at: None,
@@ -8012,7 +9062,7 @@ mod tests {
                         sets: vec![SetEntry {
                             weight: 60.0,
                             reps: 10,
-                            note: String::new(),
+                            ..Default::default()
                         }],
                         at: None,
                         note: String::new(),
@@ -8023,7 +9073,7 @@ mod tests {
                         sets: vec![SetEntry {
                             weight: 20.0,
                             reps: 15,
-                            note: String::new(),
+                            ..Default::default()
                         }],
                         at: None,
                         note: String::new(),
@@ -8071,7 +9121,7 @@ mod tests {
                         sets: vec![SetEntry {
                             weight: 65.0,
                             reps: 8,
-                            note: String::new(),
+                            ..Default::default()
                         }],
                         at: None,
                         note: String::new(),
@@ -8082,7 +9132,7 @@ mod tests {
                         sets: vec![SetEntry {
                             weight: 45.0,
                             reps: 6,
-                            note: String::new(),
+                            ..Default::default()
                         }],
                         at: None,
                         note: String::new(),
@@ -8214,12 +9264,12 @@ mod tests {
                 SetEntry {
                     weight: 60.0,
                     reps: 10,
-                    note: String::new(),
+                    ..Default::default()
                 },
                 SetEntry {
                     weight: 60.0,
                     reps: 8,
-                    note: String::new(),
+                    ..Default::default()
                 },
             ]
         };
@@ -8228,12 +9278,12 @@ mod tests {
                 SetEntry {
                     weight: 62.0,
                     reps: 10,
-                    note: String::new(),
+                    ..Default::default()
                 },
                 SetEntry {
                     weight: 60.0,
                     reps: 8,
-                    note: String::new(),
+                    ..Default::default()
                 },
             ]
         };
@@ -8289,7 +9339,7 @@ mod tests {
                         sets: vec![SetEntry {
                             weight: 60.0,
                             reps: 10,
-                            note: String::new(),
+                            ..Default::default()
                         }],
                         at: None,
                         note: String::new(),
@@ -8300,7 +9350,7 @@ mod tests {
                         sets: vec![SetEntry {
                             weight: 40.0,
                             reps: 12,
-                            note: String::new(),
+                            ..Default::default()
                         }],
                         at: None,
                         note: String::new(),
@@ -8589,6 +9639,7 @@ mod tests {
                                 weight: *w,
                                 reps: *r,
                                 note: n.to_string(),
+                                ..Default::default()
                             })
                             .collect(),
                         at: None,
@@ -8604,6 +9655,49 @@ mod tests {
             build("わたしのメモ", mine_sets),
             build("あちらのメモ", theirs_sets),
         )
+    }
+
+    /// `(重量, 回数, メモ, 段)` でセットを組む取り込みペア。種目メモは付けない
+    /// （段だけが増えたマージを見たいので、メモの数を混ぜたくない）。
+    #[expect(clippy::type_complexity, reason = "テストのフィクスチャ")]
+    fn dropped_pair(
+        mine_sets: &[(f32, u32, &str, &[(f32, u32)])],
+        theirs_sets: &[(f32, u32, &str, &[(f32, u32)])],
+    ) -> (Db, Db) {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let day = date_key(d(2026, 8, 1));
+        let build = |sets: &[(f32, u32, &str, &[(f32, u32)])]| {
+            let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+            db.sessions.insert(
+                day.clone(),
+                Session {
+                    logs: vec![ExerciseLog {
+                        exercise_id: bench,
+                        sets: sets
+                            .iter()
+                            .map(|(w, r, n, stages)| SetEntry {
+                                weight: *w,
+                                reps: *r,
+                                note: n.to_string(),
+                                drops: stages
+                                    .iter()
+                                    .map(|(dw, dr)| DropStage {
+                                        weight: *dw,
+                                        reps: *dr,
+                                    })
+                                    .collect(),
+                            })
+                            .collect(),
+                        label: None,
+                        at: None,
+                        note: String::new(),
+                    }],
+                    ..Session::default()
+                },
+            );
+            db
+        };
+        (build(mine_sets), build(theirs_sets))
     }
 
     fn merged_log(db: &Db) -> &ExerciseLog {
@@ -8723,6 +9817,143 @@ mod tests {
         );
     }
 
+    /// ★ 段を識別から外した以上、合流の一手が無いと他端末で入れた段が
+    ///   `Conflict` も出さずに黙って消える。並びが同じ枝（`same_sets`）。
+    #[test]
+    fn merge_carries_the_drop_stages_when_the_order_matches() {
+        let (mut mine, theirs) = dropped_pair(
+            &[(60.0, 10, "", &[]), (60.0, 6, "", &[])],
+            &[(60.0, 10, "", &[]), (60.0, 6, "", &[(50.0, 5)])],
+        );
+
+        let report = merge_db(&mut mine, theirs);
+
+        assert_eq!(
+            merged_log(&mine)
+                .sets
+                .iter()
+                .map(|s| s.drops.len())
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert_eq!(report.drops_added, 1);
+        assert!(
+            !report.is_noop(),
+            "段だけが増えたマージを no-op と言っている"
+        );
+        assert!(report.conflicts.is_empty(), "{report:?}");
+    }
+
+    /// ★ 並べ替えただけの枝（`same_sets_unordered`）でも運ぶ。ここで落とすと、
+    ///   片方の端末で 1 度並べ替えるだけで段が二度と合流しなくなる。
+    #[test]
+    fn merge_carries_the_drop_stages_when_only_the_order_differs() {
+        let (mut mine, theirs) = dropped_pair(
+            &[(60.0, 10, "", &[]), (60.0, 6, "", &[])],
+            &[(60.0, 6, "", &[(50.0, 5)]), (60.0, 10, "", &[])],
+        );
+
+        let report = merge_db(&mut mine, theirs);
+
+        assert_eq!(
+            merged_log(&mine)
+                .sets
+                .iter()
+                .map(|s| (s.reps, s.drops.len()))
+                .collect::<Vec<_>>(),
+            vec![(10, 0), (6, 1)],
+            "取り込み先の並びのまま段だけが乗る"
+        );
+        assert_eq!(report.drops_added, 1);
+    }
+
+    /// ★ **両方に段があって中身が違うときは取り込み先を残す。** `append_note` の
+    ///   「同じ文が既に入っていれば足さない」と同じ、足さない側に倒す判断。
+    ///   `Conflict` も出さない（出すと同じファイルを 2 回入れるたびに報告する）。
+    #[test]
+    fn merge_keeps_my_stages_when_both_sides_have_some() {
+        let (mut mine, theirs) = dropped_pair(
+            &[(60.0, 6, "", &[(50.0, 5)])],
+            &[(60.0, 6, "", &[(45.0, 8), (35.0, 6)])],
+        );
+
+        let report = merge_db(&mut mine, theirs);
+
+        assert_eq!(
+            merged_log(&mine).sets[0].drops,
+            vec![DropStage {
+                weight: 50.0,
+                reps: 5
+            }],
+            "取り込む側の段で上書きしている"
+        );
+        assert_eq!(report.drops_added, 0);
+        assert!(report.conflicts.is_empty(), "{report:?}");
+    }
+
+    /// ★ **合流を素朴に書くと、同じデータを初めて取り込んだだけで段が増える。**
+    ///
+    /// 「段付きの相手を、同じ重量・回数の未使用な先頭に入れる」1 段だけの実装だと、
+    /// あちらの段付き `(60,10)` が**段の無い** `mine[0]` に当たって段が 2 セットに付く。
+    /// `merge_set_drops_unordered` が先に「同じ段を既に持っている相手」へ寄せることで
+    /// 起きなくなる。同じ重量・回数の行が並んでいる記録は珍しくない。
+    #[test]
+    fn merging_the_same_data_does_not_invent_a_drop_stage() {
+        let stages: &[(f32, u32)] = &[(50.0, 5)];
+        let (mut mine, theirs) = dropped_pair(
+            &[
+                (60.0, 10, "A", &[]),
+                (60.0, 10, "", stages),
+                (70.0, 5, "", &[]),
+            ],
+            &[
+                (70.0, 5, "", &[]),
+                (60.0, 10, "", stages),
+                (60.0, 10, "A", &[]),
+            ],
+        );
+
+        let report = merge_db(&mut mine, theirs);
+
+        assert_eq!(
+            merged_log(&mine)
+                .sets
+                .iter()
+                .map(|s| s.drops.len())
+                .collect::<Vec<_>>(),
+            vec![0, 1, 0],
+            "無関係なセットに段を付けている"
+        );
+        assert_eq!(report.drops_added, 0);
+        assert_eq!(report.notes_added, 0, "メモも二重に付いてはいけない");
+        assert!(report.is_noop(), "同じデータなのに何かを取り込んでいる");
+    }
+
+    /// ★ 自分のファイルを何度取り込んでも段が増えない（冪等）。
+    #[test]
+    fn importing_the_same_drop_stages_twice_adds_nothing() {
+        let db = drop_sample();
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+
+        for round in 1..=2 {
+            let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
+            let report = merge_db(&mut mine, incoming);
+            if round == 2 {
+                assert_eq!(report.drops_added, 0, "2 回目で段が増えている");
+                assert!(report.is_noop(), "2 回目が no-op でない: {report:?}");
+            }
+        }
+        assert_eq!(
+            mine.sessions["2026-08-01"].logs[0]
+                .sets
+                .iter()
+                .filter(|s| !s.drops.is_empty())
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn merge_still_reports_a_divergence_when_the_sets_really_differ() {
         // 本数が同じで中身が違うときまで「並べ替えただけ」に見えては困る
@@ -8838,7 +10069,7 @@ mod tests {
                     sets: vec![SetEntry {
                         weight: 40.0,
                         reps: 12,
-                        note: String::new(),
+                        ..Default::default()
                     }],
                     at: None,
                     note: String::new(),
@@ -9045,13 +10276,6 @@ mod tests {
         );
     }
 
-    /// ピンの列位置を見出しから引く（テストが列順に依存しないように）。
-    fn pin_col(r: &[Vec<&str>]) -> usize {
-        r[0].iter()
-            .position(|c| *c == "ピン")
-            .expect("ピン列がある")
-    }
-
     /// 毎行書くとシートで同じ文字列が縦に伸び、行数ぶん容量も増える。
     /// 体重・種目メモと同じ「まとまりの先頭 1 行だけ」。
     #[test]
@@ -9068,12 +10292,12 @@ mod tests {
                         SetEntry {
                             weight: 60.0,
                             reps: 10,
-                            note: String::new(),
+                            ..Default::default()
                         },
                         SetEntry {
                             weight: 60.0,
                             reps: 8,
-                            note: String::new(),
+                            ..Default::default()
                         },
                     ],
                     at: None,
@@ -9086,7 +10310,7 @@ mod tests {
 
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
-        let col = pin_col(&r);
+        let col = col(&r, "ピン");
         let cells: Vec<&str> = r[1..]
             .iter()
             .filter(|row| row[2] == "ベンチプレス")
@@ -9111,7 +10335,7 @@ mod tests {
 
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
-        let col = pin_col(&r);
+        let col = col(&r, "ピン");
         let row = r[1..]
             .iter()
             .find(|row| row[2] == "スクワット")
@@ -9395,13 +10619,6 @@ mod tests {
         );
     }
 
-    /// インターバルの列位置を見出しから引く（テストが列順に依存しないように）。
-    fn interval_col(r: &[Vec<&str>]) -> usize {
-        r[0].iter()
-            .position(|c| *c == "インターバル秒")
-            .expect("インターバル秒列がある")
-    }
-
     /// ピンと同じ「その種目が最初に現れた行にだけ書く」。毎行書くとシートで同じ
     /// 数字が縦に伸び、行数ぶん容量も増える。
     #[test]
@@ -9418,12 +10635,12 @@ mod tests {
                         SetEntry {
                             weight: 60.0,
                             reps: 10,
-                            note: String::new(),
+                            ..Default::default()
                         },
                         SetEntry {
                             weight: 60.0,
                             reps: 8,
-                            note: String::new(),
+                            ..Default::default()
                         },
                     ],
                     at: None,
@@ -9436,7 +10653,7 @@ mod tests {
 
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
-        let col = interval_col(&r);
+        let col = col(&r, "インターバル秒");
         let cells: Vec<&str> = r[1..]
             .iter()
             .filter(|row| row[2] == "ベンチプレス")
@@ -9466,8 +10683,8 @@ mod tests {
             .find(|row| row[2] == "ベンチプレス")
             .expect("種目マスタ行に出る");
 
-        assert_eq!(row[pin_col(&r)], "3 5");
-        assert_eq!(row[interval_col(&r)], "90");
+        assert_eq!(row[col(&r, "ピン")], "3 5");
+        assert_eq!(row[col(&r, "インターバル秒")], "90");
     }
 
     /// ★ 手つかずのプリセットを書き出さない規則の穴。記録にもメニューにも出てこない
@@ -9481,7 +10698,7 @@ mod tests {
 
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
-        let col = interval_col(&r);
+        let col = col(&r, "インターバル秒");
         let row = r[1..]
             .iter()
             .find(|row| row[2] == "スクワット")
@@ -9508,7 +10725,7 @@ mod tests {
             .iter()
             .find(|row| row[2] == "スクワット")
             .expect("種目マスタ行に出る");
-        assert_eq!(row[interval_col(&r)], "0");
+        assert_eq!(row[col(&r, "インターバル秒")], "0");
     }
 
     /// ★ メニューにだけ入っている種目（記録が 1 日も無い）の経路。`logged` が
@@ -9532,9 +10749,9 @@ mod tests {
         // 種目マスタ行は出ず、メニュー行（メニュー列が埋まる行）だけがある
         let row = exactly_one(r[1..].iter().filter(|row| row[2] == "ベンチプレス"))
             .expect("ベンチプレスの行はちょうど 1 本");
-        assert_eq!(row[11], "胸の日", "メニュー行ではない");
-        assert_eq!(row[interval_col(&r)], "90");
-        assert_eq!(row[pin_col(&r)], "3");
+        assert_eq!(row[col(&r, "メニュー")], "胸の日", "メニュー行ではない");
+        assert_eq!(row[col(&r, "インターバル秒")], "90");
+        assert_eq!(row[col(&r, "ピン")], "3");
 
         let mut fresh = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let incoming = parse_import(&tsv, &mut ids(), &fresh).expect("読み戻せる");
@@ -10296,6 +11513,7 @@ mod tests {
                             weight: 100.0,
                             reps: 3,
                             note: set_note.to_string(),
+                            drops: Vec::new(),
                         }],
                         at: None,
                         note: String::new(),

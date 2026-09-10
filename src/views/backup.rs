@@ -109,6 +109,11 @@ fn added_text(r: &MergeReport) -> Option<String> {
     if r.notes_added > 0 {
         parts.push(cur_lang().added_notes(r.notes_added));
     }
+    // ★ ドロップの印だけが増えることもある。`conflicts` に出ないのに推移タブの数字が
+    //   動くので、`is_noop` に数えたものは必ずここにも出す
+    if r.drops_added > 0 {
+        parts.push(cur_lang().added_drops(r.drops_added));
+    }
     if r.exercises_added > 0 {
         parts.push(cur_lang().n_exercises(r.exercises_added));
     }

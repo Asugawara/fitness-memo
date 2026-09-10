@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-17
 - **カテゴリ**: ux
-- **関連**: [記録タブのカードとセットをドラッグで並び替え、`Vec` の並びをそのまま保存する](drag-to-reorder-in-record-tab.md), [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](menu-groups-as-single-open-accordion.md), [保存したメニューから始める（種目タブを設定タブに改める）](start-from-a-saved-routine.md), [その日の記録から直接メニューを作れるようにする](save-a-day-as-a-routine.md), [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](settings-as-a-list-of-sections.md), [トレーニングメニューを「名前 + 種目 ID の並び」だけのデータにする](../data-model/routines-as-named-exercise-lists.md), [アイコンに lucide を採り、`assets/icons/*.svg` を `include_str!` で埋め込む](../architecture/lucide-icons-as-included-svg.md), [シートをネイティブ `<dialog>` にし、手動の重なり順から降りる](native-dialog-for-sheets.md), [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md)
+- **関連**: [記録タブのカードとセットをドラッグで並び替え、`Vec` の並びをそのまま保存する](drag-to-reorder-in-record-tab.md), [種目タブを部位の折りたたみ一覧にし、1 つだけ開く](menu-groups-as-single-open-accordion.md), [保存したメニューから始める（種目タブを設定タブに改める）](start-from-a-saved-routine.md), [その日の記録から直接メニューを作れるようにする](save-a-day-as-a-routine.md), [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](settings-as-a-list-of-sections.md), [トレーニングメニューを「名前 + 種目 ID の並び」だけのデータにする](../data-model/routines-as-named-exercise-lists.md), [アイコンに lucide を採り、`assets/icons/*.svg` を `include_str!` で埋め込む](../architecture/lucide-icons-as-included-svg.md), [シートをネイティブ `<dialog>` にし、手動の重なり順から降りる](native-dialog-for-sheets.md), [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [記録タブの「種目を追加」シートを部位のアコーディオンにし、1 つだけ開く](record-add-sheet-groups-as-single-open-accordion.md)（★ この決定を覆した）
 
 ## 背景
 
@@ -163,6 +163,13 @@ DOM 順という「たまたま」で決まっていた。`.rtn-save` を 2 に�
 
 **記録タブの「種目を追加」シート（`.sheet-group` のまま）には当てない。** あちらは
 1 タップで 1 種目を出して閉じる画面で、往復しないので畳む理由が無い。
+
+（★ **後に覆した** — [記録タブの「種目を追加」シートを部位のアコーディオンにし、1 つだけ開く](record-add-sheet-groups-as-single-open-accordion.md)。
+**「往復しない」は今も正しく、そこは覆っていない。** 覆したのは別の 2 点で、
+**28 個のボタンから目当てを目で探すこと**（実測で 28 種目中 14 種目しか
+スクロールなしで届かない）と、**部位ブロックの高さが種目名の折り返しで決まるので
+同じ種目でも毎回違う位置に出ること**である。**開ける数だけが違う** — あちらは
+1 つだけで、CSS は `.rtn-group` を `.fold-group` に改めて共有した。）
 [記録タブのカードとセットをドラッグで並び替え](drag-to-reorder-in-record-tab.md) が
 「『種目を追加』シートの並びには今も有効な案」として残した**直近順の自動並べ替え**も、
 そちらの将来案として開いたままにしてある（この ADR は 1 文字も触っていない）。
@@ -280,6 +287,9 @@ ISC に加えて MIT の併記が要る。判別方法を LICENSE に書き足�
 しかし**部位の色と名前という既にある構造を捨てる**ことになり、「胸の日」を組むときに
 胸の種目がどこにあるか探すことになる。折りたたみは構造を残したまま縦を畳むので、
 まずこちらを入れた。**この案は今も却下していない**（あちらのシートと合わせて別途）。
+（★ **その「あちらのシート」も後に折りたたみを採った** — [記録タブの「種目を追加」シートを部位のアコーディオンにし、1 つだけ開く](record-add-sheet-groups-as-single-open-accordion.md)。
+**そのときもこの案は採らなかった**（却下の理由がそのまま当てはまる）。部位の中の
+並びに当てる形なら共存するので、今も却下していない。）
 
 **`Scroller` を prop で渡す**: 依存が型に出て、DOM のクラス名（`.sheet-body`）に
 依存しなくなる。しかし `RoutineEditor` は入口が 2 つあり、**片方だけ間違った id を

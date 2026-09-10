@@ -13,10 +13,10 @@ use leptos::prelude::*;
 use web_sys::PointerEvent;
 
 use crate::core;
-use crate::core::Metric;
+use crate::core::{Drops, Metric};
 use crate::model::{
-    Db, ExerciseId, ExerciseLog, GroupId, MAX_INTERVAL_LEN, MAX_PIN_LEN, MAX_PINS, RoutineId,
-    SetEntry,
+    Db, DropStage, ExerciseId, ExerciseLog, GroupId, MAX_DROPS, MAX_INTERVAL_LEN, MAX_PIN_LEN,
+    MAX_PINS, RoutineId, SetEntry,
 };
 use crate::reorder;
 
@@ -27,7 +27,7 @@ use super::drag::{
 use super::icon::{self, icon};
 use super::{
     Sheet, cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, fmt_weight, grp_name, kb_blur,
-    kb_focus, now_ms, parse_reps, parse_weight, scroll_to_id, t, use_dates, use_db,
+    kb_focus, now_ms, parse_reps, parse_weight, scroll_to_id, t, use_dates, use_db, use_drop_pct,
     use_history_count, use_kb,
 };
 
@@ -53,6 +53,35 @@ struct Row {
     /// このセットのメモ。**保存はセットに従属する**（回数の無い行のメモは保存されない）。
     /// adr/data-model/notes-on-logs-and-sets.md
     note: String,
+    /// このメインセットにぶら下がるドロップセットの段。
+    /// adr/data-model/drop-sets-as-stages-under-the-main-set.md
+    ///
+    /// `Row` と同じ理由で文字列で持つ（空欄と `"6."` が `f32` / `u32` で表せない）。
+    drops: Vec<DropRow>,
+}
+
+/// 編集中のドロップセットの 1 段。
+///
+/// `key` を持つ理由は [`PinRow`] と同じ（同じ重量・回数の段を 2 つ並べられるので、
+/// 値をキーにすると keyed diff が壊れて wasm が死ぬ）。
+#[derive(Clone, Debug, PartialEq)]
+struct DropRow {
+    key: u32,
+    weight: String,
+    reps: String,
+}
+
+/// 保存モデルの段 → 編集中の段。**キーは位置**（`<For>` の差分用で、保存には出ない）。
+fn drop_rows(s: &SetEntry) -> Vec<DropRow> {
+    s.drops
+        .iter()
+        .enumerate()
+        .map(|(i, d)| DropRow {
+            key: i as u32,
+            weight: fmt_weight(d.weight),
+            reps: d.reps.to_string(),
+        })
+        .collect()
 }
 
 impl Row {
@@ -62,6 +91,7 @@ impl Row {
             weight: String::new(),
             reps: String::new(),
             note: String::new(),
+            drops: Vec::new(),
         }
     }
 }
@@ -295,6 +325,27 @@ pub fn DayEditor() -> impl IntoView {
         EDGE_SCROLLING.set(false);
     });
     let sheet = RwSignal::new(false);
+    // 「種目を追加」シートで開いている部位。**同時に開くのは 1 つ**
+    // （adr/ux/record-add-sheet-groups-as-single-open-accordion.md）。
+    //
+    // ★ **`OpenGroupCtx` を共有しない。** あれはアプリ全体で 1 本の signal なので、
+    //   ここで開いた部位が設定タブの種目一覧にも漏れる（逆も同じ）。
+    //   `views::routine` の `open_groups` がまったく同じ理由でローカルに持っている。
+    // ★ **`Option` にして排他にする。** メニュー編集シートの `Vec`（複数開ける）は
+    //   継がない。あちらは 1 本組む間に胸と脚を行き来する画面だが、こちらは
+    //   **1 種目を出して閉じる**画面で、往復しない。
+    // ★ 開くたびに `None` へ倒すので（下の `open_sheet`）、`OpenGroupCtx` のような
+    //   「タブを跨いで保つ」寿命も永続化も要らない。
+    let open_group: RwSignal<Option<GroupId>> = RwSignal::new(None);
+
+    // ★ シートを開く唯一の経路。ここで畳むことで「開くたびに全部閉じている」を構造で
+    //   保証する。`on_close` 側に置いても ✕ / Esc / 背景タップ / `pick()` の全経路は
+    //   通るが、`.sheet` の退場 0.22s（`public/styles.css` の `.sheet`）の間もシートは
+    //   見えていて、高さが中身なので**開いていた部位が畳まれて上端が落ちるのが見える**。
+    let open_sheet = move |_| {
+        open_group.set(None);
+        sheet.set(true);
+    };
 
     // カードを Db から引き直す。
     // db は untracked で読む（1 文字打つたびにカードが作り直されるのを防ぐ）。
@@ -628,7 +679,7 @@ pub fn DayEditor() -> impl IntoView {
                     <button
                         class="primary"
                         data-testid="add-exercise"
-                        on:click=move |_| sheet.set(true)
+                        on:click=open_sheet
                     >
                         {t().day.add_exercise}
                     </button>
@@ -641,48 +692,124 @@ pub fn DayEditor() -> impl IntoView {
                     testid="add-sheet"
                     close_testid="add-sheet-close"
                 >
+                    // 部位ごとの種目ピッカー。押すとその部位だけが開く。
+                    //
+                    // ★ **折りたたむ。既定は全部閉。同時に開くのは 1 つ。**
+                    //   平坦に並べると 6 部位 28 種目のボタンが一度に出て、目当てを目で
+                    //   探すことになり、**同じ種目でも毎回違う位置に出る**。閉じた 6 行なら
+                    //   位置が固定され、手が場所を覚える
+                    //   （adr/ux/record-add-sheet-groups-as-single-open-accordion.md）。
+                    // ★ 見た目とフックは `.fold-group` でメニュー編集シートと共有し、
+                    //   **開ける数だけが違う**。`views::settings` の `GroupBlock` を
+                    //   再利用しないのは、あれが private な `Editor` enum を prop に取って
+                    //   いて部位を改名する鉛筆まで付いてくるから。
                     {move || {
                         db.with(|d| {
                             let mut groups = d.groups.clone();
                             groups.sort_by_key(|g| g.order);
                             groups
                                 .into_iter()
-                                .map(|g| {
+                                .filter_map(|g| {
+                                    let gid = g.id;
                                     let mut exercises: Vec<_> = d
                                         .exercises
                                         .iter()
-                                        .filter(|e| e.group_id == g.id && !e.archived)
+                                        .filter(|e| e.group_id == gid && !e.archived)
                                         .cloned()
                                         .collect();
                                     exercises.sort_by_key(|e| e.order);
-                                    view! {
-                                        <section class="sheet-group">
-                                            <h3 style=format!("--dot:{}", g.color)>{grp_name(&g).to_string()}</h3>
-                                            <div class="pick-list">
-                                                {exercises
-                                                    .into_iter()
-                                                    .map(|e| {
-                                                        let id = e.id;
-                                                        view! {
-                                                            <button
-                                                                class="pick"
-                                                                // ★ 追跡する（`with_untracked` にしない）。
-                                                                //   シートは常時マウントなので、開いた瞬間に
-                                                                //   作り直されることを当てにできない
-                                                                class:added=move || {
-                                                                    cards.with(|cs| cs.iter().any(|c| c.ex == id))
-                                                                }
-                                                                data-testid="pick-exercise"
-                                                                on:click=move |_| pick(id)
-                                                            >
-                                                                {ex_name(&e).to_string()}
-                                                            </button>
-                                                        }
-                                                    })
-                                                    .collect::<Vec<_>>()}
-                                            </div>
-                                        </section>
+                                    // ★ **中身が 0 の部位は出さない。** 平坦だった頃は空の
+                                    //   見出しが 1 行出るだけだったが、畳むと「押しても何も
+                                    //   開かない 52px の的」になる。設定タブが 0 件でも
+                                    //   ヘッダを出すのは中に「＋ 種目を追加」があるからで、
+                                    //   このシートには開いて出せるものが 1 つも無い
+                                    if exercises.is_empty() {
+                                        return None;
                                     }
+                                    let count = exercises.len();
+                                    // ★ `open_group` を読むのは**この内側の closure だけ**に
+                                    //   する。外側（`db.with(..)` のブロック）で読むと、
+                                    //   1 部位開くたびにピッカー全体が作り直される。
+                                    // ★ `Memo` にしないのは、この外側の closure が `db` を
+                                    //   購読していて**セットを 1 文字打つたびに作り直される**
+                                    //   ため（`views::settings` の `GroupBlock` は長寿命の
+                                    //   コンポーネントなので `Memo` が効く）
+                                    let open = move || open_group.get() == Some(gid);
+                                    Some(
+                                        view! {
+                                            <section class="fold-group" data-testid="pick-group">
+                                                // ★ **`<h3>` は残す。** ここは畳む前から部位の
+                                                //   見出しで、`<button>` に置き換えると部位ぶんの
+                                                //   見出しが a11y ツリーから消える。`<button>` は
+                                                //   phrasing content なので `<h3>` の中に置けて、
+                                                //   WAI-ARIA APG のアコーディオンも
+                                                //   「見出し > ボタン」を求めている
+                                                <h3>
+                                                    <button
+                                                        class="grp-toggle"
+                                                        data-testid="pick-group-toggle"
+                                                        aria-expanded=move || {
+                                                            if open() { "true" } else { "false" }
+                                                        }
+                                                        on:click=move |_| {
+                                                            open_group
+                                                                .update(|o| {
+                                                                    *o = (*o != Some(gid)).then_some(gid)
+                                                                });
+                                                        }
+                                                    >
+                                                        // 開いた状態は CSS で 90 度回す
+                                                        // （chevron-down を別に持たない）
+                                                        {icon(icon::CHEVRON_RIGHT)}
+                                                        <span
+                                                            class="dot"
+                                                            style=format!("--dot:{}", g.color)
+                                                        ></span>
+                                                        <span
+                                                            class="grp-name"
+                                                            data-testid="pick-group-name"
+                                                        >
+                                                            {grp_name(&g).to_string()}
+                                                        </span>
+                                                        <span class="grp-count muted">
+                                                            {cur_lang().n_exercises(count)}
+                                                        </span>
+                                                    </button>
+                                                </h3>
+                                                {move || {
+                                                    open()
+                                                        .then(|| {
+                                                            let list = exercises.clone();
+                                                            view! {
+                                                                <div class="pick-list">
+                                                                    {list
+                                                                        .into_iter()
+                                                                        .map(|e| {
+                                                                            let id = e.id;
+                                                                            view! {
+                                                                                <button
+                                                                                    class="pick"
+                                                                                    // ★ 追跡する（`with_untracked` にしない）。
+                                                                                    //   シートは常時マウントなので、開いた瞬間に
+                                                                                    //   作り直されることを当てにできない
+                                                                                    class:added=move || {
+                                                                                        cards.with(|cs| cs.iter().any(|c| c.ex == id))
+                                                                                    }
+                                                                                    data-testid="pick-exercise"
+                                                                                    on:click=move |_| pick(id)
+                                                                                >
+                                                                                    {ex_name(&e).to_string()}
+                                                                                </button>
+                                                                            }
+                                                                        })
+                                                                        .collect::<Vec<_>>()}
+                                                                </div>
+                                                            }
+                                                        })
+                                                }}
+                                            </section>
+                                        },
+                                    )
                                 })
                                 .collect::<Vec<_>>()
                         })
@@ -803,6 +930,8 @@ fn ExerciseCard(
     let db = use_db();
     let dates = use_dates();
     let kb = use_kb();
+    // ドロップの段を 1 つ足すときの落とし幅（%）
+    let drop_pct = use_drop_pct();
     let history_count = use_history_count();
 
     // Memo にするのは「値が変わったときだけ」下流を再描画させるため。
@@ -868,6 +997,7 @@ fn ExerciseCard(
                         weight: fmt_weight(s.weight),
                         reps: s.reps.to_string(),
                         note: s.note.clone(),
+                        drops: drop_rows(s),
                     })
                     .collect();
                 (rows, l.note.clone())
@@ -984,6 +1114,18 @@ fn ExerciseCard(
                         weight: parse_weight(&r.weight),
                         reps,
                         note: r.note.clone(),
+                        // ★ 回数の読めない段は落とす。メインセットで
+                        //   `parse_reps` が None の行を落とすのと同じ規則
+                        drops: r
+                            .drops
+                            .iter()
+                            .filter_map(|d| {
+                                Some(DropStage {
+                                    weight: parse_weight(&d.weight),
+                                    reps: parse_reps(&d.reps)?,
+                                })
+                            })
+                            .collect(),
                     })
                 })
                 .collect()
@@ -1063,6 +1205,10 @@ fn ExerciseCard(
                 //   重量はその計画値だが、書くべき観測はまだ存在しない。過去のログを再現する
                 //   「前回をコピー」とは操作が違う（adr/ux/copy-carries-the-notes.md の決定 2）
                 note: String::new(),
+                // ★ 段もプリフィルしない。理由はメモと同じで、さらに**段は既定で
+                //   推移から外れる**ので、勝手に入ると利用者が気づかないまま
+                //   その重量がグラフから消える
+                drops: Vec::new(),
             })
         });
         focus_key.set(Some(key));
@@ -1131,6 +1277,10 @@ fn ExerciseCard(
                     Some(mine) if !mine.trim().is_empty() => mine.clone(),
                     _ => s.note.clone(),
                 },
+                // ★ 段も運ぶ。メモと違って「今日打ってあるもの」を守る必要が無い
+                //   （このボタンが出るのは保存済みのセットが空のときなので、画面上の
+                //   段は数値と一緒に置き換わってよい）
+                drops: drop_rows(s),
             })
             .collect();
         next_key.set(base + filled.len() as u32 + 1);
@@ -1397,7 +1547,14 @@ fn ExerciseCard(
                     }
                     rows.into_iter()
                         .map(|(date, log)| {
-                            let sets = log.sets.iter().map(fmt_set).collect::<Vec<_>>().join("  ");
+                            // ★ 段は出さない。1 行が長くなるとトレ中に読む密度が落ちる
+                            //   （adr/ux/drop-sets-as-a-box-under-the-main-set.md）
+                            let sets = log
+                                .sets
+                                .iter()
+                                .map(|s| fmt_set(s, Drops::Exclude))
+                                .collect::<Vec<_>>()
+                                .join("  ");
                             let metric = fmt_metric(core::log_value(Metric::Volume, &log));
                             // ★ **メモは出さない。** 数値を縦に読んで「伸びているか停滞か」を
                             //   見るための場所なので、自由文が挟まると列が崩れて桁が揃わなくなる。
@@ -1480,14 +1637,97 @@ fn ExerciseCard(
                                     .unwrap_or_default()
                             })
                         };
-                        // メモは入っているが回数が空 = commit で落ちる行。
+                        // ★ **スナップショット (`row.drops`) を読まない。** `<For>` は
+                        //   `r.key` で差分を取るので、段を足しても `key` は変わらず
+                        //   `children` が再実行されない — `row` の束縛は古いまま残る。
+                        //   `note_of` と同じく `rows` を読む closure にする
+                        //   （種目メモの `value=` が同じ形で取り残された記録が上にある）
+                        let drops_of = move || {
+                            rows.with(|rs| {
+                                rs.iter()
+                                    .find(|r| r.key == key)
+                                    .map(|r| r.drops.clone())
+                                    .unwrap_or_default()
+                            })
+                        };
+                        // 段の**本数だけ**を読む。`drops_of()` は `Vec<DropRow>` を
+                        // clone するので、上限の判定に使うと 1 打鍵ごとに段の数だけ
+                        // `String` を確保して捨てることになる（`rows` はカード共有の
+                        // シグナルなので、どの行を打っても全行のこの closure が走る）
+                        let n_drops = move || {
+                            rows.with(|rs| {
+                                rs.iter()
+                                    .find(|r| r.key == key)
+                                    .map_or(0, |r| r.drops.len())
+                            })
+                        };
+                        // この行の `Row` を書き換えて保存する。**行の書き込みはここを通す。**
+                        //
+                        // ★ `rows.update` → `find(|r| r.key == key)` → `commit()` の
+                        //   3 点セットを手で書くと、`commit()` の付け忘れが行ごとに起きる
+                        let edit_row = move |f: &dyn Fn(&mut Row)| {
+                            rows.update(|rs| {
+                                if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                                    f(r);
+                                }
+                            });
+                            commit();
+                        };
+                        // 段を 1 つ足す。重量は先に入れる:
+                        //
+                        // - **1 段目**はメインセットの重量から落とし幅ぶん引いた値
+                        // - **2 段目以降**は**前の段の重量をそのままコピー**する。
+                        //   落とし幅をもう一度掛けない — 実際の刻みは段ごとに変わるので
+                        //   （20% → 20% とは限らない）当たらない数字を作ることになる。
+                        //   `add_row` が前の行の重量をそのまま引き継ぐのと同じ規則で、
+                        //   「同じか、そこから下げる」のどちらでも打ち直しが最小になる
+                        //
+                        // ★ 回数は入れない。まだ挙げていないので観測が存在しない
+                        //   （`add_row` がメモをプリフィルしないのと同じ線）
+                        //
+                        // ★ **`commit()` を呼ばない。** 足した段は回数が空なので
+                        //   `commit` の `parse_reps` で必ず落ちる — 保存内容は 1 バイトも
+                        //   変わらないのに、`db.update` はカレンダーの月集計と全カードの
+                        //   履歴メモを無条件に走らせ、`Db` を丸ごと clone して書き出す。
+                        //   段は `rows`（画面の状態）に居るので、これで足りる
+                        let add_drop = move |_| {
+                            rows.update(|rs| {
+                                if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                                    if r.drops.len() >= MAX_DROPS {
+                                        return;
+                                    }
+                                    let prefill = match r.drops.last() {
+                                        Some(prev) => prev.weight.clone(),
+                                        None => core::dropped_weight(
+                                            parse_weight(&r.weight),
+                                            drop_pct.get_untracked(),
+                                        )
+                                        .map(fmt_weight)
+                                        .unwrap_or_default(),
+                                    };
+                                    let dkey = r.drops.iter().map(|d| d.key + 1).max().unwrap_or(0);
+                                    r.drops.push(DropRow {
+                                        key: dkey,
+                                        weight: prefill,
+                                        reps: String::new(),
+                                    });
+                                }
+                            });
+                        };
+                        let remove_drop =
+                            move |dkey: u32| edit_row(&|r| r.drops.retain(|d| d.key != dkey));
+                        // メモか段は入っているが回数が空 = commit で落ちる行。
                         // weight_missing の完全な対称（あちらは reps あり、こちらは reps なし）
+                        //
+                        // ★ 段も見る。段だけ足して回数を空のままにした行は `commit` の
+                        //   `parse_reps` で落ちるので、黙って捨てずに理由を出す
+                        //   （文言はメモのときと同じ「回数を入れると保存されます」）
                         let note_orphan = move || {
                             rows.with(|rs| {
                                 rs.iter()
                                     .find(|r| r.key == key)
                                     .is_some_and(|r| {
-                                        !r.note.trim().is_empty()
+                                        (!r.note.trim().is_empty() || !r.drops.is_empty())
                                             && parse_reps(&r.reps).is_none()
                                     })
                             })
@@ -1569,6 +1809,30 @@ fn ExerciseCard(
                             };
                             let len = rows.with_untracked(Vec::len);
                             move_row(from, reorder::neighbor(from, up, len));
+                        };
+                        // 段を足すボタン。**絵だけが違う** — メインセット行は
+                        // `arrow-down-wide-narrow`（ドロップを始める）、段の行は `plus`
+                        // （同じドロップに段を継ぎ足す）。押した結果は同じなので
+                        // `aria-label` も `data-testid` も 1 つで、違うのは絵だけ。
+                        //
+                        // ★ 上限に達したら出さない（押しても何も起きないボタンを
+                        //   作らない。`.pin-add` と同じ規則）
+                        let drop_add_btn = move |svg: &'static str| {
+                            move || {
+                                (n_drops() < MAX_DROPS).then(|| {
+                                    view! {
+                                        <button
+                                            class="icon-btn drop-add"
+                                            aria-label=t().day.drop_add
+                                            data-testid="drop-add"
+                                            on:keydown=nudge_row
+                                            on:click=add_drop
+                                        >
+                                            {icon(svg)}
+                                        </button>
+                                    }
+                                })
+                            }
                         };
                         let drop_row = move |ev: PointerEvent| {
                             let Some(d) = row_drag.get_untracked() else { return };
@@ -1660,6 +1924,15 @@ fn ExerciseCard(
                                 //   削除は入力欄と地続きにしない。margin-left:auto で右端へ寄せた上に
                                 //   区切り線と内側余白で離す（auto を外すと回数欄の直後に来て
                                 //   今より押しやすくなる）
+                                // ★ ドロップを始める口。**回数欄の隣**に置く
+                                //   （adr/ux/drop-sets-as-a-box-under-the-main-set.md 決定 1）。
+                                //   メモを開かずに段を足せる必要があるので `note_open` に
+                                //   相乗りさせられない。44px の標的を 1 つ増やすが、
+                                //   **1 行目の余白に入るので縦は 1px も増えない**
+                                //   （iPhone 幅で ✕ の左に 94px 空いている）
+                                // ★ 絵は `arrow-down-wide-narrow`。段の行の ＋ と分けるのは
+                                //   役割が違うから（こちらは「ドロップを始める」）
+                                {drop_add_btn(icon::ARROW_DOWN_WIDE_NARROW)}
                                 <button
                                     class="icon-btn"
                                     aria-label=t().day.delete_set
@@ -1744,6 +2017,94 @@ fn ExerciseCard(
                                             .into_any()
                                     }
                                 }}
+                                // ── ドロップセットの段 ────────────────────────
+                                //
+                                // ★ **1 段 = 1 行**。メインセットの行と同じ組み方
+                                //   （重量 kg × 回数 ＋ …… ✕）にして、**✕ を縦に揃える**。
+                                //   `.set-row .icon-btn` の margin-left:auto をそのまま
+                                //   効かせるので、行の右端でメインセットの ✕ と 1 列に並ぶ。
+                                // ★ **段があるときだけ出す。** 空の行を常に出すと
+                                //   `44px × セット行数` ぶんカードが伸びる（やらない日の
+                                //   ほうが多い操作にその縦を払わない）。1 段でも入れば
+                                //   その 1 行ぶんの縦は実際の中身が払っている。
+                                // ★ **`note_open` を見ない。** メモを開かずに ＋ で段を
+                                //   足せるので、開かないと打てない入力欄にはできない
+                                <For
+                                    each=drops_of
+                                    key=|d| d.key
+                                    children=move |stage| {
+                                        let dkey = stage.key;
+                                        let update_stage = move |f: fn(&mut DropRow, String), v: String| {
+                                            rows.update(|rs| {
+                                                if let Some(d) = rs
+                                                    .iter_mut()
+                                                    .find(|r| r.key == key)
+                                                    .and_then(|r| {
+                                                        r.drops.iter_mut().find(|d| d.key == dkey)
+                                                    })
+                                                {
+                                                    f(d, v);
+                                                }
+                                            });
+                                            commit();
+                                        };
+                                        view! {
+                                            <div class="drop-row" data-testid="drop-row">
+                                                <input
+                                                    class="num"
+                                                    type="text"
+                                                    inputmode="decimal"
+                                                    pattern="[0-9]*([.,][0-9]*)?"
+                                                    value=stage.weight.clone()
+                                                    aria-label=t().day.drop_weight
+                                                    data-testid="drop-weight"
+                                                    on:keydown=nudge_row
+                                                    on:focusin=move |_| kb_focus(kb)
+                                                    on:focusout=move |_| kb_blur(kb)
+                                                    on:input=move |ev| {
+                                                        update_stage(
+                                                            |d, v| d.weight = v,
+                                                            event_target_value(&ev),
+                                                        );
+                                                    }
+                                                />
+                                                <span class="unit">"kg"</span>
+                                                <span class="times">"×"</span>
+                                                <input
+                                                    class="num"
+                                                    type="text"
+                                                    inputmode="numeric"
+                                                    value=stage.reps.clone()
+                                                    aria-label=t().day.drop_reps
+                                                    data-testid="drop-reps"
+                                                    on:keydown=nudge_row
+                                                    on:focusin=move |_| kb_focus(kb)
+                                                    on:focusout=move |_| kb_blur(kb)
+                                                    on:input=move |ev| {
+                                                        update_stage(
+                                                            |d, v| d.reps = v,
+                                                            event_target_value(&ev),
+                                                        );
+                                                    }
+                                                />
+                                                // ★ 段の行にも足す口を置く。位置は
+                                                //   メインセット行と同じ（回数欄の隣）だが、
+                                                //   **絵は ＋ にする** — こちらは「同じ
+                                                //   ドロップに段を継ぎ足す」で、メインセット
+                                                //   行の「ドロップを始める」とは役割が違う
+                                                {drop_add_btn(icon::PLUS)}
+                                                <button
+                                                    class="icon-btn"
+                                                    aria-label=t().day.drop_delete
+                                                    data-testid="drop-remove"
+                                                    on:click=move |_| remove_drop(dkey)
+                                                >
+                                                    {icon(icon::X)}
+                                                </button>
+                                            </div>
+                                        }
+                                    }
+                                />
                             </div>
                         }
                     }

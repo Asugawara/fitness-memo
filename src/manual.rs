@@ -22,11 +22,15 @@ pub struct Chapter {
     ///   側へ置いてある。クリップが要素の外接矩形なので内容依存で、実際に `accordions`
     ///   は ja 786×1030 / en 786×994 と高さが違う（部位名の折り返し行数の差）。
     ///
-    /// 図を持たない 6 章（`progress-target` / `labels` / `drop-sets` / `reorder` /
-    /// `backup` / `whats-new`）が `false` なのは、静止画で伝わらない（`reorder`）か、
+    /// 図を持たない 5 章（`progress-target` / `labels` / `reorder` / `backup` /
+    /// `whats-new`）が `false` なのは、静止画で伝わらない（`reorder`）か、
     /// 閉じた `<select>` しか写らない（`progress-target`）か、文章で足りる
-    /// （`backup` / `whats-new`）か、この波ではまだ図を持たせない（`labels` /
-    /// `drop-sets`）ため。
+    /// （`labels` / `backup` / `whats-new`）ため。
+    ///
+    /// ★ 逆に `drop-sets` が図を持つのは、段を足す口が**文字ラベルを持たない
+    ///   アイコン 1 個**（`arrow-down-wide-narrow`）で、「回数欄のすぐ右」という位置を
+    ///   文章だけでは特定させられないため（`adr/ux/drop-sets-as-a-box-under-the-main-set.md`
+    ///   の決定 1 がラベルを置かない判断をしている）。
     pub has_fig: bool,
 }
 
@@ -55,7 +59,7 @@ pub const MANUAL_CHAPTERS: &[Chapter] = &[
     },
     Chapter {
         id: "drop-sets",
-        has_fig: false,
+        has_fig: true,
     },
     Chapter {
         id: "empty-day",

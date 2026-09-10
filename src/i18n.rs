@@ -1087,8 +1087,8 @@ const JA_MANUAL: Manual = Manual {
                 "推移タブは既定で段を含めません。落とした段まで数えると「前回と同じかそれ以上」の基準が日によって膨らむためです。含めるかどうかは設定タブの「ドロップセット」で切り替えられ、効く範囲は推移タブ全体（グラフ・前回比やベストなどの統計・記録の一覧）です。含めない設定のとき、その範囲に実際に段があると推移タブに「ドロップセットの段は含めていません（設定で変えられます）」と出ます。",
                 "記録タブの合計・カレンダー・月ごとの集計は、設定にかかわらず常に段も数えます。設定はあくまで推移タブの見せ方で、記録そのものは変えません。そのため同じ日でも記録タブと推移タブで合計が違って見えることがあります。「＋ セット」で足した行には段が付きませんが、「前回をコピー」・メニューの展開・日のコピーは段ごと持ってきます。種目カードの「前回までの記録」の行にはメインセットだけが出ます（段は出ません）。",
             ],
-            fig_alt: "",
-            fig: None,
+            fig_alt: "段が2つ入ったセット行",
+            fig: Some((710, 510)),
         },
         ChapterText {
             title: "空の日から始める",
@@ -1215,8 +1215,8 @@ const EN_MANUAL: Manual = Manual {
                 "The Progress tab excludes drops by default, since counting the dropped weight too would inflate the \"same as or more than last time\" baseline on days that happen to have drops. Whether to include them is toggled under \"Drop sets\" in Settings, and it affects the whole Progress tab — the chart, stats like the last-time comparison and bests, and the record list. When drops are excluded and the visible range actually has some, the Progress tab shows \"Drop sets are not included. You can change this in Settings.\"",
                 "The Record tab's totals, calendar, and monthly aggregates always count drops regardless of the setting — the setting only changes how the Progress tab presents things, not the records themselves. Because of that, the same day's total can look different between the Record tab and the Progress tab. A row added with \"+ Set\" never gets a drop, but \"Copy last time,\" expanding a routine, and copying a day all bring drops along with them. The exercise card's \"Past records\" row shows only the main set — drops don't appear there.",
             ],
-            fig_alt: "",
-            fig: None,
+            fig_alt: "A set row with two drop stages",
+            fig: Some((710, 510)),
         },
         ChapterText {
             title: "Starting from an empty day",

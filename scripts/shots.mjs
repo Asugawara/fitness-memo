@@ -1,8 +1,8 @@
 // README の「画面」セクションと、設定タブのマニュアルの図を撮り直す。
 //
 //   trunk build
-//   node scripts/shots.mjs                          # README 3 枚 + マニュアル 10 枚
-//   node scripts/shots.mjs --only=manual            # マニュアル 10 枚だけ（★ pre-commit が呼ぶのはこれ）
+//   node scripts/shots.mjs                          # README 3 枚 + マニュアル 12 枚
+//   node scripts/shots.mjs --only=manual            # マニュアル 12 枚だけ（★ pre-commit が呼ぶのはこれ）
 //   node scripts/shots.mjs --only=readme            # README 3 枚だけ（UI を触った PR の最後に手で叩く）
 //   node scripts/shots.mjs --only=manual:copy-last  # 1 図だけ（ja / en 両方）。反復用
 //   node scripts/shots.mjs --check                  # 一時ディレクトリに撮ってバイト比較。差があれば exit 1
@@ -103,6 +103,9 @@ const SHOTS = [
 /**
  * 撮影用の記録。3〜4 日おきに部位を回す、ありがちな 4 週間分。
  * 当日ぶんも入れて「記録タブに入力済みのカードが並んでいる」状態にする。
+ *
+ * セットは `[weight, reps]`、段を持つセットだけ 3 要素目に `[[weight, reps], …]` を足す
+ * （投入側で `drops` に変換する。`SetEntry::drops` は空なら**キーごと出さない**）。
  */
 const SEED = [
   { daysAgo: 25, name: 'ベンチプレス', sets: [[50, 10], [50, 8], [50, 8]] },
@@ -118,7 +121,9 @@ const SEED = [
   { daysAgo: 3, name: 'ベンチプレス', sets: [[60, 10], [60, 9], [60, 8]] },
   { daysAgo: 2, name: 'ラットプルダウン', sets: [[45, 12], [45, 10], [45, 10]] },
   { daysAgo: 0, name: 'ベンチプレス', sets: [[60, 10], [60, 10], [60, 8]] },
-  { daysAgo: 0, name: 'ダンベルプレス', sets: [[22.5, 12], [22.5, 10]] },
+  // ★ 段は**最終セット**に付ける。最後のセットだけ重量を落として追い込む、が実際の使い方。
+  //   図 `drop-sets` の被写体（段を持たないセット行と持つセット行が 1 枚に並ぶ）
+  { daysAgo: 0, name: 'ダンベルプレス', sets: [[22.5, 12], [22.5, 10], [22.5, 8, [[17.5, 8], [15, 6]]]] },
 ];
 
 /**
@@ -198,6 +203,9 @@ const WEBP_QUALITY = 90;
  */
 const FIGS = [
   { id: 'chart-readout', pad: 10, setup: setupReadout },
+  // ★ db を書き換えないのでどこでもよいが、`setupMemoOpen` より前に置いて
+  //   ベンチプレスのカードが畳まれた状態で撮る
+  { id: 'drop-sets', pad: 8, setup: setupDropSets },
   // ★ 上寄せ。中央寄せだと下端が sticky の「種目を追加」の帯（画面下 528px 付近に
   //   貼り付く）に潜り込む
   { id: 'exercise-memo', pad: 10, align: 'top', setup: setupMemoOpen },
@@ -576,6 +584,28 @@ async function setupReadout(page, { ids }) {
 }
 
 /**
+ * 章「ドロップセット」。被写体は**段が 2 つ入ったセット行**。
+ *
+ * ★ 足す口（`drop-add`）は文字ラベルを持たないアイコンなので、
+ *   「回数欄の右隣」という位置が図でしか伝わらない（adr/ux/drop-sets-as-a-box-under-the-main-set.md 決定 1）。
+ * ★ 段はシードで入れる。UI 操作で足すと 1 打鍵ごとに db が動いて絵が揺れる
+ *   （PINNED と同じ理由）。
+ * ★ 対象は「1 本目のメインセット行」から「最後の段」まで。こうすると**段を持たない
+ *   セット行と持つセット行が同じ図に並ぶ**ので、字下げと番号の有無の差が読める。
+ */
+async function setupDropSets(page, { ids }) {
+  await gotoTab(page, 'tab-record', 'screen-record');
+  await selectDay(page, DAY_TODAY);
+  const card = page.locator(`#card-${ids.byName('ダンベルプレス').id}`);
+  await card.waitFor({ state: 'visible' });
+  const rows = card.getByTestId('set-row');
+  await waitFor(async () => (await rows.count()) === 3, 'セット行が 3 本出る');
+  const drops = card.getByTestId('drop-row');
+  await waitFor(async () => (await drops.count()) === 2, '段が 2 行出る');
+  return [rows.first(), drops.last()];
+}
+
+/**
  * 章 4「＋ メモ 1 つで 4 つが一斉に開く」。**一番効く図。**
  *
  * ★ `note-toggle` は**カードごとにある**ので、必ずカードへスコープを絞ってから押す。
@@ -814,7 +844,14 @@ try {
         const session = db.sessions[key] ?? { logs: [], body_weight: null, note: '' };
         session.logs.push({
           exercise_id: ex.id,
-          sets: sets.map(([weight, reps]) => ({ weight, reps })),
+          sets: sets.map(([weight, reps, drops]) => ({
+            weight,
+            reps,
+            // ★ **段が無いセットは `drops` キーごと出さない。** `SetEntry::drops` は
+            //   `skip_serializing_if = "Vec::is_empty"`（model.rs:444）なので、空配列を
+            //   書くと `core::migrate` は通るが保存 JSON が実アプリと食い違う
+            ...(drops ? { drops: drops.map(([w, r]) => ({ weight: w, reps: r })) } : {}),
+          })),
           // at は当日ぶんだけ埋める（過去日バックフィルは null。ExerciseLog.at の意味）
           at: daysAgo === 0 ? Date.now() : null,
         });

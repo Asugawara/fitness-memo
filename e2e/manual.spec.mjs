@@ -16,9 +16,16 @@ import { dirname, join } from 'node:path';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = process.env.E2E_BASE || '/';
 
-// 図を持つ章（計画「3. 章立て」）。無い 3 章（progress-target / reorder / backup）は
-// テスト 8 が個別に見る。
-const FIG_CHAPTERS = ['chart-readout', 'copy-last', 'exercise-memo', 'empty-day', 'accordions'];
+// 図を持つ章（計画「3. 章立て」）。無い 5 章（progress-target / labels / reorder /
+// backup / whats-new）のうち reorder / backup はテスト 8 が個別に見る。
+const FIG_CHAPTERS = [
+  'chart-readout',
+  'copy-last',
+  'exercise-memo',
+  'drop-sets',
+  'empty-day',
+  'accordions',
+];
 
 function normalizeBase(base) {
   let b = base.startsWith('/') ? base : `/${base}`;

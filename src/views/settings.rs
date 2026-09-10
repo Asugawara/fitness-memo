@@ -24,10 +24,13 @@
 //!   1 文字打つたびに `Db` が動いて一覧ごと作り直され、編集中の文字列が消える
 
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
 use crate::core::Drops;
 use crate::i18n::Lang;
-use crate::model::{Db, Exercise, ExerciseId, Group, GroupId, RoutineId};
+use crate::model::{
+    Db, Exercise, ExerciseId, Group, GroupId, Label, LabelId, MAX_LABEL_LEN, MAX_LABELS, RoutineId,
+};
 use crate::storage;
 
 use super::help::InstallHelpLink;
@@ -163,6 +166,7 @@ fn add_exercise(db: &mut Db, id: ExerciseId, group: GroupId, name: String) {
         archived: false,
         pins: Vec::new(),
         interval_sec: None,
+        labels: Vec::new(),
     });
 }
 
@@ -1236,6 +1240,22 @@ fn NewGroupEditor(
     }
 }
 
+/// ラベル 1 行ぶんの編集状態。
+///
+/// ★ **`id: LabelId` を持つ。`PinRow { key, value }` をそのまま写してはいけない。**
+/// 写すと `core::set_labels` に渡す `Label.id` を毎 commit `alloc_id()` するしかなく、
+/// **1 文字打つごとに全ラベルが新 ID になって `ExerciseLog.label` が全部宙に浮く** —
+/// 「改名で過去ログが外れる形は採れない」という設計の根拠が、設定画面の 1 打鍵で崩れる。
+/// `core::clean_labels` の再採番を**重複 ID だけ**に限っているのがこれの土台。
+///
+/// ★ `key` は `id` と別に持つ。`<For key>` に重複キーを渡すと wasm で panic =
+/// アプリが死ぬので、DOM のキーは画面が採る単調増加の数にする。
+struct LabelRow {
+    key: u32,
+    id: LabelId,
+    name: String,
+}
+
 #[component]
 fn ExerciseEditor(
     id: ExerciseId,
@@ -1267,6 +1287,163 @@ fn ExerciseEditor(
         if !value.is_empty() {
             db.update(move |d| rename_exercise(d, id, &value));
         }
+    };
+
+    // ── ラベル（adr/ux/label-chips-switch-the-history-and-the-copy.md）───────
+    //
+    // **定義（作成・改名・削除）はここだけに置く。** 選択は記録タブのチップ行で
+    // 1 タップ。`ExerciseEditor` が担当するのは「種目マスタの同一性と可視性」で、
+    // ラベルは**その種目のセッションの分類体系** — 名前 / 部位 / アーカイブと同じ棚。
+    // 定義は種目ごとに生涯 1 回で、**マシンの前で必要になるものではない**
+    // （ピンが `ExerciseEditor` に無いのは「マシンをどう物理的にセットするか」だから）。
+    let labels0: Vec<Label> =
+        db.with_untracked(|d| d.exercise(id).map(|e| e.labels.clone()).unwrap_or_default());
+    let next_label_key = RwSignal::new(labels0.len() as u32);
+    // ★ `id` は `db` から**写す**（`＋` のときだけ `storage::alloc_id()` を振る）
+    let label_rows = RwSignal::new(
+        labels0
+            .into_iter()
+            .enumerate()
+            .map(|(i, l)| LabelRow {
+                key: i as u32,
+                id: l.id,
+                name: l.name,
+            })
+            .collect::<Vec<_>>(),
+    );
+    let duplicate_label = RwSignal::new(false);
+    // 削除の確認待ちの行（`GroupEditor` の `confirming` と同じ形。インライン
+    // `warn-box` なので「シートの中のシート」にはならない）
+    let confirm_label: RwSignal<Option<u32>> = RwSignal::new(None);
+
+    // 正規化（空欄落とし・char 切り詰め・上限・重複 ID の再採番）は
+    // `core::set_labels` に委ねる。ここで trim すると規則が 2 本に割れる。
+    //
+    // ★ **空欄の行は `Db` の保存値を再送する。これが「✕ が唯一の削除経路」を守る。**
+    //   `core::clean_labels` は空名の要素を落とすので、素直に送ると**入力欄を空にして
+    //   blur するだけで定義が消える** — ✕ に置いた確認の `warn-box`（文言に「同じ名前で
+    //   作り直しても過去の記録には戻りません」という不可逆性の警告まで入っている）が
+    //   丸ごと迂回される。しかも `commit_labels` は `label_rows` の**全行**を送るので、
+    //   空にした行を放置したまま**別の行**を直すだけでも消える（`change_label` 側の
+    //   短絡だけでは足りない）。保存値を再送すれば、どの順序でも消えない。
+    //   `add_label` が作る**新規の空行は `Db` に無い**ので今までどおり落ちる
+    //   （規則が「空欄は commit しない」の 1 本に揃う）。
+    let commit_labels = move || {
+        let values: Vec<Label> = db.with_untracked(|d| {
+            let saved = d.exercise(id).map(|e| e.labels.clone()).unwrap_or_default();
+            label_rows.with_untracked(|rs| {
+                rs.iter()
+                    .map(|r| Label {
+                        id: r.id,
+                        name: if r.name.trim().is_empty() {
+                            saved
+                                .iter()
+                                .find(|l| l.id == r.id)
+                                .map(|l| l.name.clone())
+                                .unwrap_or_default()
+                        } else {
+                            r.name.clone()
+                        },
+                    })
+                    .collect()
+            })
+        });
+        db.update(move |d| storage::with_ids(|ids| crate::core::set_labels(d, id, values, ids)));
+    };
+
+    // ★ **書き込みは `on:input` ではなく `on:change`（blur / Enter）。**
+    //   `PinRow` は毎打鍵 commit だが、それを写すと既存 `P` があるとき `Power` と
+    //   打つ途中の `P` が重複になる。毎打鍵を止めないと `Only` の名前解決が曖昧に
+    //   なって TSV 往復のたびに `P` が増える。
+    //
+    // ★ **重複チェックは新規追加と改名の両方に通す**（片方だけだと裏口が残る）。
+    //   重複していたら書かずに**直前の保存値へ戻す**。
+    // 戻り値は「入力欄に書き戻すべき値」（重複で巻き戻したとき / trim で変わったとき）。
+    // 呼び側が DOM も直す — `value=` は初期値を 1 度読むだけなので、signal を書いても
+    // 入力欄は古いまま残る（day.rs の `ex_note_ref` とまったく同じ事情）。
+    let change_label = move |key: u32, value: String| -> Option<String> {
+        let trimmed = value.trim().to_string();
+        // 同名が他の行にあるか。空欄は `set_labels` が落とすので通す
+        let clash = !trimmed.is_empty()
+            && label_rows
+                .with_untracked(|rs| rs.iter().any(|r| r.key != key && r.name.trim() == trimmed));
+        if clash {
+            duplicate_label.set(true);
+            // 直前の保存値へ戻す（`db` が真実源）
+            let saved = db.with_untracked(|d| {
+                d.exercise(id)
+                    .and_then(|e| {
+                        label_rows.with_untracked(|rs| {
+                            rs.iter()
+                                .find(|r| r.key == key)
+                                .and_then(|r| e.labels.iter().find(|l| l.id == r.id))
+                                .map(|l| l.name.clone())
+                        })
+                    })
+                    .unwrap_or_default()
+            });
+            label_rows.update(|rs| {
+                if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                    r.name = saved.clone();
+                }
+            });
+            return Some(saved);
+        }
+        duplicate_label.set(false);
+        // ★ **trim した値を保存する。** 生値のままだと `"P "` が `Db` に入り、TSV の
+        //   往復でラベルが 2 本に割れる — `core::resolve_label` は `name.trim()` して
+        //   から厳密比較するので `"P "` と一致せず新しい `LabelId` を採番し、
+        //   `merge_labels` の同名判定も厳密比較なので新しい定義として足される。
+        //   結果、見分けのつかないチップが 2 個並び**過去ログは旧 ID・取り込んだログは
+        //   新 ID** に付いて履歴が分裂する。UI の重複ガードは trim 比較なので利用者は
+        //   自分ではこの状態を作れず、この経路だけが穴だった。
+        //   同じシートの `commit_name`（種目名）が既に trim しているので、それと対称。
+        //   ★ `core::clean_labels` の「取り込んだデータを trim しない」規則は触らない
+        //     （あちらが守るのは他人のファイルの中身）。
+        label_rows.update(|rs| {
+            if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                r.name = trimmed.clone();
+            }
+        });
+        // ★ **空にしただけでは `Db` を触らない。** 削除の入口は ✕（確認つき）だけに
+        //   する。画面上は空欄のまま残るので打ち直せば同じ `LabelId` で戻る
+        //   （`add_label` の「空欄は commit しない」と同じ規則）。
+        //   ここを通してしまっても `commit_labels` が保存値を再送するので消えないが、
+        //   **保存の予約（`save_debounced`）を無駄に武装させない**ためにも短絡する。
+        if trimmed.is_empty() {
+            return (trimmed != value).then_some(trimmed);
+        }
+        commit_labels();
+        // 打った値と保存した値が違うなら入力欄も揃える（見えている値と `Db` を
+        // 食い違わせない）
+        (trimmed != value).then_some(trimmed)
+    };
+
+    let add_label = move |_| {
+        let key = next_label_key.get_untracked();
+        next_label_key.set(key + 1);
+        duplicate_label.set(false);
+        label_rows.update(|rs| {
+            rs.push(LabelRow {
+                key,
+                // ★ **新規だけ採番する。** 既存行は `db` から写した ID のまま
+                id: storage::alloc_id(),
+                name: String::new(),
+            })
+        });
+        // 空欄は `set_labels` が落とすので commit は要らない（`add_pin` と同じ）
+    };
+
+    // ★ **確認を挟む。** `remove_pin` に確認が無いのは消えるのが数字 1 個だから。
+    //   ラベルの削除は**数か月ぶんの履歴のまとまりが不可視に外れる**。
+    //   削除は物理削除で、過去ログの `label` は宙に浮いたまま残す
+    //   （`normalize_routines` の「存在しない参照は消さない」。記録そのものは
+    //   完全に無傷で可視なので `archived` を持たせる必要も無い）。
+    let remove_label = move |key: u32| {
+        label_rows.update(|rs| rs.retain(|r| r.key != key));
+        confirm_label.set(None);
+        duplicate_label.set(false);
+        commit_labels();
     };
 
     view! {
@@ -1313,6 +1490,146 @@ fn ExerciseEditor(
                     .collect::<Vec<_>>()}
             </div>
         </div>
+
+        <div class="field">
+            <span>{t().settings.field_labels}</span>
+            <div class="lbl-edit" data-testid="label-edit">
+                <For
+                    each=move || {
+                        label_rows
+                            .with(|rs| rs.iter().map(|r| (r.key, r.name.clone())).collect::<Vec<_>>())
+                    }
+                    key=|(key, _)| *key
+                    children=move |(key, value)| {
+                        view! {
+                            <span class="lbl-chip">
+                                <input
+                                    class="text-input lbl-name"
+                                    // ★ `inputmode` を付けない = IME 付きのフルキーボードが
+                                    //   出る。ボトムタブが被るので `kb_focus` / `kb_blur` は必須
+                                    type="text"
+                                    maxlength=MAX_LABEL_LEN.to_string()
+                                    value=value
+                                    aria-label=t().settings.label_value
+                                    data-testid="label-name"
+                                    on:focusin=move |_| kb_focus(kb)
+                                    on:focusout=move |_| kb_blur(kb)
+                                    // ★ `on:input` ではなく `on:change`（blur / Enter）。
+                                    //   毎打鍵 commit すると既存 `P` があるとき `Power` と
+                                    //   打つ途中の `P` が重複になる
+                                    on:change=move |ev| {
+                                        if let Some(revert)
+                                            = change_label(key, event_target_value(&ev))
+                                        {
+                                            // ★ signal を書いても `value=` は初期値の
+                                            //   ままなので DOM も直す。抜くと「画面は
+                                            //   `H` 重複のまま・Db は `P`」になり、
+                                            //   次の 1 打鍵で古い値が保存される
+                                            if let Some(el) = ev
+                                                .target()
+                                                .and_then(|t| {
+                                                    t.dyn_into::<web_sys::HtmlInputElement>().ok()
+                                                })
+                                            {
+                                                el.set_value(&revert);
+                                            }
+                                        }
+                                    }
+                                />
+                                <button
+                                    // ★ class を必ず付ける（`smoke.spec.mjs` が
+                                    //   `[data-testid=settings-sheet] button:not([class])` を
+                                    //   0 件で固定している）。
+                                    // ★ `.pin-remove` に倣った追加のクラスは付けない —
+                                    //   `.icon-btn` が寸法とトークンを与えており、規則を
+                                    //   持たないフックを CSS に残さない（参照点は
+                                    //   `data-testid="label-remove"` が担う）
+                                    class="icon-btn"
+                                    aria-label=move || {
+                                        cur_lang()
+                                            .delete_label(
+                                                &label_rows
+                                                    .with(|rs| {
+                                                        rs.iter()
+                                                            .find(|r| r.key == key)
+                                                            .map(|r| r.name.clone())
+                                                            .unwrap_or_default()
+                                                    }),
+                                            )
+                                    }
+                                    data-testid="label-remove"
+                                    on:click=move |_| confirm_label.set(Some(key))
+                                >
+                                    {icon(icon::X)}
+                                </button>
+                            </span>
+                        }
+                    }
+                />
+                // ★ 上限に達したら出さない（押しても何も起きないボタンを作らない）
+                {move || {
+                    (label_rows.with(Vec::len) < MAX_LABELS)
+                        .then(|| {
+                            view! {
+                                <button
+                                    class="link-btn lbl-add"
+                                    aria-label=t().settings.label_add
+                                    data-testid="label-add"
+                                    on:click=add_label
+                                >
+                                    "＋"
+                                </button>
+                            }
+                        })
+                }}
+            </div>
+        </div>
+
+        {move || {
+            duplicate_label
+                .get()
+                .then(|| {
+                    view! {
+                        <div class="warn-box">
+                            <p data-testid="duplicate-label">{t().settings.duplicate_label}</p>
+                        </div>
+                    }
+                })
+        }}
+
+        // ★ **インライン `warn-box`**（`GroupEditor` / `routine.rs` と同じ形）。
+        //   `Sheet` を重ねると「シートの中のシート」になる。
+        {move || {
+            confirm_label
+                .get()
+                .map(|key| {
+                    view! {
+                        <div class="warn-box" data-testid="label-delete-confirm">
+                            <p>{t().settings.delete_label_confirm}</p>
+                            <div class="sheet-actions">
+                                <button
+                                    class="primary"
+                                    data-testid="label-delete-yes"
+                                    on:click=move |_| remove_label(key)
+                                >
+                                    {t().settings.delete_yes}
+                                </button>
+                                <button
+                                    class="link-btn"
+                                    data-testid="label-delete-no"
+                                    on:click=move |_| confirm_label.set(None)
+                                >
+                                    {t().settings.delete_no}
+                                </button>
+                            </div>
+                        </div>
+                    }
+                })
+        }}
+
+        <p class="settings-note muted" data-testid="labels-note">
+            {t().settings.labels_note}
+        </p>
 
         <div class="sheet-actions">
             <button

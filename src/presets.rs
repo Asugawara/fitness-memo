@@ -238,6 +238,8 @@ pub fn seed(db: &mut Db, lang: Lang) {
                 archived: false,
                 pins: Vec::new(),
                 interval_sec: None,
+                // ★ プリセットにラベルを配らない（`Exercise::labels` の doc）
+                labels: Vec::new(),
             });
         }
     }

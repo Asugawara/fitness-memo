@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-19
 - **カテゴリ**: ux
-- **関連**: [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md)（決定 7 を改訂）, [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（決定 5 のコピー規則を改訂）, [「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md), [1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](copy-whole-day-menu.md), [保存したメニューから始める（種目タブを設定タブに改める）](start-from-a-saved-routine.md), [セット追加は直前行の重量をコピーして回数欄へフォーカスする](set-entry-prefill-and-focus.md), [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](machine-pins-on-the-exercise.md)（住み分けの相手）
+- **関連**: [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md)（決定 7 を改訂）, [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（決定 5 のコピー規則を改訂）, [「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md), [1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](copy-whole-day-menu.md), [保存したメニューから始める（種目タブを設定タブに改める）](start-from-a-saved-routine.md), [セット追加は直前行の重量をコピーして回数欄へフォーカスする](set-entry-prefill-and-focus.md), [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](machine-pins-on-the-exercise.md)（住み分けの相手）, [チップでラベルを選ぶと履歴とコピーが切り替わる](label-chips-switch-the-history-and-the-copy.md)（決定 4 の 4 つ目の適用先）
 
 ## 背景
 
@@ -64,6 +64,10 @@
 `copy_last` を条件付きにするのは、ボタンの表示条件（`show_copy`）が「今日のセットが空か」しか見ないため、**「メモだけ書いたカード」でも押せる**からである。上書きすると undo の無い破壊が最頻の場所に生まれ、[「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md) が消したはずの 3 つの問題（置換か追記か / 誤タップ事故 / undo の必要性）が種目メモという別の入口から戻る。
 
 回復手段も同 ADR と同じ形で残る（セット行を全部消せばボタンが戻る）。
+
+★ **4 つ目の適用先が増えた。** 種目ごとのラベル（[チップでラベルを選ぶと履歴とコピーが切り替わる](label-chips-switch-the-history-and-the-copy.md)）も同じ規則に乗る — `copy_last` は**選択が「指定なし」のときだけ**コピー元ログのラベルを引き継ぐ。`[P]` を選んで押す通常経路では元も先も P なので何も起きない。`ex_note` と違って DOM の直接更新が要らないのは、チップの `class:on` が signal を追跡しているため（キーを持たない入力欄だけが取り残される問題は起きない）。
+
+★ **`apply_routine` はラベルを運ばない側。** 上の 3 経路のうち `copy_day`（候補リストで日付を名指しする）は運ぶが、`apply_routine` は種目ごとに**別々の不可視の日**から引くので、たまたま最後が Power だった種目に今日のラベルを押し付けると来週その狙いの履歴が汚れる。`Seed::without_label()` という名前でこの逸脱を可視化してある。**この非対称はメモには無い**（メモはどの日から来ても種目に閉じた設定値なので運んで害が無い）。
 
 ### 5. メモ欄は自動で開かない
 

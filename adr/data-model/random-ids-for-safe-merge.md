@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-08
 - **カテゴリ**: data-model
-- **関連**: [ID を `next_id` の連番にし uuid を使わない](sequential-ids-no-uuid.md)（置換）, [JSON エクスポート/インポートを v1 に入れない](../storage/defer-export-import.md), [保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す](../storage/storage-key-per-schema-generation.md), [書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない](../storage/share-sheet-over-download.md)
+- **関連**: [ID を `next_id` の連番にし uuid を使わない](sequential-ids-no-uuid.md)（置換）, [JSON エクスポート/インポートを v1 に入れない](../storage/defer-export-import.md), [保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す](../storage/storage-key-per-schema-generation.md), [書き出しは共有シートを主経路にし、iOS では `<a download>` を使わない](../storage/share-sheet-over-download.md), [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](labels-on-the-exercise-and-a-mark-on-the-log.md)（合流の梯子を 1 階層下でなぞった相手）
 
 ## 背景
 
@@ -80,6 +80,12 @@ u64 は 2^53 を超えるので、`JSON.parse` → `JSON.stringify` の往復で
 - **v2 → v3 の移行時、名前がプリセットと一致する種目 / 部位を固定 ID へ寄せる。** ただし **一致が「ちょうど 1 件」のときだけ** — `rename_exercise` / `rename_group` に重複チェックが無いので同名 2 種目が存在しえて、両方を同じ固定 ID に寄せると**別々の種目の履歴が無警告で 1 本に合流する**（この移行が潰そうとしているバグと同型）
 - **プリセットの固定 ID は二度と変えられない。** 変えると既存ユーザーの端末で同じ種目が 2 つになる
 - **`seed()` の判定を名前から固定 ID に変えた。** 名前で見ていた頃の「改名済みプリセットが別種目として復活する」は軽微な挙動だったが、固定 ID の下では**同一 ID の種目が 2 つできる**不変条件違反に化ける
+
+★ **種目ごとのラベルが同じ梯子を 1 階層下でなぞっている**（[ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](labels-on-the-exercise-and-a-mark-on-the-log.md)）。`merge_labels` / `resolve_label` の判定は「ID 一致 → **同名がちょうど 1 件** → 新規」で、「ちょうど 1 件」なのは上の `pin_presets` とまったく同じ理由 — 同名が複数あるときに片方へ寄せると**別の狙いの履歴が無警告で合流する**。
+
+★ **ただしラベルには予約領域（固定 ID）を作らなかった。** プリセットにラベルを配らないので寄せる先が無く、`RESERVED_MAX` を触る理由が無い。代わりに 2 台で独立に定義した `P` は同名寄せの枝で合流する。
+
+★ **別名写像のキーは `(ExerciseId, LabelId)` の組。** `LabelId` 単独にすると、同じ `LabelId` が取り込み側の 2 種目に居る場合（手編集 JSON、または `clean_labels` が種目内の重複しか再採番しないので種目をまたぐ重複は生き残る）に後の `insert` が前を上書きし、**種目 A のログが種目 B のラベルへ張り替わって宙に浮く**。本 ADR が連番 ID で潰した「別種目の履歴が入れ替わる」壊れ方と同型なので、キーを組にして構造的に消した。
 
 ## 検討した代替案
 

@@ -548,6 +548,48 @@ h3 {
   color: var(--muted);
 }
 
+/* ── 種目ごとのラベル（adr/ux/label-chips-switch-the-history-and-the-copy.md）──
+   チップ行は `.card-head` の直後・`.last-rows` の直前。定義が 0 本の種目では
+   Rust 側がブロックごと描かないので、既存カードの幾何は 1px も動かない。
+
+   ★ **接頭辞は `.lbl-*` で、`.opt` のクラス名は共有しない。** `.opt` は設定シートの
+   部位選択専用で、3 つ目の画面で共有すると将来の設定側の変更がカードを黙って壊す
+   （`.rtn-*` が「あの画面固有」として存在する規約に倣う）。
+
+   ★ **折り返す**（横スクロールにしない）。隠れているチップがあることが静止時に
+   読めないので、`overflow-x` は採らない。行数はラベル名の長さで振れる
+   （`MAX_LABELS` の doc）。 */
+.lbl-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* `.opt` との差分は 2 つだけ。
+   - `min-width: 44px`: 1 文字ラベル `H` は `padding: 0 12px` だけでは 44px を割る
+     （タップ標的の下限。判定は E2E が丸めて見る）
+   - `font-size: 13px`: `.opt` は指定を持たず 15px を継ぐ。カードの中の副次的な
+     操作なので 1 段落とす */
+.lbl {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 13px;
+}
+
+/* 選択中。★ **`.opt.on` のトークンを 1 文字も変えない** —
+   「選択中」がアプリ全体で同じ絵に見えることが読みやすさそのもの */
+.lbl.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
 /* ★ **3 列を全エントリで揃える。** 日付は "8/3 (月)" と "8/17 (月)" で幅が違うので、
    エントリごとに flex で組むとセット列の開始位置が行ごとにずれ、
    **縦に数字を読む**という履歴の目的が崩れる（日付表記にしたのはそのためだった）。
@@ -587,6 +629,39 @@ h3 {
 .last-row .metric {
   justify-self: end;
   font-variant-numeric: tabular-nums;
+}
+
+/* 履歴のラベル列。**定義がある種目だけ 4 列にする**（属性セレクタなので詳細度が
+   勝つ。`data-labels` が無いあいだは gutter が 2 本のままで、定義 0 の種目は 1px も
+   動かない）。ラベル名を `.when` と同じ span に入れると日付列の `max-content` が
+   ラベル名で決まってセット列の開始位置がずれ、past-records ADR 決定 6（subgrid で
+   桁を縦に揃える）が無効になる。独立した 4 列目にすればラベル列の幅は全エントリの
+   ラベル名で 1 回決まり、日付列は日付だけで決まるので**桁は縦に揃ったまま**。
+
+   ★ `data-labels` の有無と `<span class="label">` の描画は Rust 側で同じ
+   `has_labels` Memo 1 本から出している。subgrid 軸に implicit track は無いので、
+   列数とセル数がずれると行が崩れる。 */
+.last-rows[data-labels] {
+  grid-template-columns: max-content max-content 1fr max-content;
+}
+
+/* ★ **列幅を cap する。** ラベル列は**表示中の全行の最長ラベル**で決まるので、
+   「指定なし」で 12 文字のラベルが 1 本混ざると `.sets` に残る幅が 234px → 80px に
+   なり、`100×10` が 3 行に折り返して「数字を縦に読む」（決定 6）が薄れる。
+
+   ★ **4em（実測 48px）まで詰める。6em では足りない。** 6em だと `.sets` に残るのが
+     152px で、**`100×3` を 4 セット打った日が 2 行になる**（393×852 の実測。
+     HPS の Power 日として最も普通の記録なので、決定 6 を守れていないことになる）。
+     4em なら `.sets` が 176px 残り、`100×3` ×4 も `100×10` ×3 も 1 行に収まる。
+     対価は省略が早く出ることだけで（`Power` は約 33px で無傷、`Hypertrophy` は
+     `Hypert…`）、全名はチップ行に常に出ているので文脈は失われない。
+     `e2e/label.spec.mjs` の 9 番が `.sets` の**高さ**で固定している
+     （`getClientRects().length` は grid item では常に 1 なので折り返しを見られない）。 */
+.last-row .label {
+  max-width: 4em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .copy {
@@ -851,6 +926,42 @@ h3 {
    （`.card-foot .note-toggle` と同じ規則）。詳細度の事情も同じで、
    .link-btn（0,1,0）と同詳細度では上書きできないので子孫セレクタ（0,2,0）。 */
 .pin-box .pin-add {
+  min-width: 44px;
+  color: var(--muted);
+}
+
+/* ── 設定シートのラベル編集（adr/ux/label-chips-switch-the-history-and-the-copy.md）──
+   `.pin-*` の隣に置く。値の性質（種目に貼り付く定義）が同じなので寸法とトークンを
+   揃えるが、**入力がテキスト（IME 付き）なので入力欄は幅広**にする。
+
+   ★ 接頭辞は記録タブのチップ（`.lbl` / `.lbl-row`）と共有する。同じ「ラベル」という
+     概念の 2 つの面（選ぶ / 定義する）なので、`.pin-*` が記録タブに閉じているのとは
+     事情が違う。衝突しないのは `.lbl-edit` 以下が設定シートにしか出ないため。 */
+.lbl-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  /* 列間 10px は `.pin-box` と同じ理由（「✕ がどのチップのものか」を間隔で読ませる） */
+  gap: 6px 10px;
+}
+
+.lbl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* ★ `.pin-num` の 2.9em では 12 文字のラベルが入らない。`.text-input` を土台に
+   幅だけ与える（`.field` の中で 100% に伸びると ✕ が押し出される）。
+   ★ **子孫セレクタ（0,2,0）が要る。** `.text-input`（0,1,0）はこの節より後ろに
+     あるので、同詳細度では `width: 100%` に負ける（`.pin-add` と同じ事情）。 */
+.lbl-edit .lbl-name {
+  width: 7.5em;
+}
+
+/* 「＋」。`.pin-box .pin-add` と同じ規則（めったに使わない追加に彩度を与えない）。
+   詳細度の事情も同じで、`.link-btn`（0,1,0）と同詳細度では上書きできない。 */
+.lbl-edit .lbl-add {
   min-width: 44px;
   color: var(--muted);
 }

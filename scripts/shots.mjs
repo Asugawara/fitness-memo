@@ -917,13 +917,25 @@ try {
     }
   }
 
-  // ── フェーズ 2: 3 コンテキストは完全に独立なので並列で撮る ──────────────────
-  const shot = (
-    await Promise.all([
-      wantReadme ? shootReadme(pageA) : Promise.resolve([]),
-      ...manualCtx.map((cx) => shootManual(cx.page, cx)),
-    ])
-  ).flat();
+  // ── フェーズ 2 ────────────────────────────────────────────────────────────
+  //
+  // マニュアルの ja / en は完全に独立（別 storage・サーバはステートレス）なので並列に撮る。
+  // 壁時計は最長の枝で決まる。
+  //
+  // ★ **README だけは並列に混ぜない。** 3 コンテキストを同時に走らせると
+  //   `assets/1-record.png` が 2 種類のバイト列のあいだで揺れる（実測: マシンに負荷が
+  //   かかっているときほど出やすく、単独で撮ると 3 回とも一致、並列だと 3 回中 2 回ずれた）。
+  //   原因は README の 3 枚だけがフレームのタイミングに依存していること —
+  //   `scrollIntoView` は端数のスクロール位置を作り、グラフの落ち着きは
+  //   `waitForTimeout(300)` の一律待ちで見ている。他の 2 コンテキストが CPU を奪うと
+  //   どちらも足りなくなる。マニュアルの図は `scrollUnion` が整数へ丸め、待ちは全部
+  //   条件待ちなので同じ揺れ方をしない（実測 7 run で不一致ゼロ）。
+  //
+  // ★ **pre-commit はここを 1 秒も払わない。** `--only=manual` では `wantReadme` が
+  //   偽なので、この直列化が効くのは全枚数撮影と `--check` のときだけ。
+  //   決定性は `release.sh` の `--check` が hard gate なので、速さより優先する。
+  const readmeShot = wantReadme ? await shootReadme(pageA) : [];
+  const shot = [readmeShot, ...(await Promise.all(manualCtx.map((cx) => shootManual(cx.page, cx))))].flat();
 
   // ── --check: バイト比較 ────────────────────────────────────────────────────
   if (check) {

@@ -9,6 +9,7 @@ pub mod core;
 // ★ cfg を付けない。`core` と `presets` が文言を引くので wasm32 に閉じられない
 // （閉じないおかげで `cargo test` が日英の不変条件を検証できる）
 pub mod i18n;
+pub mod manual;
 pub mod model;
 pub mod presets;
 pub mod reorder;

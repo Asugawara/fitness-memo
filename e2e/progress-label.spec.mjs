@@ -502,3 +502,89 @@ test('10. 体重の線だけ残ったときも、絞りが理由なら文言が�
   await anyChip(page).click();
   await expect(note).toHaveCount(0);
 });
+
+// ── 11. 選択中チップの文字が読める ──────────────────────────────────────────
+//
+// ★ **退行の再現があるので入れる。** `.lbl.on`（ベタ塗り + `--accent-text`）と
+//   `.selectors .lbl`（推移タブだけ地色を `--surface` に上げる）は詳細度が同じ (0,2,0) で、
+//   ソース順で後ろが勝つ。門番（`:not(.on)`）を外すと選択中チップだけ地色が戻り、
+//   文字色 `--accent-text`（light では #ffffff）だけが残って**白地に白文字**になる。
+//   点灯しているかどうかは `aria-pressed` で読めるので E2E は緑のままで、
+//   図（`public/manual/*/progress-labels.webp`）に丸だけのチップが焼き込まれていた。
+// ★ 記録タブのチップ（`.selectors` の外）も同時に見る。門番を「`.lbl.on` を後ろへ
+//   動かす」形で入れると今度はそちらのベタ塗りが崩れうるので、両面を 1 本で固定する。
+// ★ 作法は e2e/backup.spec.mjs の「シート内のボタンの文字が背景から読める」と同じ
+//   （トークン値をベタ書きせずコントラスト比で見るので、ライト / ダーク両方で成立する）。
+
+/** `rgb(r, g, b)` / `rgba(...)` を [r,g,b] にする。 */
+function parseRgb(value) {
+  const nums = value.match(/[\d.]+/g);
+  return nums ? nums.slice(0, 3).map(Number) : null;
+}
+
+/** WCAG の相対輝度。 */
+function luminance([r, g, b]) {
+  const lin = [r, g, b].map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+}
+
+/**
+ * 要素の文字色と**実効**背景色のコントラスト比。
+ *
+ * ★ 背景が透明なら祖先を辿る。辿らないと `rgba(0, 0, 0, 0)` を拾って**通ってしまう**。
+ */
+async function contrastRatio(locator) {
+  const pair = await locator.evaluate((el) => {
+    const color = getComputedStyle(el).color;
+    let node = el;
+    while (node) {
+      const bg = getComputedStyle(node).backgroundColor;
+      if (bg && bg !== 'transparent' && !/rgba\(0, 0, 0, 0\)/.test(bg)) {
+        return { color, background: bg };
+      }
+      node = node.parentElement;
+    }
+    return { color, background: 'rgb(255, 255, 255)' };
+  });
+  const fg = luminance(parseRgb(pair.color));
+  const bg = luminance(parseRgb(pair.background));
+  const [hi, lo] = fg > bg ? [fg, bg] : [bg, fg];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+for (const scheme of ['light', 'dark']) {
+  test(`11. ${scheme} で選択中のラベルチップの文字が背景から読める`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await setupProgress(page);
+
+    // 既定で点いているのは「すべて」
+    await expect(anyChip(page)).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      await contrastRatio(anyChip(page)),
+      `${scheme} で推移タブの「すべて」が背景に埋もれている`,
+    ).toBeGreaterThanOrEqual(4.5);
+
+    // 名前付きのラベルを選んだときも同じこと
+    await chip(page, 'H').click();
+    await expect(chip(page, 'H')).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      await contrastRatio(chip(page, 'H')),
+      `${scheme} で推移タブの「H」が背景に埋もれている`,
+    ).toBeGreaterThanOrEqual(4.5);
+
+    // ★ 記録タブのチップは `.selectors` の外。ここが道連れになっていないこと
+    //   （門番を「`.lbl.on` を後ろへ動かす」形で入れると、今度はこちらが崩れうる）
+    await page.getByTestId('tab-record').click();
+    await expect(page.getByTestId('screen-record')).toBeVisible();
+    const card = await addExercise(page, 'ベンチプレス');
+    const any = card.locator('[data-testid=label-chip][data-label-any]');
+    await expect(any).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      await contrastRatio(any),
+      `${scheme} で記録タブの「指定なし」が背景に埋もれている`,
+    ).toBeGreaterThanOrEqual(4.5);
+  });
+}

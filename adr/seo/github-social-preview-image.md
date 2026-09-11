@@ -5,6 +5,20 @@
 - **カテゴリ**: seo
 - **関連**: [クローラ向けメタデータを本番 URL のハードコードで持ち、オフラインシェルから外す](crawler-metadata-and-hardcoded-origin.md), [静的メタデータを英語に統一し、`<html lang>` は実行時に切り替える](static-metadata-in-english.md), [README を英語で正とし、日本語版を `README.ja.md` に置く](../process/readme-in-english-with-japanese-mirror.md)
 
+> **追記（マニュアル節の時点）**
+> - 下の理由と「検討した代替案」が制約として引用している **`stamp-sw.sh` の除外
+>   （「現在 `og.png` の 1 語だけ」「開けた唯一の穴」）は、もう 1 語ではない。**
+>   [マニュアルの図は `public/` に配信するスクリーンショットにし、`<img>` で参照する](../architecture/manual-figures-as-served-screenshots.md)
+>   で `./manual/*` と dotfile が加わり、**`og.png` / `./manual/*` / dotfile の 3 語**になった
+> - **「アプリが一度も参照しないファイルだけ除外に載せてよい」という引用元の制約も
+>   改訂された。** 新基準は「参照しないもの、または参照するが欠けても本文だけで
+>   完結する補助資産」で、後者には検査可能な 5 条件が付く
+>   （[クローラ向けメタデータを本番 URL のハードコードで持ち、オフラインシェルから外す](crawler-metadata-and-hardcoded-origin.md) の追記）
+> - **それでもこの ADR の決定は変わらない。** Social preview 画像を `assets/` に
+>   置いた理由は「除外を増やさずに済ませられる」だけではなく、そもそも
+>   **GitHub が再ホストするので HTTP で取りに来る者が一人もいない**ことにある。
+>   除外に載せてよいかどうか以前に、配信物にする理由が無い
+
 ## 背景
 
 このリポジトリの URL を Slack や X に貼ると、GitHub の自動生成カード

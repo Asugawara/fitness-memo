@@ -1061,10 +1061,21 @@ const JA_MANUAL: Manual = Manual {
         ChapterText {
             title: "種目ごとのラベル",
             body: &[
-                "ラベルは種目ごとに定義します。場所は設定タブの「種目」→その種目の編集シートの「ラベル」です。1種目につき6個まで、名前は12文字まで登録できます。最初から入っている種目にはラベルが1つも無く、定義するまで記録タブの見た目は1pxも変わりません。用途は同じ種目で狙い（高重量・高回数など）を変えたいときです。",
+                "ラベルは種目ごとに定義します。場所は設定タブの「種目」→その種目の編集シートの「ラベル」です。1種目につき6個まで、名前は12文字まで登録できます。最初から入っている種目にはラベルが1つも無く、定義するまで記録タブの見た目は1pxも変わりません。用途は同じ種目で狙い（高重量・高回数など）を変えたいときです。ラベルの行の左端には色見本があり、そこで色を選べます。新しく作ったラベルには互いに重ならない色が自動で付くので、何もしなくてかまいません。色の意味は推移タブに出ます。",
                 "定義すると、記録タブのその種目のカードに、種目名の行のすぐ下・「前回までの記録」のすぐ上にチップの行が出ます。先頭のチップは「指定なし」で、これが既定です。「ラベルが無い記録だけ」ではなく「絞らない」という意味です。ラベルを選ぶと「前回までの記録」がそのラベルの回だけになり、「前回をコピー」で入る内容も選んでいるラベルの前回に変わります。",
                 "選んだラベルでの記録がまだ無ければ「記録なし」と出て、「前回をコピー」のボタンも出ません。ラベルなしの前回に勝手に落ちることはありません。「指定なし」に戻せば全部の記録が戻ります。ラベルは「その日・その種目に1つ」で、セット1本ごとには付けられません。ラベルを選んだだけでセットを1本も入れていない状態は保存されず、タブを移る・日付を変える・アプリを開き直すと「指定なし」に戻ります。",
-                "名前を空にしても定義は消えません。消すのは行の✕だけで、押すと確認が出ます。削除しても過去の記録は消えませんが、同じ名前で作り直しても過去の記録はそのラベルには戻りません。削除したラベルを選んでいた場合は「指定なし」として引き直されます。書き出すTSVには「ラベル」の列があります。",
+                "名前を空にしても定義は消えません。消すのは行の✕だけで、押すと確認が出ます。削除しても過去の記録は消えませんが、同じ名前で作り直しても過去の記録はそのラベルには戻りません。削除したラベルを選んでいた場合は「指定なし」として引き直されます。書き出すTSVには「ラベル」の列があります。色はTSVには含まれません（部位の色と同じ扱いです）。",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "ラベルで推移を絞る",
+            body: &[
+                "推移タブで種目を選ぶと、その種目にラベルの定義があればセレクタの下にチップの行が出ます。部位だけを選んでいるときは出ません。ラベルは種目ごとに独立した体系なので、複数種目の合算には載せられないためです。ラベルを1つも定義していない種目でも出ません。先頭のチップは「すべて」で、押すとグラフの点も下の記録の表もそのラベルの日だけになり、統計（前回比・ベスト・平均）も一緒に絞られます。記録タブのチップの先頭は「指定なし」で語が違います。あちらは今日のログにどのラベルを付けるかの宛先を兼ねますが、こちらは表示の絞り込みしかしません。",
+                "「すべて」のとき、ラベルの付いた日の点だけがそのラベルの色で出ます。折れ線・軸・体重の破線は色を変えません。ラベルの付いていない日の点は既定の色のままです。チップ行そのものが凡例になっていて、各チップの丸がその色を示し、先頭の「すべて」の丸はラベルなしの点の色を指します。グラフの上に別の凡例は置いていません。色が読めなくてもグラフの意味は変わりません。チップに名前があり、線の形も変わらないためです。",
+                "この絞り込みは端末に残りません。部位と種目の選択は次に開いたときも残りますが、ラベルの絞りは残らず、指標や期間と同じ「今の見方」として扱われます。種目を切り替えると絞りは外れます。ラベルは種目ごとに別のIDなので持ち越せないためです。部位だけを変えて種目が据え置かれるときは外れません。設定でそのラベルを消すと「すべて」に戻ります。絞った結果その期間に記録が無いときは「この期間、このラベルの記録はありません」と出ます。「すべて」に戻すか期間を広げれば見えます。",
+                "点が多い期間では最新の点にしか色が出ません。点が小さく詰まると色が雑音になるためです。チップで1つに絞れば点の数が減って色が戻ります。ラベルごとの推移はチップで絞って見るのが本線で、色は「すべて」で混ざり方を読むためのものです。期間を「全期間」にすると日ごとの点が週単位にまとまります。その週の点が全部同じラベルのときだけ色が残り、混ざっている週は色が付きません。1つに絞っていれば週の中は必ず同じラベルなので、「全期間」でも色は消えません。",
             ],
             fig_alt: "",
             fig: None,
@@ -1189,10 +1200,21 @@ const EN_MANUAL: Manual = Manual {
         ChapterText {
             title: "Labels on an exercise",
             body: &[
-                "Labels are defined per exercise, from Settings → \"Exercises\" → that exercise's edit sheet → \"Labels.\" Each exercise can have up to 6 labels, with names up to 12 characters. Exercises that come with the app have no labels at all, and the Record tab looks exactly the same until you define one. They exist for switching the goal on the same exercise — heavy weight vs. high reps, for example.",
+                "Labels are defined per exercise, from Settings → \"Exercises\" → that exercise's edit sheet → \"Labels.\" Each exercise can have up to 6 labels, with names up to 12 characters. Exercises that come with the app have no labels at all, and the Record tab looks exactly the same until you define one. They exist for switching the goal on the same exercise — heavy weight vs. high reps, for example. Each label's row has a colour swatch at its left edge, where you can pick its colour. A newly created label is assigned a colour automatically that never collides with the others, so there's nothing you need to do. That colour's meaning shows up on the Progress tab.",
                 "Once defined, a row of chips appears on that exercise's card on the Record tab, just below the exercise name and just above \"Past records.\" The first chip is \"Any,\" and it's the default — it means \"no filter,\" not \"only records with no label.\" Picking a label narrows \"Past records\" to sessions with that label, and \"Copy last time\" then copies from the last session with that label.",
                 "If there are no records yet with the chosen label, it shows \"No records\" and the \"Copy last time\" button doesn't appear either — it never silently falls back to the most recent record with no label. Switching back to \"Any\" brings all records back. A label applies to \"one exercise, one day\" — you can't attach one per set. Picking a label without entering a single set isn't saved; switching tabs, changing the date, or reopening the app resets it back to \"Any.\"",
-                "Clearing the name doesn't delete the label — only the ✕ on its row does, and it asks for confirmation first. Deleting a label doesn't delete past records, but recreating one with the same name doesn't reattach those old records to it either. If a deleted label was selected, it's redrawn as \"Any.\" The exported TSV has a \"Label\" column.",
+                "Clearing the name doesn't delete the label — only the ✕ on its row does, and it asks for confirmation first. Deleting a label doesn't delete past records, but recreating one with the same name doesn't reattach those old records to it either. If a deleted label was selected, it's redrawn as \"Any.\" The exported TSV has a \"Label\" column. The colour is not part of the TSV (the same as a muscle group's colour).",
+            ],
+            fig_alt: "",
+            fig: None,
+        },
+        ChapterText {
+            title: "Filtering progress by label",
+            body: &[
+                "On the Progress tab, choosing an exercise shows a row of chips below the selectors if that exercise has labels defined. It does not appear when only a muscle group is selected, since labels are a system defined per exercise and there is no way to combine them across exercises. It also does not appear for an exercise with no labels defined. The first chip is \"All labels\"; tapping it narrows both the chart's points and the record table below to days with that label, and the stats (last-time comparison, best, average) narrow along with them. The Record tab's first chip reads \"Any\" instead — a different word, since that chip doubles as the destination for which label to attach to today's log, while this one only narrows what is shown.",
+                "With \"All labels\" selected, only the points on days with a label are drawn in that label's colour. The line, the axes, and the body-weight dashed line never change colour, and points on days with no label stay the default colour. The chip row itself acts as the legend — each chip's dot shows its colour, and the \"All labels\" chip's dot shows the colour used for points with no label. No separate legend is placed above the chart. Even if you can't tell the colours apart, the chart's meaning doesn't change, since the chips carry the names and the line shapes stay the same.",
+                "This filter is not remembered on the device. The muscle group and exercise selections persist the next time you open the tab, but the label filter does not — it's treated the same as the metric or the period, as \"how you're looking right now\" rather than \"where you're looking.\" Switching exercises clears the filter, since labels use a separate ID per exercise and can't carry over; changing only the muscle group while the exercise stays the same does not clear it. Deleting that label in Settings resets the filter back to \"All labels.\" If filtering leaves no records in the period, it shows \"No records for this label in this period.\" — switch back to \"All labels\" or widen the period to see them.",
+                "When there are many points, colour only shows on the most recent one, since colour becomes noise once small points are packed together. Narrowing to one chip reduces the point count and brings the colour back — following one label's trend by narrowing with a chip is the main way to use this, while colour under \"All labels\" is for reading how they mix. Setting the period to \"All\" groups the daily points by week; a week's colour survives only when every point in that week shares the same label, and a mixed week gets no colour. When you've narrowed to one label, every point within a week necessarily shares it, so the colour never disappears even under \"All.\"",
             ],
             fig_alt: "",
             fig: None,
@@ -1255,7 +1277,7 @@ const EN_MANUAL: Manual = Manual {
                 "\"Export / Import\" in the Settings tab writes out a TSV file, which opens directly in a spreadsheet app. On iOS, choose \"Save to Files\" from the share sheet.",
                 "Importing only ever adds. When the same day and exercise have sets that disagree, they are compared in order — set count, then volume, then the contents of each set — and the larger one wins. If the file has more, it replaces what you already have, and the confirmation screen says so. If what you already have is larger, nothing happens and the screen says there is nothing new to import — in that case the file's version is discarded.",
                 "Right after an import, \"Undo\" can reverse it. To guard against a stray tap, the first press only arms a confirmation, and a second press actually undoes it. Closing the sheet gives up that chance to undo.",
-                "A TSV file does not include an exercise's ID, color, sort order, or archived state. The time-of-day column is written on export but is not read back on import.",
+                "A TSV file does not include an exercise's ID, colour, sort order, or archived state. The time-of-day column is written on export but is not read back on import.",
             ],
             fig_alt: "",
             fig: None,

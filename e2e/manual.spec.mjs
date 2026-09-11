@@ -250,10 +250,10 @@ test('アコーディオン: 既定で全部閉じ、1 つ開くと前が閉じ�
   await openManual(page);
 
   const toggles = page.getByTestId('man-toggle');
-  await expect(toggles).toHaveCount(11);
+  await expect(toggles).toHaveCount(12);
   await expect(page.getByTestId('man-body')).toHaveCount(0);
   const states = await toggles.evaluateAll((els) => els.map((el) => el.getAttribute('aria-expanded')));
-  expect(states).toEqual(Array(11).fill('false'));
+  expect(states).toEqual(Array(12).fill('false'));
 
   await openChapter(page, 'chart-readout');
   await expect(page.getByTestId('man-body')).toHaveCount(1);

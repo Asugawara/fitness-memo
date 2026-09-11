@@ -22,10 +22,12 @@ pub struct Chapter {
     ///   側へ置いてある。クリップが要素の外接矩形なので内容依存で、実際に `accordions`
     ///   は ja 786×1030 / en 786×994 と高さが違う（部位名の折り返し行数の差）。
     ///
-    /// 図を持たない 5 章（`progress-target` / `labels` / `reorder` / `backup` /
-    /// `whats-new`）が `false` なのは、静止画で伝わらない（`reorder`）か、
+    /// 図を持たない 6 章（`progress-target` / `labels` / `progress-labels` / `reorder` /
+    /// `backup` / `whats-new`）が `false` なのは、静止画で伝わらない（`reorder`）か、
     /// 閉じた `<select>` しか写らない（`progress-target`）か、文章で足りる
-    /// （`labels` / `backup` / `whats-new`）ため。
+    /// （`labels` / `backup` / `whats-new`）ため。**`progress-labels` も文章で足りる**
+    /// 側 — チップは「すべて」「Power」のように文字で名前が出ており、位置も「種目を
+    /// 選ぶとセレクタの下に出る」で特定できる。点の色は見れば分かる。
     ///
     /// ★ 逆に `drop-sets` が図を持つのは、段を足す口が**文字ラベルを持たない
     ///   アイコン 1 個**（`arrow-down-wide-narrow`）で、「回数欄のすぐ右」という位置を
@@ -34,7 +36,7 @@ pub struct Chapter {
     pub has_fig: bool,
 }
 
-/// マニュアルの章立て。11 章、`i18n.rs` の `Manual::chapters` と同じ順・同じ長さ
+/// マニュアルの章立て。12 章、`i18n.rs` の `Manual::chapters` と同じ順・同じ長さ
 /// （`every_language_has_the_same_manual_chapters` が突き合わせる）。
 pub const MANUAL_CHAPTERS: &[Chapter] = &[
     Chapter {
@@ -51,6 +53,10 @@ pub const MANUAL_CHAPTERS: &[Chapter] = &[
     },
     Chapter {
         id: "labels",
+        has_fig: false,
+    },
+    Chapter {
+        id: "progress-labels",
         has_fig: false,
     },
     Chapter {

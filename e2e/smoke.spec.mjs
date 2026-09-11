@@ -2950,7 +2950,7 @@ test('★ 設定タブの入口は節の一覧で、中身は入るまで出な�
   await page.getByTestId('tab-settings').click();
 
   // トップは 8 行だけ（書き出し / メニュー / 種目 / 表示数 / ドロップセット /
-  // ホーム画面 / 使い方 / 言語）。
+  // ホーム画面 / 活用方法 / 言語）。
   // 種目もメニューも 1 件も出ていない
   // （`.row` で数える。手順シートの <dialog> も同じ親に出るので `> *` だと 1 多くなる）
   await expect(page.getByTestId('settings-rows').locator('.row')).toHaveCount(8);

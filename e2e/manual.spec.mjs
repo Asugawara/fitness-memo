@@ -236,7 +236,7 @@ test('導線: 設定 → 使い方 で h1 がマニュアル名になり、戻�
   await openManual(page);
 
   await expect(page.locator('main h1')).toHaveCount(1);
-  await expect(page.locator('main h1')).toHaveText('使い方');
+  await expect(page.locator('main h1')).toHaveText('活用方法');
 
   await page.getByTestId('settings-back').click();
   await expect(page.locator('main h1')).toHaveCount(1);
@@ -385,7 +385,7 @@ test('タブ往復で開いた章が保たれ、可視域に入っている', as
   await page.getByTestId('tab-record').click();
   await page.getByTestId('tab-settings').click();
 
-  await expect(page.locator('main h1')).toHaveText('使い方');
+  await expect(page.locator('main h1')).toHaveText('活用方法');
   await expect(page.getByTestId('man-body')).toHaveCount(1);
   const group = chapterGroup(page, 'backup');
   await expect(group.getByTestId('man-toggle')).toHaveAttribute('aria-expanded', 'true');
@@ -491,7 +491,7 @@ test.describe('記録タブの手掛かり（ManualHint）', () => {
 
       await expect(page.getByTestId('tab-settings')).toHaveClass(/active/);
       await expect(page.locator('main h1')).toHaveCount(1);
-      await expect(page.locator('main h1')).toHaveText('使い方');
+      await expect(page.locator('main h1')).toHaveText('活用方法');
 
       await page.getByTestId('tab-record').click();
       await expect(page.getByTestId('manual-hint')).toHaveCount(0);

@@ -1000,8 +1000,6 @@ pub struct ChapterText {
 pub struct Manual {
     /// 設定タブの行ラベル。マニュアル節の `<h1>` にも使う。
     pub row_label: &'static str,
-    /// 節の先頭に置く導入文。上から順に読む必要が無いことを断る。
-    pub intro: &'static str,
     /// 圏外では図が出ないことを先に言う。「黙って欠ける」を作らない
     pub offline_note: &'static str,
     /// 図はライトテーマの画面であることを断る（ダークテーマ利用者への注記）
@@ -1018,13 +1016,12 @@ pub struct Manual {
 }
 
 const JA_MANUAL: Manual = Manual {
-    row_label: "使い方",
-    intro: "気づきにくい操作をまとめました。上から順に読む必要はありません。気になる章だけ開いてください。",
+    row_label: "活用方法",
     offline_note: "圏外では図が表示されません。文章だけで手順が分かるようにしてあります。",
     light_note: "図はライトテーマの画面です。ダークテーマで使っていても配置は同じです。",
     see_install_help: "ホーム画面への追加は「ホーム画面への追加のしかた」を見てください。",
-    hint_body: "このアプリには気づきにくい機能がいくつかあります。設定タブの「使い方」でまとめて確認できます。",
-    hint_cta: "使い方を見る ›",
+    hint_body: "このアプリには気づきにくい機能がいくつかあります。設定タブの「活用方法」でまとめて確認できます。",
+    hint_cta: "活用方法を見る ›",
     hint_dismiss: "この案内を今後表示しない",
     chapters: &[
         ChapterText {
@@ -1157,13 +1154,12 @@ const JA_MANUAL: Manual = Manual {
 };
 
 const EN_MANUAL: Manual = Manual {
-    row_label: "How to use",
-    intro: "This collects the parts of the app that are easy to miss. You do not need to read it in order — open only the chapter you need.",
+    row_label: "Making the most of it",
     offline_note: "Offline, the figures do not load. The text alone is enough to follow each step.",
     light_note: "The figures show the light theme. The layout is the same if you use the dark theme.",
     see_install_help: "See \"How to add it to your home screen\" for adding this app to your home screen.",
-    hint_body: "This app has a few features that are easy to miss. See \"How to use\" in the Settings tab for a rundown.",
-    hint_cta: "See how to use it ›",
+    hint_body: "This app has a few features that are easy to miss. See \"Making the most of it\" in the Settings tab for a rundown.",
+    hint_cta: "Make the most of it ›",
     hint_dismiss: "Do not show this again",
     chapters: &[
         ChapterText {
@@ -1454,12 +1450,12 @@ pub const RELEASES: &[ReleaseNote] = &[
         ja: &[
             "種目ごとにラベルを作れるようにしました。記録タブでラベルを選ぶと、そのラベルの前回だけが出て、「前回をコピー」もそのラベルの前回から入ります。",
             "ドロップセットを記録できるようにしました。セット行の回数欄の右にあるアイコンから段を足せます。推移タブは既定で段を含めません。",
-            "設定タブに「使い方」を足しました。気づきにくい操作を図つきでまとめてあります。",
+            "設定タブに「活用方法」を足しました。気づきにくい操作を図つきでまとめてあります。",
         ],
         en: &[
             "Exercises can now have labels. Pick one on the Record tab and you see only that label's last session, and \"Copy last time\" takes its sets from there too.",
             "Drop sets can now be recorded. Add a stage from the icon to the right of a set row's reps field. The Progress tab leaves them out by default.",
-            "Added \"How to use\" to the Settings tab — a rundown of the parts that are easy to miss, with screenshots.",
+            "Added \"Making the most of it\" to the Settings tab — a rundown of the parts that are easy to miss, with screenshots.",
         ],
     },
     ReleaseNote {

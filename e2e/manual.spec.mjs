@@ -406,8 +406,8 @@ test('図が無い章にも本文がある', async ({ page }) => {
   for (const id of ['reorder', 'backup']) {
     const group = await openChapter(page, id);
     const body = group.getByTestId('man-body');
-    const paragraphs = body.locator('p');
-    expect(await paragraphs.count(), `${id} に段落が無い`).toBeGreaterThan(0);
+    const items = body.locator('li');
+    expect(await items.count(), `${id} に本文が無い`).toBeGreaterThan(0);
     await expect(body.getByTestId('man-fig')).toHaveCount(0);
   }
 });
@@ -530,7 +530,7 @@ test('オフラインで開くと本文は読めるが図は欠け、断りが�
     await waitForImageSettled(fig);
     expect(await fig.evaluate((el) => el.naturalWidth), '図はシェル外なのでオフラインでは読めないはず').toBe(0);
 
-    await expect(chapterGroup(page, id).getByTestId('man-body').locator('p').first()).toBeVisible();
+    await expect(chapterGroup(page, id).getByTestId('man-body').locator('li').first()).toBeVisible();
     await expect(page.getByTestId('man-section')).toContainText('圏外では図が表示されません');
 
     await context.setOffline(false);

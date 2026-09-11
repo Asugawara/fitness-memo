@@ -85,11 +85,13 @@ pub fn ManualSection() -> impl IntoView {
                                         .then(|| {
                                             view! {
                                                 <div class="man-body" data-testid="man-body">
-                                                    {text
-                                                        .body
-                                                        .iter()
-                                                        .map(|p| view! { <p>{*p}</p> })
-                                                        .collect::<Vec<_>>()}
+                                                    <ol class="man-list">
+                                                        {text
+                                                            .body
+                                                            .iter()
+                                                            .map(|p| view! { <li>{*p}</li> })
+                                                            .collect::<Vec<_>>()}
+                                                    </ol>
                                                     {text
                                                         .fig
                                                         .map(|(w, h)| {

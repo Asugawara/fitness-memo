@@ -2664,11 +2664,19 @@ h3 {
   padding: 0 0 12px;
 }
 
-.man-body p {
-  margin: 8px 0 0;
+/* 章の本文は番号付きの箇条書き。1 項目 = 1 つの事実。
+   ★ padding-left は UA 既定（40px）だと 393px 幅で本文が窮屈になるので詰める。 */
+.man-list {
+  margin: 0;
+  padding-left: 1.4em;
+  font-size: 13px;
 }
 
-.man-body p:first-child {
+.man-list > li {
+  margin-top: 6px;
+}
+
+.man-list > li:first-child {
   margin-top: 0;
 }
 

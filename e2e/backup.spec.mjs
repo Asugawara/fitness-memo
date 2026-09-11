@@ -11,6 +11,7 @@
 // ★ TSV の中身そのもの（列の並び・往復・冪等・入力の癖）は `cargo test` の
 //   `core::tests::export_tsv_*` / `tsv_import_*` が持つ。ここは配線だけを見る。
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 const KEY = 'fitness-memo/v3';
 const TSV_MIME = 'text/tab-separated-values';
@@ -31,27 +32,47 @@ async function openSheet(page) {
  *
  * ★ UA も iPhone にする。`transfer::pick_route` は iOS のときだけ Share を選ぶので、
  *   ここを偽らないと chromium では Download 経路に落ちる。
+ *
+ * `mode` で共有の結果を切り替える（`src/transfer.rs:110-137` の受け側と対応）:
+ * - `ok`（既定）: 成功して `window.__shared` に控える
+ * - `abort`: 利用者がキャンセルした（`AbortError`）
+ * - `fail`: それ以外の失敗
+ * - `no-share`: `canShare` が false を返す（`share` 自体は定義したまま置く。
+ *   `transfer::can_share_file` は `Reflect.has` で両方の存在を見るので、
+ *   `share` を消すと「無い」判定が変わってしまう）
  */
-async function stubShare(page) {
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, 'userAgent', {
-      value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15',
-      configurable: true,
-    });
-    Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true });
-    Object.defineProperty(navigator, 'share', {
-      configurable: true,
-      value: async (data) => {
-        const file = data.files?.[0];
-        window.__shared = {
-          keys: Object.keys(data),
-          name: file?.name,
-          type: file?.type,
-          text: file ? await file.text() : null,
-        };
-      },
-    });
-  });
+async function stubShare(page, { mode = 'ok' } = {}) {
+  await page.addInitScript(
+    (mode) => {
+      Object.defineProperty(navigator, 'userAgent', {
+        value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15',
+        configurable: true,
+      });
+      Object.defineProperty(navigator, 'canShare', {
+        value: () => mode !== 'no-share',
+        configurable: true,
+      });
+      Object.defineProperty(navigator, 'share', {
+        configurable: true,
+        value: async (data) => {
+          if (mode === 'abort') {
+            throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
+          }
+          if (mode === 'fail') {
+            throw new Error('boom');
+          }
+          const file = data.files?.[0];
+          window.__shared = {
+            keys: Object.keys(data),
+            name: file?.name,
+            type: file?.type,
+            text: file ? await file.text() : null,
+          };
+        },
+      });
+    },
+    mode,
+  );
 }
 
 /**
@@ -126,6 +147,119 @@ test('ダウンロード経路は 1 タップで .tsv を落とす', async ({ pa
     page.getByTestId('backup-export').click(),
   ]);
   expect(download.suggestedFilename()).toMatch(/^fitness-memo-\d{8}-\d{4}\.tsv$/);
+
+  // ★ 落ちたファイルの中身も共有経路と同じ形式であること（見出しが 16 列）
+  const path = await download.path();
+  const body = await readFile(path, 'utf8');
+  expect(body.split('\n')[0]).toBe(
+    '日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル',
+  );
+});
+
+// ★ 共有シートの失敗系（src/transfer.rs:110-137 の受け側 / src/views/backup.rs:217-251 の分岐）。
+//   `Cancelled` を成功扱いにする・`Failed` で救済ボタンを出し忘れる、のどちらも
+//   「保存したつもりでデータが消える」に直結するので、3 分岐それぞれを固定する。
+test('共有をキャンセルすると「保存を中止しました」が出て、コピーの救済は出ない', async ({ page }) => {
+  await stubShare(page, { mode: 'abort' });
+  await openSheet(page);
+
+  // 肯定側: 押せること自体は他のテストの前提でもあるので、ここでも確認しておく
+  await expect(page.getByTestId('backup-export')).toBeVisible();
+  await page.getByTestId('backup-export').click();
+  await expect(page.getByTestId('backup-note')).toContainText(
+    '保存を中止しました（データは変わっていません）',
+  );
+  // キャンセルは失敗ではないので、失敗時専用の救済ボタンは出ない
+  // （肯定側＝可視は次の「共有に失敗すると…」が見る）
+  await expect(page.getByTestId('backup-copy')).toHaveCount(0);
+});
+
+test('共有に失敗すると「共有できませんでした」が出て、コピーの救済ボタンが出る', async ({ page }) => {
+  await stubShare(page, { mode: 'fail' });
+  await openSheet(page);
+
+  await page.getByTestId('backup-export').click();
+  await expect(page.getByTestId('backup-note')).toContainText(
+    '共有できませんでした。「文字でコピー」でメモや自分宛メールに貼り付けてください',
+  );
+  await expect(page.getByTestId('backup-copy')).toBeVisible();
+});
+
+test('共有が使えない端末はクリップボードへ落ち、コピーしたことが分かる', async ({ page }) => {
+  await stubShare(page, { mode: 'no-share' });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: async (t) => {
+          window.__copied = t;
+        },
+      },
+      configurable: true,
+    });
+  });
+  await openSheet(page);
+
+  await page.getByTestId('backup-export').click();
+  await expect(page.getByTestId('backup-note')).toContainText(
+    'コピーしました。メモや自分宛メールに貼り付けて保存してください',
+  );
+  const copied = await page.evaluate(() => window.__copied);
+  expect(copied.split('\n')[0]).toBe(
+    '日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル',
+  );
+});
+
+// ── クリップボード救済経路（src/views/backup.rs:254-264 `do_copy`） ─────────
+//
+// ★ 「共有に失敗した」状態を作ってからでないと `backup-copy` はそもそも DOM に無い
+//   （静止時はゼロ要素、copy_rescue が立ったときだけ出る）。
+
+test('救済のコピーが成功すると copied の文言と TSV が残る', async ({ page }) => {
+  await stubShare(page, { mode: 'fail' });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: async (t) => {
+          window.__copied = t;
+        },
+      },
+      configurable: true,
+    });
+  });
+  await openSheet(page);
+  await page.getByTestId('backup-export').click();
+  await expect(page.getByTestId('backup-copy')).toBeVisible();
+
+  await page.getByTestId('backup-copy').click();
+  await expect(page.getByTestId('backup-note')).toContainText(
+    'コピーしました。メモや自分宛メールに貼り付けて保存してください',
+  );
+  const copied = await page.evaluate(() => window.__copied);
+  expect(copied.split('\n')[0]).toBe(
+    '日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル',
+  );
+});
+
+test('救済のコピーが失敗すると copy_failed の文言が出る', async ({ page }) => {
+  await stubShare(page, { mode: 'fail' });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: async () => {
+          throw new Error('denied');
+        },
+      },
+      configurable: true,
+    });
+  });
+  await openSheet(page);
+  await page.getByTestId('backup-export').click();
+  await expect(page.getByTestId('backup-copy')).toBeVisible();
+
+  await page.getByTestId('backup-copy').click();
+  await expect(page.getByTestId('backup-note')).toContainText(
+    'コピーできませんでした（この端末ではエクスポートする手段がありません）',
+  );
 });
 
 test('書き出した TSV はそのまま読み戻せる', async ({ page }) => {
@@ -475,10 +609,15 @@ async function contrastRatio(locator) {
 
 for (const scheme of ['dark', 'light']) {
   test(`${scheme} でシート内のボタンの文字が背景から読める`, async ({ page }) => {
+    // ★ 「コピー」がダークで読めなかった原因の退行テスト。`fail` スタブで
+    //   `backup-copy` を出してから測る（静止時は DOM に無い）
+    await stubShare(page, { mode: 'fail' });
     await page.emulateMedia({ colorScheme: scheme });
     await openSheet(page);
+    await page.getByTestId('backup-export').click();
+    await expect(page.getByTestId('backup-copy')).toBeVisible();
 
-    for (const id of ['backup-export', 'backup-import']) {
+    for (const id of ['backup-export', 'backup-import', 'backup-copy']) {
       expect(
         await contrastRatio(page.getByTestId(id)),
         `${scheme} で「${id}」が背景に埋もれている`,
@@ -537,9 +676,12 @@ test('UA が描くコントロールがテーマに追従する', async ({ page,
 });
 
 test('シート内のボタンは 44px のタップ標的を持つ', async ({ page }) => {
+  await stubShare(page, { mode: 'fail' });
   await openSheet(page);
+  await page.getByTestId('backup-export').click();
+  await expect(page.getByTestId('backup-copy')).toBeVisible();
 
-  for (const id of ['backup-export', 'backup-import']) {
+  for (const id of ['backup-export', 'backup-import', 'backup-copy']) {
     expect(
       await tapTargetHeight(page.getByTestId(id)),
       `${id} のタップ標的が 44px 未満`,

@@ -2186,6 +2186,9 @@ mod tests {
         for (lang, label) in Lang::CHOICES {
             assert_eq!(label, lang.endonym());
         }
+        // `endonym()` 同士の比較だけだと綴りを誰も見ていないので、リテラルで固定する
+        assert_eq!(Lang::Ja.endonym(), "日本語");
+        assert_eq!(Lang::En.endonym(), "English");
     }
 
     #[test]

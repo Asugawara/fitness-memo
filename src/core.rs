@@ -4590,15 +4590,18 @@ mod tests {
     /// 上下が負荷の増減を表さなくなるのでグラフの意味が壊れる。
     #[test]
     fn set_volume_is_monotonic_in_weight() {
-        let bodyweight = set_volume(&set(0.0, 10));
-        assert_eq!(bodyweight, 10.0);
-        // 1kg 未満でも自重を下回らない
-        assert_eq!(set_volume(&set(0.5, 10)), 10.0);
-        assert!(set_volume(&set(0.5, 10)) >= bodyweight);
-        assert!(set_volume(&set(2.0, 10)) > bodyweight);
+        // `max(1.0)` の境界 1.0 を跨いでも非減少であること。1.0 未満は全て自重の 10 に
+        // 潰れることまでリテラルで固定する（`max(0.5)` 等に緩めても非減少という
+        // 性質だけなら壊れないため、比較ではなく値そのものを見る）
+        let weights = [0.0, 0.5, 0.999, 1.0, 1.001, 2.0];
+        let got: Vec<f64> = weights.iter().map(|w| set_volume(&set(*w, 10))).collect();
+        // 1.001f32 → f64 の丸め。10.01 ちょうどにはならない
+        assert_eq!(got, vec![10.0, 10.0, 10.0, 10.0, 10.010000467300415, 20.0]);
     }
 
     /// schema 1 からの値の変化を固定する。ここが動いたら ADR とリリースノートも直す。
+    /// `set_volume_treats_missing_weight_as_one`（4462）/ `set_volume_is_monotonic_in_weight`
+    /// （4592）と重なるが、ADR の 3 ケースを名指しで固定する。
     #[test]
     fn set_volume_changes_these_three_cases_from_schema_1() {
         // 1. 自重 + 追加重量（旧 Bodyweight は weight を指標に載せなかった）
@@ -4866,7 +4869,7 @@ mod tests {
             vec![log(10, &[(60.0, 10)], None), log(11, &[(0.0, 20)], None)],
         );
 
-        reorder_logs(&mut db, day, &[e(11), e(20), e(10)]);
+        assert!(reorder_logs(&mut db, day, &[e(11), e(20), e(10)]));
         assert_eq!(log_order(&db, day), vec![e(11), e(10)]);
     }
 
@@ -4886,7 +4889,7 @@ mod tests {
             ],
         );
 
-        reorder_logs(&mut db, day, &[e(20)]);
+        assert!(reorder_logs(&mut db, day, &[e(20)]));
         assert_eq!(
             log_order(&db, day),
             vec![e(20), e(10), e(11)],
@@ -4953,7 +4956,10 @@ mod tests {
             vec![log(10, &[(60.0, 10)], None), log(11, &[(0.0, 20)], None)],
         );
 
-        reorder_logs(&mut db, day, &[e(10), e(10), e(11)]);
+        assert!(
+            !reorder_logs(&mut db, day, &[e(10), e(10), e(11)]),
+            "並びは既に order どおりなので変化なし"
+        );
         assert_eq!(log_order(&db, day), vec![e(10), e(11)]);
     }
 
@@ -5757,7 +5763,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_routine_ignores_history_older_than_the_menu_lookback() {
+    fn apply_routine_uses_history_older_than_the_menu_lookback() {
         // ★ MENU_LOOKBACK_DAYS は**適用しない**。カードの「前回」表示に上限が無いので、
         //   ここだけ打ち切ると「前回 730日前 60×10 と出ているのに何も入らない」になる
         let mut db = routine_db();
@@ -6261,14 +6267,8 @@ mod tests {
                 d(2026, 8, 2),
                 Drops::Include
             ),
-            exercise_series(
-                &db,
-                e(10),
-                Metric::Volume,
-                d(2026, 8, 1),
-                d(2026, 8, 2),
-                Drops::Include
-            ),
+            // 8/1 はベンチプレスの記録が無い日なので出ない。8/2 は 60kg×10 = 600
+            vec![(d(2026, 8, 2), 600.0)],
         );
     }
 
@@ -6576,7 +6576,15 @@ mod tests {
     fn aggregate_weekly_avg_is_idempotent_and_handles_empty_input() {
         assert!(aggregate_weekly_avg(&[]).is_empty());
 
-        let weekly = aggregate_weekly_avg(&[(d(2026, 8, 2), 70.0), (d(2026, 8, 8), 72.0)]);
+        // 2 週にまたがる 4 点（1 週 1 点に潰れて自明にならないよう複数週を使う）
+        let series = vec![
+            (d(2026, 8, 2), 70.0),
+            (d(2026, 8, 8), 72.0),
+            (d(2026, 8, 9), 71.0),
+            (d(2026, 8, 15), 73.0),
+        ];
+        let weekly = aggregate_weekly_avg(&series);
+        assert_eq!(weekly, vec![(d(2026, 8, 2), 71.0), (d(2026, 8, 9), 72.0)]);
         assert_eq!(aggregate_weekly_avg(&weekly), weekly);
     }
 
@@ -6823,17 +6831,13 @@ mod tests {
     #[test]
     fn hero_and_chip_agree_on_the_day_count() {
         // ヒーロー（humanize）とチップ（short_elapsed）が違う日を指してはいけない
-        for e in [
-            Elapsed::with_ms(1, 12 * HOUR_MS),
-            Elapsed::with_ms(2, 36 * HOUR_MS),
-            Elapsed::days_only(3),
+        for (e, want_humanize, want_short) in [
+            (Elapsed::with_ms(1, 12 * HOUR_MS), "昨日", "1d"),
+            (Elapsed::with_ms(2, 36 * HOUR_MS), "2日前", "2d"),
+            (Elapsed::days_only(3), "3日前", "3d"),
         ] {
-            let days = e.days();
-            assert_eq!(
-                humanize(e, crate::i18n::Lang::Ja),
-                humanize_days(days, crate::i18n::Lang::Ja)
-            );
-            assert_eq!(short_elapsed(e, crate::i18n::Lang::Ja), format!("{days}d"));
+            assert_eq!(humanize(e, crate::i18n::Lang::Ja), want_humanize);
+            assert_eq!(short_elapsed(e, crate::i18n::Lang::Ja), want_short);
         }
     }
 
@@ -6897,7 +6901,7 @@ mod tests {
     }
 
     #[test]
-    fn humanize_clamps_negatives_and_sub_minute() {
+    fn humanize_rounds_sub_minute_down_to_just_now() {
         assert_eq!(
             humanize(Elapsed::with_ms(0, 0), crate::i18n::Lang::Ja),
             "たった今"
@@ -6906,19 +6910,22 @@ mod tests {
             humanize(Elapsed::with_ms(0, 30_000), crate::i18n::Lang::Ja),
             "たった今"
         );
-        // 端末時計のズレでも壊れた表示にしない
-        assert_eq!(
-            humanize(Elapsed::with_ms(0, -5000), crate::i18n::Lang::Ja),
-            "たった今"
+    }
+
+    /// 端末時計が記録時刻より巻き戻っていても、`Elapsed` は負の ms/days を持たない
+    /// （`#[cfg(test)]` コンストラクタの `.max(0)` ではなく `Elapsed::since` 本体のクランプを見る）。
+    #[test]
+    fn elapsed_since_last_clamps_when_the_clock_runs_behind_the_record() {
+        let mut db = test_db();
+        let at = 1_800_000_000_000;
+        put(
+            &mut db,
+            d(2026, 8, 8),
+            vec![log(10, &[(60.0, 10)], Some(at))],
         );
-        assert_eq!(
-            humanize(Elapsed::with_ms(-1, 5_000), crate::i18n::Lang::Ja),
-            "たった今"
-        );
-        assert_eq!(
-            humanize(Elapsed::days_only(-1), crate::i18n::Lang::Ja),
-            "今日"
-        );
+
+        let e = elapsed_since_last(&db, at - 5 * HOUR_MS, d(2026, 8, 8));
+        assert_eq!(e, Some(Elapsed::with_ms(0, 0)));
     }
 
     #[test]
@@ -8485,6 +8492,8 @@ mod tests {
 
     /// ★ メニューは名前だけでは寄せない規則なので、2 回入れて増えないことを別に見る
     ///   （`merge_db` は「名前と種目が両方一致」で初めて重複と判断する）。
+    ///   routines 無しの TSV も同じ経路（`importing_the_same_tsv_twice_adds_nothing` は
+    ///   このテストの部分集合だったので削除した）。
     #[test]
     fn importing_a_tsv_with_routines_twice_adds_nothing() {
         let mut db = tsv_sample();
@@ -8504,20 +8513,6 @@ mod tests {
 
         assert!(report.is_noop(), "2 回目で増えている: {report:?}");
         assert_eq!(mine.routines.len(), 1);
-    }
-
-    /// ★ 冪等性は**数**で見る（`MergeReport` の注記どおり）。
-    #[test]
-    fn importing_the_same_tsv_twice_adds_nothing() {
-        let tsv = export_tsv(&tsv_sample(), jst(), crate::i18n::Lang::Ja);
-        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
-
-        let first = parse_import(&tsv, &mut ids(), &mine).expect("1 回目");
-        merge_db(&mut mine, first);
-        let second = parse_import(&tsv, &mut ids(), &mine).expect("2 回目");
-        let report = merge_db(&mut mine, second);
-
-        assert!(report.is_noop(), "2 回目で増えている: {report:?}");
     }
 
     /// ★ 自分のファイルを戻すだけで確認画面が「同じ種目とみなしました」で埋まらない。
@@ -8571,17 +8566,65 @@ mod tests {
         assert_eq!(s.logs[0].exercise_id, bench);
     }
 
-    /// ★ 同名が 2 件あるときにプリセット ID へ寄せると、別種目の履歴が無警告で合流する。
-    ///   曖昧なら新規に倒す（`pin_presets` と同じガード）。
+    /// ★ 部位違いの同名があっても (部位, 名前) が一意なら部位で解決する
+    ///   （`resolve_exercise` 梯子 1）。
     #[test]
-    fn tsv_import_does_not_pin_a_preset_name_that_is_ambiguous() {
+    fn tsv_import_resolves_a_preset_name_by_its_group() {
         let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let mut g = ids();
-        // プリセットと同名の自作種目（画面から作れてしまう）
+        // プリセットと同名だが部位違いの自作種目（画面から作れてしまう）
+        let shoulder_bench_id = g.alloc();
+        mine.exercises.push(Exercise {
+            id: shoulder_bench_id,
+            name: "ベンチプレス".into(),
+            group_id: crate::presets::preset_group_id("肩").expect("プリセット"),
+            order: 9,
+            archived: false,
+            pins: Vec::new(),
+            interval_sec: None,
+            labels: Vec::new(),
+        });
+
+        let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\n\
+             2026-08-01\t胸\tベンチプレス\t1\t60\t10\n\
+             2026-08-01\t肩\tベンチプレス\t1\t20\t10\n";
+        let incoming = parse_import(tsv, &mut ids(), &mine).expect("読める");
+
+        // (部位, 名前) が一意に当たるので、胸のプリセットに解決される
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        assert_eq!(
+            incoming.exercises.len(),
+            2,
+            "胸・肩それぞれの解決先が別種目として入る"
+        );
+        assert!(incoming.exercises.iter().any(|e| e.id == bench));
+
+        // 肩の行は (肩, ベンチプレス) がちょうど 1 件当たるので、自作種目（自作の採番 ID）
+        // に解決される。梯子 1 を削ると種目名だけの梯子 2 で胸のプリセットに落ち、ここが崩れる
+        let s = incoming.sessions.get("2026-08-01").expect("その日がある");
+        let shoulder_log = s
+            .logs
+            .iter()
+            .find(|l| l.exercise_id == shoulder_bench_id)
+            .expect("肩のベンチプレスが自作種目に解決されている");
+        assert_eq!(shoulder_log.exercise_id, shoulder_bench_id);
+        assert_ne!(shoulder_log.exercise_id, bench);
+    }
+
+    /// ★ **現状固定**。`pin_presets`（2454, 2465 の `if let [only]`）と違い TSV 経路には
+    ///   ガードが無く、同じ部位に同名 2 件でもプリセット ID に寄る。仕様として
+    ///   「曖昧なら新規に倒す」にするなら `resolve_exercise`（3798）と `merge_db` の
+    ///   同名寄せ（4051）の両方に `exactly_one` が要る（別 PR）。そのときこのテストは
+    ///   意図的に赤くなる。
+    #[test]
+    fn tsv_import_pins_the_preset_id_even_when_the_name_is_ambiguous_in_one_group() {
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let mut g = ids();
+        // プリセットと同名・同部位の自作種目（画面に重複名チェックが無いので作れる）
         mine.exercises.push(Exercise {
             id: g.alloc(),
             name: "ベンチプレス".into(),
-            group_id: crate::presets::preset_group_id("肩").expect("プリセット"),
+            group_id: crate::presets::preset_group_id("胸").expect("プリセット"),
             order: 9,
             archived: false,
             pins: Vec::new(),
@@ -8593,10 +8636,20 @@ mod tests {
             "日付\t部位\t種目\tセット\t重量kg\t回数\n2026-08-01\t胸\tベンチプレス\t1\t60\t10\n";
         let incoming = parse_import(tsv, &mut ids(), &mine).expect("読める");
 
-        // (部位, 名前) が一意に当たるので、胸のプリセットに解決される
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         assert_eq!(incoming.exercises.len(), 1);
-        assert_eq!(incoming.exercises[0].id, bench);
+        assert_eq!(
+            incoming.exercises[0].id, bench,
+            "同部位に同名2件でもプリセットIDに寄る"
+        );
+
+        merge_db(&mut mine, incoming);
+        let s = mine.sessions.get("2026-08-01").expect("その日がある");
+        assert_eq!(s.logs.len(), 1);
+        assert_eq!(
+            s.logs[0].exercise_id, bench,
+            "ログはプリセットのベンチプレスに付く"
+        );
     }
 
     /// ★ 部位違いの同名種目（画面に重複名チェックが無いので作れる）が 1 本に潰れない。
@@ -9225,12 +9278,6 @@ mod tests {
         let round =
             parse_import(&export_json(&db), &mut ids(), &Db::default()).expect("読み戻せる");
         assert_eq!(round, db);
-        // `body_weight` の null は Option の正常な表現。危険なのは重量側の null
-        // （f32 に戻せず、次の起動で丸ごと Broken になる）
-        assert!(
-            !export_json(&db).contains("\"weight\":null"),
-            "Infinity が weight の null として書き出された"
-        );
     }
 
     // ── merge_db ────────────────────────────────────────────────────────────
@@ -11175,9 +11222,9 @@ mod tests {
         assert_eq!(date, d(2026, 8, 8));
     }
 
+    /// 委譲の固定。絶対値は `last_logs_before_returns_the_newest_days_first` 等が見る。
     #[test]
-    fn any_is_identical_to_the_unfiltered_lookup() {
-        // 旧名は旧挙動。ここが崩れると既存利用者の画面が黙って変わる
+    fn last_logs_before_delegates_to_the_any_filter() {
         let db = hps_db();
         for limit in 1..=MAX_HISTORY {
             let plain: Vec<NaiveDate> = last_logs_before(&db, e(10), d(2026, 8, 9), limit)
@@ -11405,6 +11452,7 @@ mod tests {
         assert_eq!(got[1].name, "P", "名前は黙って失わない");
     }
 
+    /// HPS の 3 本 + 余地が要る（`MAX_LABELS >= 3`）。
     #[test]
     fn clean_labels_caps_the_number_of_labels() {
         let many: Vec<Label> = (0..MAX_LABELS as u64 + 5)

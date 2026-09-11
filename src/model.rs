@@ -858,10 +858,13 @@ mod tests {
         }
     }
 
+    /// ピン・インターバル・ラベルが空/未設定なら 3 つとも JSON に出ない。バイト一致で
+    /// 見る（崩れるとそれらを使っていない利用者の保存データが変わり、
+    /// `e2e/pwa.spec.mjs` が組み立てている生 JSON と食い違う）。入力・期待文字列が
+    /// 3 フィールドとも同一だった旧 `exercise_omits_an_unset_interval_from_its_json` /
+    /// `exercise_omits_empty_labels_from_its_json` をここに統合した。
     #[test]
-    fn exercise_omits_empty_pins_from_its_json() {
-        // ★ バイト一致で見る。ここが崩れるとピンを使っていない利用者の保存データが
-        //   変わり、`e2e/pwa.spec.mjs` が組み立てている生 JSON と食い違う
+    fn exercise_omits_empty_optional_fields_from_its_json() {
         assert_eq!(
             serde_json::to_string(&ex_of(Vec::new())).expect("直列化できる"),
             r#"{"id":"000000000001","name":"ベンチプレス","group_id":"000000000002","order":0,"archived":false}"#
@@ -887,16 +890,6 @@ mod tests {
     }
 
     // ── インターバル（adr/ux/interval-seconds-on-the-exercise.md）──────────────
-
-    #[test]
-    fn exercise_omits_an_unset_interval_from_its_json() {
-        // ★ バイト一致で見る。ここが崩れるとインターバルを使っていない利用者の保存
-        //   データが変わり、`e2e/pwa.spec.mjs` が組み立てている生 JSON と食い違う
-        assert_eq!(
-            serde_json::to_string(&ex_of(Vec::new())).expect("直列化できる"),
-            r#"{"id":"000000000001","name":"ベンチプレス","group_id":"000000000002","order":0,"archived":false}"#
-        );
-    }
 
     #[test]
     fn exercise_writes_the_interval_when_it_is_set() {
@@ -1018,16 +1011,6 @@ mod tests {
     // ── ラベル（adr/data-model/labels-on-the-exercise-and-a-mark-on-the-log.md）──
 
     type L = Id<LabelTag>;
-
-    #[test]
-    fn exercise_omits_empty_labels_from_its_json() {
-        // ★ バイト一致で見る。ここが崩れるとラベルを使っていない利用者の保存データが
-        //   変わり、`e2e/pwa.spec.mjs` が組み立てている生 JSON と食い違う
-        assert_eq!(
-            serde_json::to_string(&ex_of(Vec::new())).expect("直列化できる"),
-            r#"{"id":"000000000001","name":"ベンチプレス","group_id":"000000000002","order":0,"archived":false}"#
-        );
-    }
 
     #[test]
     fn exercise_writes_labels_when_there_are_any() {
@@ -1155,14 +1138,5 @@ mod tests {
             );
             assert!(name.chars().count() <= MAX_LABEL_LEN, "{name}");
         }
-    }
-
-    #[test]
-    fn the_label_caps_hold_the_names_this_feature_was_built_for() {
-        // MAX_LABEL_LEN は char 単位（バイトで切ると UTF-8 の途中で割れて panic する）
-        assert!("Hypertrophy".chars().count() <= MAX_LABEL_LEN);
-        assert!("高重量ローレップ".chars().count() <= MAX_LABEL_LEN);
-        // HPS の 3 本 + 「指定なし」以外の余地
-        assert!(MAX_LABELS >= 3);
     }
 }

@@ -98,15 +98,31 @@ test.describe('static-server ハーネス（アプリ非依存 / fixture dist）
     const byDirectory = await request.get(`http://localhost:${rootPort}/`);
     const byFilename = await request.get(`http://localhost:${rootPort}/index.html`);
     expect(byDirectory.status()).toBe(200);
+    expect(byFilename.status()).toBe(200);
     expect(await byDirectory.text()).toBe(await byFilename.text());
   });
 
-  test('4. 存在しないパスは 404 になる', async ({ request }) => {
+  test('4. パストラバーサルは 403 になる（ROOT の外に出ない）', async ({ request }) => {
+    // ★ 生の "../" はもちろん、`%2e%2e`（エンコードした dot）も `new URL()` の
+    //   ドットセグメント正規化が特別扱いして消してしまい、サーバーに届く前に
+    //   "/package.json" へ潰れる（それだと 404 にしかならず、この分岐を通らない）。
+    //   `%2f`（エンコードした `/`）でセグメント境界そのものを隠すと、`URL` は
+    //   セグメントに分けられず正規化できない。static-server.mjs 側は
+    //   `decodeURIComponent` で `%2e`/`%2f` の両方をまとめて生の "../" に戻してから
+    //   join するので、そこで初めて ROOT の外へ出る（`startsWith(ROOT + sep)` の
+    //   ガードなので ROOT の外に出れば段数は問わない）
+    const res = await request.get(
+      `http://localhost:${rootPort}/%2e%2e%2f%2e%2e%2f%2e%2e%2fpackage.json`,
+    );
+    expect(res.status()).toBe(403);
+  });
+
+  test('5. 存在しないパスは 404 になる', async ({ request }) => {
     const res = await request.get(`http://localhost:${rootPort}/does-not-exist.txt`);
     expect(res.status()).toBe(404);
   });
 
-  test('5. E2E_BASE=/fitness-memo/ ではサブパス配下で 1・3 が成立し、ルート直下は 404 になる', async ({ request }) => {
+  test('6. E2E_BASE=/fitness-memo/ ではサブパス配下で 1・3 が成立し、ルート直下は 404 になる', async ({ request }) => {
     const html = await request.get(`http://localhost:${subpathPort}/fitness-memo/`);
     expect(html.status()).toBe(200);
     expect(await html.text()).toContain('harness-fixture-body');

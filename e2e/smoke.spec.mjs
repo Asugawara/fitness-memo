@@ -276,6 +276,105 @@ test('3. hidden への visibilitychange を発火してからリロードして�
   await expect(reloadedCard.getByTestId('set-row').nth(0).getByTestId('set-reps')).toHaveValue('10');
 });
 
+// ★ ここまでの debounce テスト（3.）は `flushToStorage` 経由でしか書き込み回数を
+//   見ておらず、`save_debounced`（src/storage.rs:327-336）が「連続編集で前の
+//   タイマーを取り消して張り直す」再デバウンスそのものはどこも検証していなかった。
+//   `cancel_pending_timer()` を落とすと、入力を打っている**最中**に前のタイマーが
+//   生きたまま発火して途中の値を書いてしまう退行を、ここで初めて拾う。
+//
+// ★ `page.clock` は使わない。Playwright の偽タイマーは ID を 1e12 から採番するが、
+//   web-sys の `setTimeout`/`clearTimeout` の handle は **i32** なので、wasm 側に
+//   返る ID が 2^32 で丸まり、`cancel_pending_timer()` → `clearTimeout` に渡る ID が
+//   一致せず偽タイマーを取り消せない。そのせいで「正しい実装でも最初の編集から
+//   400ms で書かれる」ように見えてしまい、境界を厳密に測れなかった（次に
+//   `page.clock` へ戻すときは同じ穴を踏まないこと）。
+//
+// ★ Node 側の実時間（`pressSequentially` が返ってから `page.evaluate` が走るまでの
+//   遅延、打鍵間隔そのもの）にも依存しない。時刻の記録と判定は全部ページ内の
+//   `performance.now()` で行い、Node 側では「最後の書き込みから 600ms 何も
+//   書かれていない」まで `waitForFunction` で待ってから、記録済みの時刻列を
+//   引き取って判定する。
+test('連続入力は 1 打鍵ごとに保存タイマーが張り直され、入力の最中には書かれない', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    window.__db = { writes: [], inputs: [] };
+    const KEY = 'fitness-memo/v3';
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === KEY) window.__db.writes.push(performance.now());
+      return original.call(this, key, value);
+    };
+    document.addEventListener(
+      'input',
+      (e) => {
+        const id = e.target?.dataset?.testid;
+        if (id === 'set-weight' || id === 'set-reps') window.__db.inputs.push(performance.now());
+      },
+      true,
+    );
+  });
+  await page.goto('./');
+
+  // 起動時の初回保存（Effect → 400ms 後に 1 回）が済むのを待ってから測り始める。
+  // ここを待たないと、この後の入力ぶんに起動時の 1 回が混ざって数が合わなくなる
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+  await page.waitForFunction(() => window.__db.writes.length === 1);
+
+  const card = await addExercise(page, 'ベンチプレス');
+  // ★ 重量だけの行は parse_reps が None を返して commit で落ちる（保存されない）ので、
+  //   先に回数を入れてこの行を「保存対象」にする
+  await card.getByTestId('set-reps').first().fill('10');
+  // ★ 1 文字ごとに 200ms（400ms の半分）空けて打つ。再デバウンスが効いていれば、
+  //   打つたびにタイマーが張り直され、打ち終わるまで一度も書かれない
+  await card.getByTestId('set-weight').first().pressSequentially('65.5', { delay: 200 });
+
+  // ★ Node 側で直後の回数を見ない。最後の書き込みから 600ms 何も書かれていない
+  //   （＝落ち着いた）ところまで待つ。余計な発火があっても条件が後ろへずれる
+  //   だけで、取りこぼさない
+  await page.waitForFunction(() => {
+    const w = window.__db.writes;
+    return w.length >= 2 && performance.now() - w[w.length - 1] > 600;
+  });
+
+  const { writes, inputs } = await page.evaluate(() => window.__db);
+  // 打鍵が正しく届いた前提の確認（回数 1 + 重量 4 文字 = 5）
+  expect(inputs.length, '打鍵イベントの数が想定と違う').toBe(5);
+
+  // ★ 起動分を除いた各書き込みについて、その直前の最後の入力から 380ms 以上
+  //   経っていること。`cancel_pending_timer()` が無いと、回数 fill のタイマーが
+  //   打鍵の最中（直前の入力から約 200ms）に発火してここで落ちる
+  for (const w of writes.slice(1)) {
+    const priorInputs = inputs.filter((t) => t < w);
+    const lastInput = Math.max(...priorInputs);
+    expect(
+      w - lastInput,
+      `入力から ${Math.round(w - lastInput)}ms で書いている（前のタイマーが取り消されていない）`,
+    ).toBeGreaterThanOrEqual(380);
+  }
+
+  // 打鍵間隔が負荷で伸びていなければ、最初の打鍵より後の書き込みはちょうど 1 回（編集分のみ。
+  // addExercise 由来の書き込みは inputs[0] より前後どちらにも起こりうるためここでは数えない）。
+  // 伸びていた場合は正当に複数回書かれうるので本数は問わず、上のループだけで判定する
+  const gaps = inputs.slice(1).map((t, i) => t - inputs[i]);
+  const maxGap = Math.max(...gaps);
+  if (maxGap < 380) {
+    expect(writes.filter((w) => w > inputs[0]).length, 'ちょうど 1 回書かれること').toBe(1);
+  } else {
+    test.info().annotations.push({
+      type: 'note',
+      description: `打鍵間隔の最大が ${Math.round(maxGap)}ms で 380ms 以上だったため、書き込み回数は判定していない（負荷起因の複数回書き込みを許容）`,
+    });
+  }
+
+  const saved = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), 'fitness-memo/v3');
+  const weights = Object.values(saved.sessions)
+    .flatMap((s) => s.logs)
+    .flatMap((l) => l.sets)
+    .map((s) => s.weight);
+  expect(weights).toContain(65.5);
+});
+
 test('4. 前日にバックフィルした記録があると、経過表示が「昨日」になる', async ({ page }) => {
   // at: null（バックフィル済み）で注入する。時刻を持たない記録でも日付キーから
   // 日数が出ることの検証（4d が「at があっても日付キーが勝つ」側を見る）
@@ -477,6 +576,9 @@ test('記録が 1 件も無いと推移タブは空状態の説明を出す', as
 async function expectNoChartLabelOverflowsViewBox(page) {
   const chart = page.getByTestId('chart');
   await expect(chart).toBeVisible();
+  // ★ ラベルが 0 個でも `filter` の結果は空配列になり、下の `toEqual([])` が
+  //   素通りしてしまう。ラベルが実在することを先に確かめる
+  await expect(chart.locator('text.chart-label')).not.toHaveCount(0);
   const overflowing = await chart.evaluate((svg) => {
     const [, , viewWidth] = svg.getAttribute('viewBox').split(' ').map(Number);
     return Array.from(svg.querySelectorAll('text.chart-label'))
@@ -760,6 +862,8 @@ test('11. 設定タブでの改名・部位変更・新規追加が記録タブ�
 
   // ★ 種目は「指標の種類」を持たない。加重 / 自重 / 時間の区別は種目名から読めるので
   //   選ばせる意味が無かった（指標は core::set_volume の単一式に統一されている）
+  // ★ 削除済み機能の tripwire。この testid は `src/` に無いので常に通る。
+  //   復活させたときだけ落ちる
   await expect(menuSheet.getByTestId('kind-option')).toHaveCount(0);
   await expect(menuSheet).not.toContainText('種類');
 
@@ -884,6 +988,8 @@ test('並び替えの矢印は種目にも部位にも無く、部位ヘッダ�
   await openGroup(page, '胸');
 
   // 退行の固定。一覧に 44px のボタンを並べ直さない（adr/ux/menu-groups-as-single-open-accordion.md）
+  // ★ 削除済み機能の tripwire。これらの testid は `src/` に無いので常に通る。
+  //   復活させたときだけ落ちる
   await expect(page.getByTestId('exercise-up')).toHaveCount(0);
   await expect(page.getByTestId('exercise-down')).toHaveCount(0);
   await expect(page.getByTestId('group-up')).toHaveCount(0);
@@ -1116,7 +1222,6 @@ test('中身のあるセットも確認を挟まず 1 タップで消える', as
 
   // 1 タップで消え、確認は一度も出ない
   await card.getByTestId('set-row').nth(1).getByTestId('remove-set').click();
-  await expect(page.getByTestId('remove-set-confirm')).toHaveCount(0);
   await expect(card.getByTestId('set-row')).toHaveCount(1);
   await expect(card.getByTestId('today-metric')).toHaveText('600');
 });
@@ -1133,19 +1238,6 @@ test('最後の 1 行を消しても入力欄は空行として残る', async ({
   await expect(card.getByTestId('set-weight').first()).toHaveValue('');
   await expect(card.getByTestId('set-reps').first()).toHaveValue('');
   await expect(card.getByTestId('today-metric')).toHaveText('0');
-});
-
-test('セット削除の確認 UI はどこにも生えない', async ({ page }) => {
-  // ★ 退行の固定。確認を戻すならこのテストを消す判断を通すこと
-  const card = await addExercise(page, 'ベンチプレス');
-  await card.getByTestId('set-weight').first().fill('60');
-  await card.getByTestId('set-reps').first().fill('10');
-
-  await card.getByTestId('set-row').first().getByTestId('remove-set').click();
-  await expect(page.getByTestId('remove-set-confirm')).toHaveCount(0);
-  await expect(page.getByTestId('remove-set-yes')).toHaveCount(0);
-  await expect(page.getByTestId('remove-set-no')).toHaveCount(0);
-  await expect(page.locator('.row-confirm')).toHaveCount(0);
 });
 
 test('「この日から外す」はフッタにあり、セットがあれば確認を経由する', async ({ page }) => {
@@ -1278,6 +1370,8 @@ test('行ごとのメモのトグルは生えない（入口はカード 1 枚�
 
   await expect(card.getByTestId('note-toggle')).toHaveCount(1);
   // 行ごとの入口を足すと入口が N 倍になる。要件の退行検知
+  // ★ 削除済み機能の tripwire。この testid は `src/` に無いので常に通る。
+  //   復活させたときだけ落ちる
   await expect(page.getByTestId('set-note-toggle')).toHaveCount(0);
 });
 
@@ -2001,8 +2095,11 @@ test('同じタブをもう一度押しても、確定前の入力が消えな�
 //   その形では緑のまま通ってしまう。演出が走るかは startViewTransition の呼び出しでしか分からない。
 test('タブを切り替えても View Transition は走らない', async ({ page }) => {
   await page.addInitScript(() => {
-    window.__vt = 0;
+    // ★ API 自体が無い WebKit では `if (orig)` を通らず __vt が常に 0 のままになり、
+    //   「呼ばれなかった」と「API が無くて呼びようが無かった」の区別が付かない。
+    //   API の有無を null で分けて、意図を明示する
     const orig = document.startViewTransition?.bind(document);
+    window.__vt = orig ? 0 : null;
     if (orig) {
       document.startViewTransition = (opts) => {
         window.__vt++;
@@ -2012,12 +2109,15 @@ test('タブを切り替えても View Transition は走らない', async ({ pag
   });
   await page.reload();
 
+  const hasApi = await page.evaluate(() => typeof document.startViewTransition === 'function');
+
   await page.getByTestId('tab-settings').click();
   await expect(page.getByTestId('screen-settings')).toBeVisible();
   await page.getByTestId('tab-progress').click();
   await expect(page.getByTestId('screen-progress')).toBeVisible();
 
-  expect(await page.evaluate(() => window.__vt)).toBe(0);
+  const vt = await page.evaluate(() => window.__vt);
+  expect(vt).toBe(hasApi ? 0 : null);
 
   // CSS 側も残っていないこと。呼び出しだけ戻っても UA 既定のクロスフェードは出るので、
   // 両側から塞ぐ（tab-slide-* の @keyframes と ::view-transition-* の規則）

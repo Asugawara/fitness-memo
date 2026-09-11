@@ -206,7 +206,7 @@ test('種目に貼り付く設定（ピン・インターバル）のラベル�
   await expect(card.locator('.pin-label')).toHaveText('Pins');
   await expect(card.locator('.interval-label')).toHaveText('Interval');
   await expect(card.locator('.interval-unit')).toHaveText('s');
-  await expect(card.getByTestId('pin-value').first()).toHaveCount(0);
+  await expect(card.getByTestId('pin-value')).toHaveCount(0);
 
   await card.getByTestId('pin-add').click();
   await card.getByTestId('pin-value').fill('3');

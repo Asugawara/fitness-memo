@@ -387,18 +387,6 @@ mod tests {
     }
 
     #[test]
-    fn preset_names_are_unique_across_groups() {
-        // seed の同名スキップは**部位をまたいで全体で**名前を見るので、
-        // プリセット定義側に同名があると片方が投入されない
-        let db = seeded_db(Lang::Ja);
-        let mut names: Vec<&str> = db.exercises.iter().map(|e| e.name.as_str()).collect();
-        let total = names.len();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), total, "プリセットに同名の種目がある");
-    }
-
-    #[test]
     fn seed_is_idempotent() {
         let mut db = seeded_db(Lang::Ja);
         let before = db.clone();
@@ -437,24 +425,32 @@ mod tests {
         );
     }
 
-    /// 別々の端末で初期化しても、プリセットの ID は全部一致する。
-    /// これが無いとマージが名前突合に落ちる（= 改名で履歴が 2 本に割れる）。
+    /// ID を変えるのは既存端末との互換破壊（マージが名前突合に落ちる）。追加は末尾のみ。
+    /// **このテストを「合わせて直す」のは禁止**。
     #[test]
-    fn independently_seeded_devices_agree_on_every_preset_id() {
-        let a = seeded_db(Lang::Ja);
-        let b = seeded_db(Lang::Ja);
+    fn preset_ids_are_frozen_for_cross_device_merges() {
+        let group_ids: Vec<u64> = vec![0x10, 0x20, 0x30, 0x40, 0x50, 0x60];
+        let exercise_ids: Vec<u64> = vec![
+            // 胸
+            0x11, 0x12, 0x13, 0x14, 0x15, //
+            // 背中
+            0x21, 0x22, 0x23, 0x24, 0x25, //
+            // 肩
+            0x31, 0x32, 0x33, 0x34, //
+            // 腕
+            0x41, 0x42, 0x43, 0x44, 0x45, //
+            // 脚
+            0x51, 0x52, 0x53, 0x54, 0x55, //
+            // 体幹
+            0x61, 0x62, 0x63, 0x64,
+        ];
 
-        let ids = |db: &Db| -> Vec<u64> {
-            let mut v: Vec<u64> = db
-                .groups
-                .iter()
-                .map(|g| g.id.bits())
-                .chain(db.exercises.iter().map(|e| e.id.bits()))
-                .collect();
-            v.sort_unstable();
-            v
-        };
-        assert_eq!(ids(&a), ids(&b));
+        let db = seeded_db(Lang::Ja);
+        let got_groups: Vec<u64> = db.groups.iter().map(|g| g.id.bits()).collect();
+        let got_exercises: Vec<u64> = db.exercises.iter().map(|e| e.id.bits()).collect();
+
+        assert_eq!(got_groups, group_ids, "部位の ID か並び順が変わった");
+        assert_eq!(got_exercises, exercise_ids, "種目の ID か並び順が変わった");
     }
 
     #[test]
@@ -514,6 +510,9 @@ mod tests {
     ///
     /// ★ 片方の言語で衝突していなくても、日英を跨いで同じ綴りがあれば
     /// `Names::matches` が 2 つのプリセットに当たる。両方まとめて見る必要がある。
+    ///
+    /// 名前の一意性は `preset_exercise_id(name)` の曖昧さ回避のために要る
+    /// （`preset_names_are_unique_across_groups` はこれの部分集合だったので削除した）。
     #[test]
     fn preset_names_are_unique_across_both_languages() {
         let mut all: Vec<&str> = Vec::new();

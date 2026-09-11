@@ -4595,6 +4595,7 @@ mod tests {
         // 性質だけなら壊れないため、比較ではなく値そのものを見る）
         let weights = [0.0, 0.5, 0.999, 1.0, 1.001, 2.0];
         let got: Vec<f64> = weights.iter().map(|w| set_volume(&set(*w, 10))).collect();
+        // 1.001f32 → f64 の丸め。10.01 ちょうどにはならない
         assert_eq!(got, vec![10.0, 10.0, 10.0, 10.0, 10.010000467300415, 20.0]);
     }
 
@@ -6583,6 +6584,7 @@ mod tests {
             (d(2026, 8, 15), 73.0),
         ];
         let weekly = aggregate_weekly_avg(&series);
+        assert_eq!(weekly, vec![(d(2026, 8, 2), 71.0), (d(2026, 8, 9), 72.0)]);
         assert_eq!(aggregate_weekly_avg(&weekly), weekly);
     }
 
@@ -8571,8 +8573,9 @@ mod tests {
         let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let mut g = ids();
         // プリセットと同名だが部位違いの自作種目（画面から作れてしまう）
+        let shoulder_bench_id = g.alloc();
         mine.exercises.push(Exercise {
-            id: g.alloc(),
+            id: shoulder_bench_id,
             name: "ベンチプレス".into(),
             group_id: crate::presets::preset_group_id("肩").expect("プリセット"),
             order: 9,
@@ -8582,14 +8585,30 @@ mod tests {
             labels: Vec::new(),
         });
 
-        let tsv =
-            "日付\t部位\t種目\tセット\t重量kg\t回数\n2026-08-01\t胸\tベンチプレス\t1\t60\t10\n";
+        let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\n\
+             2026-08-01\t胸\tベンチプレス\t1\t60\t10\n\
+             2026-08-01\t肩\tベンチプレス\t1\t20\t10\n";
         let incoming = parse_import(tsv, &mut ids(), &mine).expect("読める");
 
         // (部位, 名前) が一意に当たるので、胸のプリセットに解決される
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
-        assert_eq!(incoming.exercises.len(), 1);
-        assert_eq!(incoming.exercises[0].id, bench);
+        assert_eq!(
+            incoming.exercises.len(),
+            2,
+            "胸・肩それぞれの解決先が別種目として入る"
+        );
+        assert!(incoming.exercises.iter().any(|e| e.id == bench));
+
+        // 肩の行は (肩, ベンチプレス) がちょうど 1 件当たるので、自作種目（自作の採番 ID）
+        // に解決される。梯子 1 を削ると種目名だけの梯子 2 で胸のプリセットに落ち、ここが崩れる
+        let s = incoming.sessions.get("2026-08-01").expect("その日がある");
+        let shoulder_log = s
+            .logs
+            .iter()
+            .find(|l| l.exercise_id == shoulder_bench_id)
+            .expect("肩のベンチプレスが自作種目に解決されている");
+        assert_eq!(shoulder_log.exercise_id, shoulder_bench_id);
+        assert_ne!(shoulder_log.exercise_id, bench);
     }
 
     /// ★ **現状固定**。`pin_presets`（2454, 2465 の `if let [only]`）と違い TSV 経路には
@@ -11433,6 +11452,7 @@ mod tests {
         assert_eq!(got[1].name, "P", "名前は黙って失わない");
     }
 
+    /// HPS の 3 本 + 余地が要る（`MAX_LABELS >= 3`）。
     #[test]
     fn clean_labels_caps_the_number_of_labels() {
         let many: Vec<Label> = (0..MAX_LABELS as u64 + 5)

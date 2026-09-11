@@ -353,12 +353,13 @@ test('連続入力は 1 打鍵ごとに保存タイマーが張り直され、�
     ).toBeGreaterThanOrEqual(380);
   }
 
-  // 打鍵間隔が負荷で伸びていなければ、書き込みはちょうど 2 回（起動 1 + 編集 1）。
+  // 打鍵間隔が負荷で伸びていなければ、最初の打鍵より後の書き込みはちょうど 1 回（編集分のみ。
+  // addExercise 由来の書き込みは inputs[0] より前後どちらにも起こりうるためここでは数えない）。
   // 伸びていた場合は正当に複数回書かれうるので本数は問わず、上のループだけで判定する
   const gaps = inputs.slice(1).map((t, i) => t - inputs[i]);
   const maxGap = Math.max(...gaps);
   if (maxGap < 380) {
-    expect(writes.length, 'ちょうど 2 回書かれること').toBe(2);
+    expect(writes.filter((w) => w > inputs[0]).length, 'ちょうど 1 回書かれること').toBe(1);
   } else {
     test.info().annotations.push({
       type: 'note',

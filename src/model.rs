@@ -1138,8 +1138,5 @@ mod tests {
             );
             assert!(name.chars().count() <= MAX_LABEL_LEN, "{name}");
         }
-        // HPS の 3 本 + 「指定なし」以外の余地（旧 the_label_caps_hold_the_names_this_feature_was_built_for
-        // はここと入力・期待値がバイト単位で同一だったので削除し、この 1 行だけ残した）
-        assert!(MAX_LABELS >= 3);
     }
 }

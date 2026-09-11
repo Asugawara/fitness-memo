@@ -159,8 +159,7 @@ test('SW が activated になる', async ({ page, browserName }) => {
   //   `clients.claim()`（public/sw.js）でページ自身が制御下に入ったことを、
   //   scriptURL が sw.js を指すという別経路から確かめる
   expect(state).toBe('activated');
-  const controllerScript = await page.evaluate(() => navigator.serviceWorker.controller?.scriptURL);
-  expect(controllerScript).toContain('sw.js');
+  await page.waitForFunction(() => navigator.serviceWorker.controller?.scriptURL?.includes('sw.js'));
 });
 
 test('破損した JSON を注入すると退避キーが作られ、復元失敗の通知が出る', async ({ page }) => {

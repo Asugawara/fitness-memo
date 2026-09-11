@@ -390,6 +390,7 @@ mod tests {
             assert!(!w.polyline.contains("inf"), "polyline: {}", w.polyline);
         }
         assert!(!l.polyline.contains("NaN"), "polyline: {}", l.polyline);
+        assert!(!l.polyline.contains("inf"), "polyline: {}", l.polyline);
     }
 
     #[test]

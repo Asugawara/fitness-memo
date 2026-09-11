@@ -574,9 +574,27 @@ pub struct Progress {
     /// ドロップセットを集計から外していることの断り。**外したことを黙らない**
     /// （記録タブは常に全部数えるので、黙ると同じ日の合計が食い違う理由が出ない）
     pub drops_hidden_note: &'static str,
+    /// ラベルのチップ行の `aria-label`。見えるラベルは置かないのでここだけが頼り
+    /// （対象セレクタ 2 つと同じ作法）
+    pub pick_label: &'static str,
+    /// ラベルのチップ行の先頭（絞り込みなし）。
+    ///
+    /// ★ **`period_all` / `all_groups` / `all_exercises` と同語にしない。**
+    ///   期間の「全期間」/"All" と 2 つのセレクタの「すべての〜」がすぐ隣に並ぶので、
+    ///   同じ語だとどれの「すべて」か取り違える（`all_groups` の ★ と同じ理由）。
+    ///
+    /// ★ 記録タブのチップ行の「指定なし」/"Any" とも別語。あちらのチップは
+    ///   **今日のログの宛先**も兼ねるので「絞らない」ではなく「付けない」で、
+    ///   こちらは表示の絞り込みしか意味しない
+    ///   （adr/ux/label-colour-on-the-progress-dots.md）
+    pub all_labels: &'static str,
     /// この期間・この対象に記録が無い
     pub empty_period_exercise: &'static str,
     pub empty_period: &'static str,
+    /// ラベルで絞った結果が 0 件。**`empty_period_exercise` と分ける** —
+    /// 種目には記録があるのにチップで絞って消えた、が読み取れないと
+    /// 「すべて」に戻せば見えることに気づけない
+    pub empty_period_label: &'static str,
     /// サマリの 3 つ
     pub stat_delta: &'static str,
     pub stat_best: &'static str,
@@ -605,8 +623,11 @@ const JA_PROGRESS: Progress = Progress {
     weekly_note: "全期間は週単位で集計しています",
     weekly_note_with_weight: "全期間は週単位で集計しています（体重は週平均）",
     drops_hidden_note: "ドロップセットの段は含めていません（設定で変えられます）",
+    pick_label: "ラベル",
+    all_labels: "すべて",
     empty_period_exercise: "この期間、この種目の記録はありません",
     empty_period: "この期間の記録はありません",
+    empty_period_label: "この期間、このラベルの記録はありません",
     stat_delta: "前回比",
     stat_best: "期間内ベスト",
     stat_average: "期間内平均",
@@ -632,8 +653,11 @@ const EN_PROGRESS: Progress = Progress {
     weekly_note: "Over all time, figures are grouped by week.",
     weekly_note_with_weight: "Over all time, figures are grouped by week (body weight is a weekly average).",
     drops_hidden_note: "Drop sets are not included. You can change this in Settings.",
+    pick_label: "Label",
+    all_labels: "All labels",
     empty_period_exercise: "No records for this exercise in this period.",
     empty_period: "No records in this period.",
+    empty_period_label: "No records for this label in this period.",
     stat_delta: "vs. last",
     stat_best: "Best in period",
     stat_average: "Average in period",
@@ -1089,6 +1113,18 @@ impl ReleaseNote {
 /// （clippy::redundant_static_lifetimes。`presets::PRESETS` と同じ書き方）。
 pub const RELEASES: &[ReleaseNote] = &[
     ReleaseNote {
+        id: 3,
+        date: "2026-09-10",
+        ja: &[
+            "ラベルごとに色を選べるようにしました。設定タブ → 種目 のラベルの行に色見本が出ます。新しいラベルには互いに重ならない色が自動で付きます。",
+            "推移タブでラベルを絞り込めるようにしました。種目を選ぶとラベルのチップが並び、押すとグラフの点も記録の表もそのラベルだけになります。「すべて」ではラベルの付いた日がその色の点で出ます。",
+        ],
+        en: &[
+            "Labels can have a colour. A swatch now sits on each label row under Settings › Exercises, and new labels get colours that never repeat each other.",
+            "The Progress tab can be filtered by label. Pick an exercise and its labels appear as chips; tapping one narrows both the graph and the records table to that label. Under \"All labels\", labelled days are drawn in their label's colour.",
+        ],
+    },
+    ReleaseNote {
         id: 2,
         date: "2026-09-09",
         ja: &[
@@ -1240,6 +1276,22 @@ impl Lang {
         match self {
             Lang::Ja => format!("{name} を削除"),
             Lang::En => format!("Delete {name}"),
+        }
+    }
+
+    /// ラベルの色ピッカーの `aria-label`。
+    ///
+    /// ★ **空名なら `settings.field_color`（「色」/ "Colour"）へ落とす。** `＋` で
+    /// 足した直後の行は名前がまだ無く、そのまま埋め込むと「 の色」/"Colour of "
+    /// という尻切れの読み上げになる。部位編集の色ピッカーと同じ語に落ちるだけなので
+    /// 意味も失われない。
+    pub fn color_of(self, name: &str) -> String {
+        if name.trim().is_empty() {
+            return self.strings().settings.field_color.to_string();
+        }
+        match self {
+            Lang::Ja => format!("{name} の色"),
+            Lang::En => format!("Colour of {name}"),
         }
     }
 
@@ -1721,6 +1773,13 @@ mod tests {
             assert!(lang.past_records_of("Power").contains("Power"), "{lang:?}");
             assert!(lang.delete_label("Power").contains("Power"), "{lang:?}");
             assert!(lang.added_labels(2).contains('2'), "{lang:?}");
+            assert!(lang.color_of("Power").contains("Power"), "{lang:?}");
+            // ★ 空名は「 の色」/"Colour of " と尻切れにせず、部位の色と同じ語へ落とす
+            assert_eq!(
+                lang.color_of("  "),
+                lang.strings().settings.field_color,
+                "{lang:?}: 名前の無い行の色ピッカーが尻切れの読み上げになる"
+            );
 
             let confirm = lang.strings().settings.delete_label_confirm;
             assert!(!confirm.is_empty(), "{lang:?} に空の文言がある");
@@ -1730,6 +1789,33 @@ mod tests {
                 Lang::En => "same name",
             };
             assert!(confirm.contains(again), "{lang:?}: {confirm}");
+        }
+    }
+
+    /// ★ **推移タブのラベルのチップは、隣の 2 つのセレクタとも期間とも別語。**
+    /// `.selectors` の中に「すべての部位」「すべての種目」「全期間」「すべて」が
+    /// 同時に並ぶので、どれか 2 つが同語だとどれの「すべて」か取り違える
+    /// （`all_groups` の ★ と同じ理由を、面が 1 つ増えたぶんまで広げたもの）。
+    #[test]
+    fn the_progress_label_chip_reads_apart_from_the_selectors_and_the_period() {
+        for (lang, _) in Lang::CHOICES {
+            let p = &lang.strings().progress;
+            let words = [
+                p.all_labels,
+                p.all_groups,
+                p.all_exercises,
+                p.period_all,
+                p.pick_label,
+                p.empty_period_label,
+            ];
+            for w in words {
+                assert!(!w.is_empty(), "{lang:?} に空の文言がある");
+            }
+            let uniq: std::collections::HashSet<&str> = words.into_iter().collect();
+            assert_eq!(uniq.len(), words.len(), "{lang:?}: {words:?} に同語がある");
+            // 絞って 0 件の文言は、種目の 0 件とも別（「すべて」に戻せることが読めない）
+            assert_ne!(p.empty_period_label, p.empty_period_exercise, "{lang:?}");
+            assert_ne!(p.empty_period_label, p.empty_period, "{lang:?}");
         }
     }
 

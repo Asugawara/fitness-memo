@@ -4,8 +4,8 @@ use chrono::{Months, NaiveDate};
 use leptos::prelude::*;
 
 use crate::core;
-use crate::core::{Drops, Metric, Pick};
-use crate::model::{Db, ExerciseId, GroupId};
+use crate::core::{Drops, LabelFilter, Metric, Pick};
+use crate::model::{Db, ExerciseId, GroupId, Label, LabelId};
 use crate::storage;
 
 use super::chart::Chart;
@@ -221,6 +221,12 @@ pub fn Progress() -> impl IntoView {
     }));
     let period = RwSignal::new(Period::M3);
     let metric = RwSignal::new(Metric::default());
+    // ラベルの絞り込み（adr/ux/label-colour-on-the-progress-dots.md）。
+    //
+    // ★ **保存しない**（`UiState` に足さない）。指標・期間と同じ「今の見方」で、
+    //   対象（`pick`）のような「どこを見ているか」ではない。保存すると、次に開いた
+    //   とき記録があるのにグラフが空、という行き止まりを作れる
+    let label_sel: RwSignal<Option<LabelId>> = RwSignal::new(None);
 
     // ★ **部位と種目を組で 1 回だけ set する唯一の経路。** 不変条件は `core::Pick` が
     //   持ち、ここは保存とシグナル更新に徹する。シグナルを 2 本に分けて `Effect` で
@@ -228,6 +234,13 @@ pub fn Progress() -> impl IntoView {
     let commit = move |p: Pick| {
         if pick.get_untracked() == p {
             return; // 同値なら localStorage を無駄に叩かない（settings.rs の pick と同じ形）
+        }
+        // ★ **種目が変わったら絞りを落とす。** ラベルは種目ごとに独立した ID なので、
+        //   持ち越すと門番が `Any` に倒して**チップは「すべて」以外が点いていないのに
+        //   隠れた選択が残る**（次に元の種目へ戻すと絞りが蘇る）。部位だけ変えた
+        //   ときは種目が据え置かれるので落とさない
+        if p.exercise != pick.get_untracked().exercise {
+            label_sel.set(None);
         }
         storage::save_progress_pick(p);
         pick.set(p);
@@ -248,6 +261,37 @@ pub fn Progress() -> impl IntoView {
         commit(opts.default_pick());
     });
 
+    // 選んでいる種目のラベル定義。**チップ行・点の色・門番はすべてここから引く。**
+    //
+    // ★ 1 本にまとめるのは `db.with` を増やさないため。チップの中で `db` を引くと
+    //   ラベル 1 本ごとに購読が生まれ、種目名を 1 文字直すだけで行が作り直される
+    //
+    // ★ 部位だけ選んでいるときは空。ラベルは種目ごとに独立した体系なので、
+    //   複数種目の合算に載せられる `LabelId` が無い（`core::group_points` の ★）
+    let ex_labels: Memo<Vec<Label>> = Memo::new(move |_| {
+        let Some(ex) = pick.get().exercise else {
+            return Vec::new();
+        };
+        db.with(|d| d.exercise(ex).map(|e| e.labels.clone()).unwrap_or_default())
+    });
+
+    // 門番。**`Only` を出すのは「種目を選んでいて、その ID が実在する」ときだけ。**
+    //
+    // ★ `label_sel` を直に使わない（`views::day` の同型の門番と同じ理由）。設定
+    //   シートでラベルを消しても `label_sel` は `Some(消えた ID)` のまま残るので、
+    //   素通しすると**記録があるのにグラフが永久に空**になり、チップ行からは
+    //   どれも点いていないので戻し方も読めない。安全側の `Any` へ倒す
+    let filter = Memo::new(move |_| {
+        let Some(id) = label_sel.get() else {
+            return LabelFilter::Any;
+        };
+        if pick.get().exercise.is_some() && ex_labels.get().iter().any(|l| l.id == id) {
+            LabelFilter::Only(id)
+        } else {
+            LabelFilter::Any
+        }
+    });
+
     // 画面の下半分に何を出すか。`pick` を直に購読しない理由は `Body` の doc を参照
     let body = Memo::new(move |_| {
         if pick.get().is_set() {
@@ -263,23 +307,59 @@ pub fn Progress() -> impl IntoView {
     //   対象を切り替えても軸の意味が変わらないのが、旧 Kind 方式との違い
     let unit = Memo::new(move |_| metric.get().unit(cur_lang()).to_string());
 
-    let series = Memo::new(move |_| {
+    // グラフの点。**`series` と `colors` はここから派生させる**（`pick_points` を
+    // 2 度呼ばない = `db.with` も 1 回のまま）。
+    let points = Memo::new(move |_| {
         let p = pick.get();
         let today = dates.today.get();
         let period = period.get();
         let m = metric.get();
         let drops = drops.get();
+        let f = filter.get();
         db.with(|d| {
             let (from, to) = bounds(period, today, earliest_session(d));
-            // 種目 / 部位 / どちらも「すべて」の分岐は `core::pick_series` に 1 本化してある
-            let raw = core::pick_series(d, p, m, from, to, drops);
+            // 種目 / 部位 / どちらも「すべて」の分岐は `core::pick_points` に 1 本化してある
+            let raw = core::pick_points(d, p, m, from, to, drops, f);
             // ★「全期間」は週単位集約（1 年分 100 点超をそのまま描くと潰れる）
             if period == Period::All {
-                core::aggregate_weekly(&raw)
+                core::aggregate_weekly_points(&raw)
             } else {
                 raw
             }
         })
+    });
+
+    let series = Memo::new(move |_| {
+        points
+            .get()
+            .into_iter()
+            .map(|p| (p.date, p.value))
+            .collect::<Vec<_>>()
+    });
+
+    // 点の色。`series` と**添字一致**（`points` から同じ順で作る）。
+    //
+    // ★ **`is_hex_color` を通らない値は `None` に落とす。** `style="--dot:"` と空で
+    //   載ると `var(--dot, var(--accent))` のフォールバックが**効かず点が黒くなる**
+    //   （`var()` は「値が空」を「未定義」と見ない）。`core::clean_labels` が既定色を
+    //   保証しているので通常は起きないが、描画の直前でも `Db` を信じきらない。
+    //
+    // ★ 色は `ex_labels` から解決する（`db` を引き直さない）。宙に浮いた `label`
+    //   （定義を消したあとの過去ログ）は当たらず `None` = 既定色に落ちる
+    let colors = Memo::new(move |_| {
+        let labels = ex_labels.get();
+        points
+            .get()
+            .into_iter()
+            .map(|p| {
+                let id = p.label?;
+                labels
+                    .iter()
+                    .find(|l| l.id == id)
+                    .map(|l| l.color.clone())
+                    .filter(|c| core::is_hex_color(c))
+            })
+            .collect::<Vec<_>>()
     });
 
     // ★ 体重は「対象」でも「指標」でもなく常に重なる第2軸なので、pick / metric を
@@ -347,6 +427,9 @@ pub fn Progress() -> impl IntoView {
         let period = period.get();
         let m = metric.get();
         let drops = drops.get();
+        // ★ グラフと**同じ絞り**を掛ける。テーブルだけ全件のままだと、チップを押した
+        //   ときにグラフの点数と行数が食い違い、`stats`（`series` 派生）とも噛み合わない
+        let f = filter.get();
         db.with(|d| {
             let (from, to) = bounds(period, today, earliest_session(d));
             let unit = m.unit(cur_lang());
@@ -370,7 +453,10 @@ pub fn Progress() -> impl IntoView {
                 //   揃える（グラフとテーブルで違う対象を出さないため）
                 match (p.exercise, p.group) {
                     (Some(ex), _) => {
-                        let Some(log) = session.log_of(ex).filter(|l| !l.sets.is_empty()) else {
+                        let Some(log) = session
+                            .log_of(ex)
+                            .filter(|l| !l.sets.is_empty() && f.passes(l))
+                        else {
                             continue;
                         };
                         // ★ 詳細列も設定に従う。数字だけ外して段を並べると、表の中で
@@ -442,7 +528,7 @@ pub fn Progress() -> impl IntoView {
     //   `Chart` が破棄・再生成され、読み取り点の選択が毎回リセットされる
     let chart_body = move || {
         view! {
-                <Chart series=series unit=unit weight=weight />
+                <Chart series=series unit=unit weight=weight colors=colors />
 
                 {move || {
                     (period.get() == Period::All)
@@ -485,9 +571,17 @@ pub fn Progress() -> impl IntoView {
                 {move || {
                     (series.get().is_empty() && !weight.get().is_empty() && !hidden.get())
                         .then(|| {
+                            // ★ 絞っているときは「この種目の記録はありません」だと嘘に
+                            //   なる（種目には在る）。**「すべて」に戻せば見える**ことが
+                            //   読めないと行き止まりになる
+                            let note = if filter.get() == LabelFilter::Any {
+                                t.progress.empty_period_exercise
+                            } else {
+                                t.progress.empty_period_label
+                            };
                             view! {
                                 <p class="muted note" data-testid="chart-metric-empty">
-                                    {t.progress.empty_period_exercise}
+                                    {note}
                                 </p>
                             }
                         })
@@ -532,8 +626,14 @@ pub fn Progress() -> impl IntoView {
                 {move || {
                     let rows = records.get();
                     if rows.is_empty() {
+                        // 理由が違うので文言も分ける（上の `chart-metric-empty` と同じ規則）
+                        let note = if filter.get() == LabelFilter::Any {
+                            t.progress.empty_period
+                        } else {
+                            t.progress.empty_period_label
+                        };
                         return view! {
-                            <p class="muted" data-testid="records-empty">{t.progress.empty_period}</p>
+                            <p class="muted" data-testid="records-empty">{note}</p>
                         }
                             .into_any();
                     }
@@ -702,6 +802,88 @@ pub fn Progress() -> impl IntoView {
                     }}
                 </select>
             </div>
+
+                // ラベルのチップ行（adr/ux/label-colour-on-the-progress-dots.md）。
+                //
+                // ★ **`.selectors` の中に置く**（`body` / `chart_body` の条件は 1 行も
+                //   変えない）。`Body` の分岐を増やすと `Chart` が作り直され、
+                //   読み取り点の選択が毎回リセットされる（`Body` の doc の ★ そのもの）。
+                //
+                // ★ **ラベル定義が 0 本の種目・部位だけの選択では行ごと描かない。**
+                //   「すべて」しか無いチップ行は操作でも情報でもない。
+                //
+                // ★ **この行が凡例そのもの。** 先頭「すべて」の丸に `--accent` を
+                //   置くことで「ラベルなしの点 = この色」まで読める（別に凡例を
+                //   作らない = グラフの上の面積を増やさない）
+                {move || {
+                    let labels = ex_labels.get();
+                    (!labels.is_empty())
+                        .then(|| {
+                            view! {
+                                <div
+                                    class="lbl-row"
+                                    role="group"
+                                    aria-label=t.progress.pick_label
+                                    data-testid="progress-label-row"
+                                >
+                                    <button
+                                        // ★ class を必ず付ける（`smoke.spec.mjs` が
+                                        //   `[data-testid=screen-progress] button:not([class])`
+                                        //   を 0 件で固定している）
+                                        class="lbl"
+                                        // ★ 点灯は `label_sel` ではなく**門番後の
+                                        //   `filter`** から出す（`views::day` と同じ）。
+                                        //   消えたラベルを選んだ状態でどのチップも
+                                        //   点かない、を起こさない
+                                        class:on=move || filter.get() == LabelFilter::Any
+                                        // ★ `aria-pressed` に bool を渡さない
+                                        //   （列挙属性なので `false` で属性ごと消える）
+                                        aria-pressed=move || {
+                                            (filter.get() == LabelFilter::Any).to_string()
+                                        }
+                                        data-testid="progress-label-chip"
+                                        data-label-any="true"
+                                        on:click=move |_| label_sel.set(None)
+                                    >
+                                        <span class="dot" style="--dot: var(--accent)"></span>
+                                        {t.progress.all_labels}
+                                    </button>
+                                    <For
+                                        each=move || ex_labels.get()
+                                        key=|l: &Label| l.id
+                                        children=move |l| {
+                                            let id = l.id;
+                                            // ★ `colors` Memo と**同じ防御**を通す。`--dot:` が空文字で
+                                            //   載ると `var(--dot, var(--muted))` のフォールバックが
+                                            //   効かず丸が黒くなる（`var()` は「値が空」を「未定義」と
+                                            //   見ない）。`clean_labels` が既定色を保証しているので
+                                            //   通常は起きないが、`ex_labels` を直に読むこの経路だけ
+                                            //   素通しにすると規則が 2 本に割れる
+                                            let dot = core::is_hex_color(&l.color)
+                                                .then(|| format!("--dot:{}", l.color));
+                                            view! {
+                                                <button
+                                                    class="lbl"
+                                                    class:on=move || {
+                                                        filter.get() == LabelFilter::Only(id)
+                                                    }
+                                                    aria-pressed=move || {
+                                                        (filter.get() == LabelFilter::Only(id))
+                                                            .to_string()
+                                                    }
+                                                    data-testid="progress-label-chip"
+                                                    on:click=move |_| label_sel.set(Some(id))
+                                                >
+                                                    <span class="dot" style=dot></span>
+                                                    {l.name.clone()}
+                                                </button>
+                                            }
+                                        }
+                                    />
+                                </div>
+                            }
+                        })
+                }}
 
                 // ★ 指標は種目の属性ではなく画面の表示設定なので、対象と並べてここに置く。
                 //   単位もこの選択だけで決まる（種目を切り替えても軸の意味が変わらない）

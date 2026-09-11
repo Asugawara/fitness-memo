@@ -46,7 +46,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](data-model/notes-on-logs-and-sets.md) | 採用（決定 7 のコピーの規則は [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](ux/copy-carries-the-notes.md) で改訂。粒度の 3 つ目の軸は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)） |
 | [トレーニングメニューを「名前 + 種目 ID の並び」だけのデータにする](data-model/routines-as-named-exercise-lists.md) | 採用（宙に浮いた参照を残す規則を継いだ相手は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)） |
 | [ドロップセットをメインセットにぶら下がる段（`SetEntry.drops`）として持つ](data-model/drop-sets-as-stages-under-the-main-set.md) | 採用 |
-| [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md) | 採用（画面側は [チップでラベルを選ぶと履歴とコピーが切り替わる](ux/label-chips-switch-the-history-and-the-copy.md)） |
+| [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md) | 採用（画面側は [チップでラベルを選ぶと履歴とコピーが切り替わる](ux/label-chips-switch-the-history-and-the-copy.md)。`color` の追加と「推移タブはラベルを見ない」の改訂は [ラベルに色を持たせ、推移タブのデータ点をその色で描く](ux/label-colour-on-the-progress-dots.md)） |
 
 ### storage — 永続化
 
@@ -116,7 +116,8 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [記録タブの「種目を追加」シートを部位のアコーディオンにし、1 つだけ開く](ux/record-add-sheet-groups-as-single-open-accordion.md) | 採用 |
 | [ドロップセットの段はメインセットの下の箱に出し、推移では既定で外す](ux/drop-sets-as-a-box-under-the-main-set.md) | 採用 |
 | [新機能のお知らせバナーを画面最上段に置く](ux/whats-new-banner-above-the-screen.md) | 採用 |
-| [チップでラベルを選ぶと履歴とコピーが切り替わる](ux/label-chips-switch-the-history-and-the-copy.md) | 採用（データ側は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)） |
+| [チップでラベルを選ぶと履歴とコピーが切り替わる](ux/label-chips-switch-the-history-and-the-copy.md) | 採用（データ側は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)。決定 13「推移タブはスコープ外」と却下案「ラベルに色を持たせる」は [ラベルに色を持たせ、推移タブのデータ点をその色で描く](ux/label-colour-on-the-progress-dots.md) で改訂） |
+| [ラベルに色を持たせ、推移タブのデータ点をその色で描く](ux/label-colour-on-the-progress-dots.md) | 採用（2 つのラベル ADR の「推移タブはラベルを見ない」を改訂） |
 
 ### deploy — 配信とブランチ運用
 

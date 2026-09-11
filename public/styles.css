@@ -558,7 +558,13 @@ h3 {
 
    ★ **折り返す**（横スクロールにしない）。隠れているチップがあることが静止時に
    読めないので、`overflow-x` は採らない。行数はラベル名の長さで振れる
-   （`MAX_LABELS` の doc）。 */
+   （`MAX_LABELS` の doc）。
+
+   ★ **推移タブのラベル絞り込みでも共有する**（3 つ目の面。
+   adr/ux/label-colour-on-the-progress-dots.md）。理由は `.lbl-edit` を設定シートと
+   共有したのと同じ — 同じ「ラベル」という概念の別の面（選ぶ / 定義する / 絞る）で、
+   チップの絵が面ごとに違うと「同じものだ」と読めなくなる。`.opt` を共有しないのは
+   あちらが設定シートの部位選択専用だから（上の ★）で、これは変えない。 */
 .lbl-row {
   display: flex;
   flex-wrap: wrap;
@@ -588,6 +594,49 @@ h3 {
   border-color: var(--accent);
   color: var(--accent-text);
   font-weight: 600;
+}
+
+/* 推移タブのチップは `.selectors` の中に居る。隣の `.target-select` /
+   `.segmented` は `--surface` なので、`--bg` のままだと 1 段沈んで見える。
+   ★ `.lbl` 自身の `background` は変えない（記録タブのカードの中では `--bg` が
+     正しい。あちらは `--surface` のカードの上に載る）。 */
+.selectors .lbl {
+  background: var(--surface);
+}
+
+/* `.selectors` が `gap: 8px` を持つので、`.lbl-row` の `margin-top: 8px` と
+   二重になる。行間の規則は親（`.selectors`）に 1 本化する。 */
+.selectors > .lbl-row {
+  margin-top: 0;
+}
+
+/* チップの色見本（adr/ux/label-colour-on-the-progress-dots.md）。
+   `.dot` は既に `background: var(--dot, ...)` を読むので、色は Rust 側が
+   `style="--dot:#rrggbb"` で載せるだけ。
+
+   ★ **`.lbl` を flex コンテナにしない**（`.dot` の `flex: none` に釣られない）。
+     flex 化すると `.lbl` の中身が「行」になり、`min-width: 44px` で広がった
+     1 文字チップ（記録タブの `H`）の文字が中央から左寄せへ退行する。E2E は
+     チップの寸法しか見ていないのでこの退行は自動では捕まらない。
+     代わりに `.dot` 側を inline-block にして、`text-align` の中央揃えを保つ。 */
+.lbl > .dot {
+  display: inline-block;
+  vertical-align: -1px;
+  margin-right: 6px;
+}
+
+/* ★ **選択中は丸に縁を足す。** `.lbl.on` の背景は `var(--accent)` なので、
+   推移タブの先頭チップ（「すべて」= `--dot: var(--accent)`）は点いた瞬間に
+   丸が背景と同色になって消える — 既定がその状態なので、「ラベルなしの点は
+   `--accent`」という凡例が初見でいちばん読めない。
+   ★ 縁の色は `--accent-text`（`.lbl.on` の文字色）。同じ面の文字と同じ色なので
+     コントラストは文字と同じだけ確保される。
+   ★ **`.lbl` / `.lbl.on` 自体は 1 文字も変えない**（`.opt.on` とトークンを揃える
+     規約と、記録タブの 1 文字チップの寸法・中央揃えを守るため）。足すのは
+     `.dot` 側だけ。ラベルのチップでも縁が付くが、色は青系を外してあるので
+     見分けは縁の有無ではなく色そのものが担う。 */
+.lbl.on > .dot {
+  box-shadow: 0 0 0 1px var(--accent-text);
 }
 
 /* ★ **3 列を全エントリで揃える。** 日付は "8/3 (月)" と "8/17 (月)" で幅が違うので、
@@ -957,6 +1006,20 @@ h3 {
      あるので、同詳細度では `width: 100%` に負ける（`.pin-add` と同じ事情）。 */
 .lbl-edit .lbl-name {
   width: 7.5em;
+}
+
+/* ラベルの色ピッカー（adr/ux/label-colour-on-the-progress-dots.md）。
+   `.field input[type="color"]`（部位の色）は 64px 幅だが、この行は
+   色 + 名前 7.5em + ✕ + gap が 393px（iPhone 15 の CSS 幅）に収まる必要があるので
+   44px まで詰める。**タップ標的の 44px は割らない。**
+
+   ★ **子孫 2 段（0,3,0）が要る。** `.field input[type="color"]`（0,2,1）に
+     `.lbl-edit .lbl-color`（0,2,0）では負ける（クラス 2 + 要素 1 のほうが強い）。
+     `.field` を頭に足して 0,3,0 にする。 */
+.field .lbl-edit .lbl-color {
+  width: 44px;
+  min-height: 44px;
+  padding: 2px;
 }
 
 /* 「＋」。`.pin-box .pin-add` と同じ規則（めったに使わない追加に彩度を与えない）。
@@ -1665,13 +1728,21 @@ h3 {
   stroke-linecap: round;
 }
 
+/* ★ **点だけが `--dot` を読む**（adr/ux/label-colour-on-the-progress-dots.md）。
+   ラベルの色は利用者が選ぶ値なのでクラスで表現できず、Rust 側が
+   `style="--dot:#rrggbb"` を `<circle>` **自身**に載せる。`--dot` は継承変数なので
+   `.chart-wrap` や `svg` に置くと全点が同色になる。
+   ★ 折れ線（`.chart-line`）・軸・体重（`.chart-dot-weight`）は `--accent` /
+   `--muted` のまま。ラベルは「その日の狙い」で、線が繋ぐのは狙いをまたいだ推移。 */
 .chart-dot {
-  fill: var(--accent);
+  fill: var(--dot, var(--accent));
 }
 
+/* 選択中。`fill: var(--surface)` は維持する（中を抜いて縁で示す絵）。
+   縁だけをラベルの色にするので、選択しても「どのラベルの点か」が消えない。 */
 .chart-dot.selected {
   fill: var(--surface);
-  stroke: var(--accent);
+  stroke: var(--dot, var(--accent));
   stroke-width: 2;
 }
 

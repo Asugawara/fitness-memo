@@ -15,6 +15,12 @@
 //! 綴りは `viewBox` / `stroke-width` / `text-anchor`。
 //! 見た目は極力 CSS クラスに寄せて（`--accent` などのトークンでダークモードに追随させ）、
 //! 属性には座標だけを置く。
+//!
+//! ⚠ **例外は `--dot` の 1 本だけ**（adr/ux/label-colour-on-the-progress-dots.md）。
+//! ラベルの色は利用者が `<input type="color">` で選んだ値なので、取りうる色が
+//! 有限ではなく CSS クラスで表現できない。`style="--dot:#rrggbb"` を
+//! **`<circle>` 自身**に置き、色そのものは `.chart-dot { fill: var(--dot, var(--accent)) }`
+//! が読む。`--dot` は継承変数なので `.chart-wrap` や `<svg>` に置くと全点が同色になる。
 
 use chrono::{Datelike, NaiveDate};
 use leptos::prelude::*;
@@ -81,6 +87,17 @@ pub fn Chart(
     /// (日付, 体重kg) の系列。日付昇順であること。**第2軸として常に重ねる**
     #[prop(into)]
     weight: Signal<Vec<(NaiveDate, f64)>>,
+    /// 各点の色（`series` と**添字一致**、`None` は既定色 `--accent`）。
+    /// adr/ux/label-colour-on-the-progress-dots.md
+    ///
+    /// ★ **`Chart` から `Db` を引かない。** ラベル名も色も種目に貼り付いた値なので、
+    /// ここで引くと「座標計算 + 描画」だけだったこの部品が保存データに依存する。
+    /// 呼び側（`views::progress`）が `series` と同じ 1 本の `points` から作る。
+    ///
+    /// ★ **必須プロップにする**（`#[prop(optional)]` にしない）。呼び出しは 1 箇所
+    /// しかないので、省略できる形にする理由が無い。
+    #[prop(into)]
+    colors: Signal<Vec<Option<String>>>,
 ) -> impl IntoView {
     let plot = Memo::new(move |_| layout(&series.get(), &weight.get()));
     let selected = RwSignal::new(None::<usize>);
@@ -130,6 +147,8 @@ pub fn Chart(
                     weight_smoothed,
                 );
                 let show_dots = !l.dense;
+                // ★ 1 回だけ引く。点ごとに `colors.get()` すると `Vec` を毎回複製する
+                let cs = colors.get();
                 let last_idx = l.pts.len().saturating_sub(1);
                 let weight_points = l.weight.as_ref().map_or(0, |w| w.points);
                 view! {
@@ -263,7 +282,20 @@ pub fn Chart(
                             .filter(|p| show_dots || p.idx == last_idx)
                             .map(|p| {
                                 view! {
-                                    <circle class="chart-dot" cx=n(p.x) cy=n(p.y) r="3" />
+                                    <circle
+                                        class="chart-dot"
+                                        cx=n(p.x)
+                                        cy=n(p.y)
+                                        r="3"
+                                        // ★ `[]` ではなく `get`。`colors` は呼び側が
+                                        //   `series` から作るので長さは揃うが、
+                                        //   ここで panic すると wasm ではアプリが死ぬ
+                                        style=cs
+                                            .get(p.idx)
+                                            .cloned()
+                                            .flatten()
+                                            .map(|c| format!("--dot:{c}"))
+                                    />
                                 }
                             })
                             .collect::<Vec<_>>()}
@@ -275,6 +307,10 @@ pub fn Chart(
                                 .get()
                                 .and_then(|i| l.bands.get(i).cloned())
                                 .map(|b| {
+                                    // ★ 選択点も同じ添字で色を引く。`Band.idx` は
+                                    //   系列の添字とは限らない（体重だけの帯がある）が、
+                                    //   そのとき `Band.y` は `None` でこの丸は描かれない
+                                    let cs = colors.get();
                                     let metric_dot = b
                                         .y
                                         .map(|y| {
@@ -284,6 +320,11 @@ pub fn Chart(
                                                     cx=n(b.x)
                                                     cy=n(y)
                                                     r="5"
+                                                    style=cs
+                                                        .get(b.idx)
+                                                        .cloned()
+                                                        .flatten()
+                                                        .map(|c| format!("--dot:{c}"))
                                                 />
                                             }
                                         });

@@ -1,8 +1,8 @@
 // README の「画面」セクションと、設定タブのマニュアルの図を撮り直す。
 //
 //   trunk build
-//   node scripts/shots.mjs                          # README 3 枚 + マニュアル 12 枚
-//   node scripts/shots.mjs --only=manual            # マニュアル 12 枚だけ（★ pre-commit が呼ぶのはこれ）
+//   node scripts/shots.mjs                          # README 3 枚 + マニュアル 24 枚
+//   node scripts/shots.mjs --only=manual            # マニュアル 24 枚だけ（★ pre-commit が呼ぶのはこれ）
 //   node scripts/shots.mjs --only=readme            # README 3 枚だけ（UI を触った PR の最後に手で叩く）
 //   node scripts/shots.mjs --only=manual:copy-last  # 1 図だけ（ja / en 両方）。反復用
 //   node scripts/shots.mjs --check                  # 一時ディレクトリに撮ってバイト比較。差があれば exit 1
@@ -138,6 +138,34 @@ const SEED = [
 const PINNED = { name: 'ベンチプレス', pins: ['3', '7'], interval_sec: 90 };
 
 /**
+ * 撮影用のラベル（adr/ux/label-chips-switch-the-history-and-the-copy.md /
+ * adr/ux/label-colour-on-the-progress-dots.md）。図 `labels` と `progress-labels` の被写体。
+ *
+ * ★ **ベンチプレスに付ける。** 当日にカードがあり（チップ行が写る）、履歴が 6 回あって
+ *   （推移タブで色の違いがグラフから読める）を両方満たすのはこの種目だけ。
+ * ★ `name_en` を持つのは `Label.name` が**言語追従しないから**（`Routine.name` と同じ。
+ *   利用者が付けた名前なので素通しで描かれる）。差し替えないと en の図に日本語が写る。
+ * ★ 色は `presets::LABEL_COLOR_CHOICES` の先頭 2 つをそのまま書く。`core::clean_labels` は
+ *   **不正な色だけ**を既定色で埋めて有効な色には触らないので、明示しておけば採番規則が
+ *   変わっても図の色は動かない。
+ * ★ ID は ROUTINES と同じく予約領域（1024 未満）の外に固定で書く（12 文字 base32）。
+ *   **`i` / `l` / `o` / `u` は使えない** — `model.rs:46` の ALPHABET が
+ *   `0123456789abcdefghjkmnpqrstvwxyz` で、紛らわしい 4 文字を落としてある。
+ *   1 文字でも外れると `Id::from_str` が弾き、`Db` が丸ごと読めずプリセットへ戻る
+ *   （**シードが消えるだけで例外は出ない**ので、静かに違う絵が撮れる）。
+ */
+const LABELS = {
+  name: 'ベンチプレス',
+  defs: [
+    { id: '00000000zzy1', name: '高重量', name_en: 'Heavy', color: '#e0524a' },
+    { id: '00000000zzy2', name: '高回数', name_en: 'Reps', color: '#e0912a' },
+  ],
+  // どの日にどのラベルを付けるか（daysAgo → `defs` の添字）。交互にして
+  // 「すべて」の図で 2 色が混ざって出るようにする
+  on: { 25: 0, 18: 1, 11: 0, 7: 1, 3: 0, 0: 1 },
+};
+
+/**
  * 撮影用のトレーニングメニュー（adr/ux/start-from-a-saved-routine.md）。
  *
  * ★ 置かないと設定タブに「まだありません」の 1 行しか写らず、この画面の目玉が
@@ -193,19 +221,71 @@ const LANGS = ['ja', 'en'];
 const WEBP_QUALITY = 90;
 
 /**
+ * `reorder` の pad。**setup と `FIGS` の両方が要る**ので定数で持つ — 持ち上がった行は
+ * 地色と角丸を持って兄弟より前へ出る（`styles.css` の `[data-drag="lift"]`）ので、
+ * 縁が切れないようにする。同じセット行を撮る `drop-sets` と同じ 8px にしてあり、
+ * これ以上広げると上の「前回までの記録」と下の「＋ セット」が半端に写り込む。
+ * setup 側は自前でスクロールするときの余白に使う（`scroll: false`。理由は
+ * `setupReorder` の doc）。
+ */
+const REORDER_PAD = 8;
+
+/**
+ * `reorder` で掴んだ後に指を動かす量（px、上向き）。
+ *
+ * ★ セット行は隙間なく積まれているので、10px 上げるとそのぶん**上の行へ食い込む**。
+ *   `[data-drag="lift"]` は `z-index: 1` で兄弟より前に出るため、この重なりが
+ *   「持ち上がって指について来ている」を 1 枚で見せる。
+ * ★ **隣の箱の中心（`reorder::Slot::mid`）より小さいこと。** 越えると入れ替わりが
+ *   起きて、`teardownReorder` の `mouse.up()` が並び順を db へ書く。行の高さは 46px 前後で
+ *   中心まで 23px なので、10px なら倍の余裕がある。
+ */
+const LIFT_PX = 10;
+
+/**
+ * `reorder` で掴む位置を弾く帯の幅。`src/reorder.rs` の `EDGE_BAND` と同じ値
+ * （**あちらが正**。ここは撮影が静かに壊れるのを防ぐための写し）。
+ */
+const EDGE_BAND_PX = 72;
+
+/**
+ * `whats-new` で書く既読番号。**1 固定**（理由は `setupWhatsNew` の doc）。
+ * お知らせ番号は 1 から始まる単調増加なので、これで「2 番目以降が未読」になる。
+ */
+const WHATS_NEW_SEEN = 1;
+
+/**
  * マニュアルの図。`targets` の外接矩形 + `pad` を `clip` に渡して撮る。
  * こうすると **`src/` に撮影専用の testid を 1 つも足さずに済む**。
  *
- * ★ **順序に意味がある。** `copy-last` は UI 操作で当日に空のカードを 1 枚生やすので
- *   最後に置く。`empty-day` は別の日を選ぶので、その次に当日へ戻ると `load_cards` が
- *   db から引き直して空カードが消える（`pick()` は db を書かない）。
+ * 全 12 章が 1 枚ずつ持つ（`src/manual.rs` の `MANUAL_CHAPTERS` と 1 対 1）。
+ *
+ * ★ **順序に意味がある。** 後ろの 2 つは page を汚すので、汚さないものより後に置く:
+ *   - `copy-last` … UI 操作で当日に空のカードを 1 枚生やす
+ *   - `whats-new` … `release_seen` を上書きして `reload()` する（以後の全図に効く）
+ *   `empty-day` は別の日を選ぶが、次に当日へ戻ると `load_cards` が db から引き直して
+ *   空カードが消える（`pick()` は db を書かない）。
+ *
+ * ★ **`reorder` は当日のカードを撮る図なので、当日の枚数と高さを動かす図より前に置く。**
+ *   `copy-last` の後だと 3 枚目（空の懸垂）が生え、`exercise-memo` の後だとベンチプレスの
+ *   カードが 4 つの入力欄ぶん伸びる。どちらも**全枚数撮影のときだけ**起きるので、
+ *   単発撮影と絵が食い違う。`teardown` で pointer を離すので、後ろに置く必要は無い。
+ *
  *   この順なら `--only=manual:<id>` の単発撮影と全枚数撮影が同じバイト列になる。
  */
 const FIGS = [
+  { id: 'progress-target', pad: 10, setup: setupProgressTarget },
+  // ★ **`chart-readout` より前**。あちらは読み取り点を最新から動かし、`Chart` は
+  //   ラベル行が増減しても作り直されない（`views/progress.rs` の `.selectors` の ★）ので、
+  //   選んだ点がそのまま残る。後ろに置くと全枚数撮影のときだけカーソルが真ん中に写り、
+  //   単発撮影と絵が食い違う
+  { id: 'progress-labels', pad: 10, setup: setupProgressLabels },
   { id: 'chart-readout', pad: 10, setup: setupReadout },
+  { id: 'labels', pad: 8, setup: setupLabels },
   // ★ db を書き換えないのでどこでもよいが、`setupMemoOpen` より前に置いて
   //   ベンチプレスのカードが畳まれた状態で撮る
   { id: 'drop-sets', pad: 8, setup: setupDropSets },
+  { id: 'reorder', pad: REORDER_PAD, scroll: false, setup: setupReorder, teardown: teardownReorder },
   // ★ 上寄せ。中央寄せだと下端が sticky の「種目を追加」の帯（画面下 528px 付近に
   //   貼り付く）に潜り込む
   { id: 'exercise-memo', pad: 10, align: 'top', setup: setupMemoOpen },
@@ -214,7 +294,11 @@ const FIGS = [
   //   pad を足すと必ず viewport の左右をはみ出す。ここだけ 0。
   //   スクロールしても動かないので中央寄せもしない（背後だけが動いて無駄）
   { id: 'accordions', pad: 0, scroll: false, setup: setupAccordions },
+  { id: 'backup', pad: 0, scroll: false, setup: setupBackup },
   { id: 'copy-last', pad: 8, setup: setupCopyLast },
+  // ★ 帯は画面幅いっぱいなので `accordions` / `backup` と同じく pad 0（足すと左右が
+  //   はみ出す）。setup が自分で先頭へ戻すので中央寄せもしない
+  { id: 'whats-new', pad: 0, scroll: false, setup: setupWhatsNew },
 ];
 
 // ── 引数 ──────────────────────────────────────────────────────────────────────
@@ -407,6 +491,26 @@ async function closeAnySheet(page) {
   await settle(page);
 }
 
+/**
+ * シートが**登場アニメーションを終えて**下端に着くまで待つ。
+ *
+ * ★ `waitFor({ state: 'visible' })` では足りない。`.sheet` は `translate: 0 100%` から
+ *   0.22s かけて上がってくる（styles.css の `.sheet` / `@starting-style`）ので、可視に
+ *   なった直後に `boundingBox()` を測ると**まだ画面の下にはみ出している**。
+ *   `animations: 'disabled'` は撮る瞬間にしか効かないので、clip の計算には間に合わない。
+ * ★ 一律待ちにしない。`translate` が終端（`0 0`）に落ちたことをそのまま条件にする。
+ *   Chromium は `0 0` を `0px` へ畳んで返すので、両方の綴りを終端として受ける。
+ */
+async function waitForSheetOpen(page, sheet) {
+  await sheet.waitFor({ state: 'visible' });
+  const settled = new Set(['none', '0px', '0px 0px']);
+  await waitFor(
+    async () => settled.has(await sheet.evaluate((el) => getComputedStyle(el).translate)),
+    'シートが登場アニメーションを終えて下端に着く',
+  );
+  await settle(page);
+}
+
 /** タブを切り替えて先頭へ戻す。タブを跨いでもスクロール位置は持ち越されるので毎回戻す */
 async function gotoTab(page, testid, screen) {
   await closeAnySheet(page);
@@ -532,18 +636,27 @@ function seedIndex(json) {
 }
 
 /**
- * ctx C（en）へ流す JSON。**`Routine.name` だけ英語に差し替える。**
+ * ctx C（en）へ流す JSON。**利用者が付けた名前だけ**を英語に差し替える —
+ * `Routine.name`（`src/views/day.rs:419` が素通しで描く）と `Label.name`
+ * （`src/views/day.rs` / `src/views/progress.rs` のチップが同じく素通し）の 2 つ。
  *
  * ★ 種目・部位の名前は差し替えない。`src/presets.rs:50-53` が「名前は言語で変わるが
  *   ID は変わらない」を保証し、`views::mod` の `ex_name` / `grp_name`（mod.rs:244, 249）が
  *   表示を `cur_lang()` に追従させる。**シードの英訳は要らない。**
  */
-function englishRoutines(json) {
+function englishNames(json) {
   const db = JSON.parse(json);
-  const en = new Map(ROUTINES.map((r) => [r.id, r.name_en]));
+  const routines = new Map(ROUTINES.map((r) => [r.id, r.name_en]));
   for (const r of db.routines ?? []) {
-    const name = en.get(r.id);
+    const name = routines.get(r.id);
     if (name) r.name = name;
+  }
+  const labels = new Map(LABELS.defs.map((l) => [l.id, l.name_en]));
+  for (const e of db.exercises ?? []) {
+    for (const l of e.labels ?? []) {
+      const name = labels.get(l.id);
+      if (name) l.name = name;
+    }
   }
   return JSON.stringify(db);
 }
@@ -553,6 +666,27 @@ function englishRoutines(json) {
 // setup は「撮る直前の状態」を作り、clip の対象になる locator の配列を返す。
 // スクロール（scrollUnion）とクリップ（clipOf）は shootManual が共通に行うので、
 // setup は**位置を決めない**。
+
+/**
+ * 章 1「推移タブの絞り込み」。被写体は**両方に値が入ったセレクタの行**。
+ *
+ * ★ **`selectOption` は value（ID 文字列）で指定する**（`setupReadout` と同じ理由 —
+ *   ラベル「胸」は en コンテキストで解決できない）。
+ * ★ 返すのは 2 つの `<select>` の union。`.target-row` の枠ではなく中身の外接矩形で
+ *   切ると、章が言う「2 つのセレクタ」だけが図に残る。
+ */
+async function setupProgressTarget(page, { ids }) {
+  await gotoTab(page, 'tab-progress', 'screen-progress');
+  const bench = ids.byName(PINNED.name);
+  const group = page.getByTestId('group-select');
+  const exercise = page.getByTestId('exercise-select');
+  await group.selectOption(String(bench.group_id));
+  await exercise.selectOption(String(bench.id));
+  // 種目まで入ると初めてグラフが出る。ここを待たないと下の要素が動いている途中で撮れる
+  await page.getByTestId('chart').waitFor({ state: 'visible' });
+  await settle(page);
+  return [group, exercise];
+}
 
 /**
  * 章 2「グラフをタップすると別の点へ動く」。
@@ -581,6 +715,51 @@ async function setupReadout(page, { ids }) {
   await waitFor(async () => (await cursorX()) !== atLatest, 'chart-cursor が最新点から動く');
 
   return [chart, page.getByTestId('chart-readout')];
+}
+
+/**
+ * 章 5「ラベルで推移を絞る」。被写体は**チップ行と色の付いた点**。
+ *
+ * ★ **チップは押さない。** 「すべて」のままだと 2 色の点が混ざって出るので、
+ *   1 枚で「チップ行が凡例」と「点に色が乗る」の両方が読める。
+ * ★ **色が乗っていることを撮る前に確かめる。** `--dot` が載らないと点は `--accent`
+ *   のままで、図としては「ラベル無しの推移タブ」と区別が付かない — 静かに壊れる。
+ */
+async function setupProgressLabels(page, { ids }) {
+  await gotoTab(page, 'tab-progress', 'screen-progress');
+  const bench = ids.byName(LABELS.name);
+  await page.getByTestId('group-select').selectOption(String(bench.group_id));
+  await page.getByTestId('exercise-select').selectOption(String(bench.id));
+  const row = page.getByTestId('progress-label-row');
+  await row.waitFor({ state: 'visible' });
+  const chart = page.getByTestId('chart');
+  await chart.waitFor({ state: 'visible' });
+  const coloured = page.locator('.chart-dot[style*="--dot"]');
+  await waitFor(async () => (await coloured.count()) >= 2, '色の付いた点が 2 個以上出る');
+  await settle(page);
+  return [row, chart];
+}
+
+/**
+ * 章 4「種目ごとのラベル」。被写体は**カードのチップ行と、その下の履歴**。
+ *
+ * ★ **チップは押さない。** 既定の「指定なし」のままだと履歴が全部見えるので、
+ *   「ラベル列（4 列目）がある」と「先頭は指定なし」が 1 枚で読める。
+ * ★ `.lbl-row` / `.last-rows` には testid が無いので CSS で引く
+ *   （`.add-wrap` / `.menu-copy-label` と同じ作法）。
+ */
+async function setupLabels(page, { ids }) {
+  await gotoTab(page, 'tab-record', 'screen-record');
+  await selectDay(page, DAY_TODAY);
+  const card = page.locator(`#card-${ids.byName(LABELS.name).id}`);
+  await card.waitFor({ state: 'visible' });
+  const chips = card.getByTestId('label-chip');
+  // 「指定なし」+ 定義したぶん。定義が届いていないとチップ行ごと描かれない
+  await waitFor(
+    async () => (await chips.count()) === LABELS.defs.length + 1,
+    'チップが「指定なし」+ 定義数だけ出る',
+  );
+  return [card.locator('.lbl-row'), card.locator('.last-rows')];
 }
 
 /**
@@ -659,7 +838,9 @@ async function setupAccordions(page, { ids }) {
   await selectDay(page, DAY_TODAY);
   await page.getByTestId('add-exercise').click();
   const sheet = page.getByTestId('add-sheet');
-  await sheet.waitFor({ state: 'visible' });
+  // ★ 可視待ちだけでは足りない（`waitForSheetOpen` の doc）。この図は後続の
+  //   待ちが偶然 0.22s を超えていて助かっていたが、条件で押さえておく
+  await waitForSheetOpen(page, sheet);
   const { group } = ids.pickIndex(PINNED.name);
   await page.getByTestId('pick-group-toggle').nth(group).click();
   const opened = page.getByTestId('pick-group').nth(group).getByTestId('pick-exercise');
@@ -697,6 +878,128 @@ async function setupCopyLast(page, { ids }) {
   const card = page.locator(`#card-${ids.byName(name).id}`);
   await card.getByTestId('copy-last').waitFor({ state: 'visible' });
   return [card];
+}
+
+/**
+ * 章 11「書き出しと読み込み」。被写体は**エクスポート / インポートのシート**。
+ *
+ * ★ `accordions` と同じく `pad: 0` / `scroll: false`。`.sheet` は `position: fixed` で
+ *   画面幅いっぱいなので pad を足すと必ず viewport をはみ出し、スクロールしても
+ *   シートは動かない（背後だけが動いて無駄）。
+ */
+async function setupBackup(page) {
+  await gotoTab(page, 'tab-settings', 'screen-settings');
+  await page.getByTestId('open-backup').click();
+  const sheet = page.getByTestId('backup-sheet');
+  await waitForSheetOpen(page, sheet);
+  return [sheet];
+}
+
+/**
+ * 章 10「並び替え」。被写体は**セット行を番号で掴んで持ち上げた状態**。
+ *
+ * ★ **カードではなくセット行を撮る。** 章がいちばん伝えたいのは「セット行だけは
+ *   左端の番号を掴んだ瞬間に動き始める（待ち時間が無い）」で、その掴み口
+ *   （`.set-no`）は**文字ラベルを持たない当たり判定**なので、位置を文章だけでは
+ *   特定させられない — `drop-sets` の `drop-add` と同じ「図を持たせる基準」に当たる。
+ *   行は 46px 前後なので、**持ち上がった行と上下の行が 1 枚に収まる**（カードは
+ *   1 枚 400px 超で、上下と一緒には viewport に入らなかった）。
+ *
+ * 押しっぱなしのまま撮るので、`mouse.up()` は撮影の**後**（[`teardownReorder`]）。
+ * `shootManual` が `fig.teardown` を呼ぶ。
+ *
+ * ★ **待ち時間はゼロなので一律待ちを置かない。** `pointerdown` の中で
+ *   `row_drag` が立つ（`views/day.rs` のセット行の `grab`。カードの `.card-head` と
+ *   違って `PRESS_DELAY_CARD` を通らない）ので、`data-drag="lift"` の条件待ちだけで足りる。
+ * ★ **スクロールは掴む前に自分で済ませる**（`FIGS` 側は `scroll: false`）。掴んだ後に
+ *   `scrollUnion` が走ると、ドラッグ中に容器が動いて `Drag::advance` の基準がずれる。
+ * ★ **掴む位置が端の自動スクロールの帯（`reorder::EDGE_BAND` = 上下 72px）に入って
+ *   いないこと**を確かめる。入ると指が止まっていてもフレームごとにスクロールし続け、
+ *   撮るたびに違う絵になる（`views::drag::edge_scroll_tick`）。3 行ぶんは 150px 前後なので
+ *   中央寄せで両方の帯から遠いが、行が増えても静かに壊れないよう条件で押さえる。
+ *
+ * ★ **ベンチプレスのカードを使う。** 3 本とも段の付かない素のセット行なので
+ *   「上・掴んだ行・下」の差が持ち上がりだけになる（ダンベルプレスは 3 本目に段が 2 行
+ *   ぶら下がる）。ピン行は clip にも `targets` にも入らないので、そこだけ区切りが
+ *   言語非依存の中黒（`views/day.rs` の `pins.join("・")`）でも en の図には写らない。
+ */
+async function setupReorder(page, { ids }) {
+  await gotoTab(page, 'tab-record', 'screen-record');
+  await selectDay(page, DAY_TODAY);
+  const card = page.locator(`#card-${ids.byName(PINNED.name).id}`);
+  await card.waitFor({ state: 'visible' });
+  const rows = card.getByTestId('set-row');
+  await waitFor(async () => (await rows.count()) === 3, 'セット行が 3 本出る');
+
+  // 掴むのは真ん中。上下に 1 本ずつ残るので「並びの途中を動かしている」が読める
+  const lifted = rows.nth(1);
+  const targets = [rows.first(), rows.last()];
+  await scrollUnion(page, targets, { margin: REORDER_PAD + 4 });
+
+  const grab = await lifted.getByTestId('set-handle').boundingBox();
+  if (!grab) throw new Error('掴む番号が画面に無い');
+  const x = Math.round(grab.x + grab.width / 2);
+  const y = Math.round(grab.y + grab.height / 2);
+  const height = await page.evaluate(() => innerHeight);
+  // 指が帯に入ると、止まっていてもフレームごとにスクロールし続けて絵が揺れる
+  if (y - LIFT_PX < EDGE_BAND_PX || y > height - EDGE_BAND_PX) {
+    throw new Error(`掴む位置 y=${y}（持ち上げ後 ${y - LIFT_PX}）が端の自動スクロールの帯に入る`);
+  }
+
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  // ★ 少しだけ動かす。**隣の箱の中心を越えない量**にすること（越えると入れ替わりが
+  //   起き、`teardownReorder` の `mouse.up()` が db に並び順を書いてしまう）。
+  //   持ち上がった行が上の行に食い込むのは、この変位がそのまま出たもの
+  await page.mouse.move(x, y - LIFT_PX);
+  await waitFor(
+    async () => (await lifted.getAttribute('data-drag')) === 'lift',
+    'セット行が持ち上がる（data-drag="lift"）',
+  );
+  await settle(page);
+  return targets;
+}
+
+/** [`setupReorder`] の後始末。**撮影の後**に呼ばれる（`shootManual`）。 */
+async function teardownReorder(page) {
+  await page.mouse.up();
+  await settle(page);
+}
+
+/**
+ * 章 12「新機能のお知らせ」。被写体は**画面最上段のお知らせの帯**。
+ *
+ * ★ **未読の状態を作る必要がある。** 既定の `UI_STATE` は `release_seen` を持たないので
+ *   `whatsnew::bootstrap` が起動時に「全部既読」の基準値を書き、バナーが出ない。
+ * ★ 書く値は **1 に固定**する。`i18n.rs` の `RELEASES` から 2 番目の id を読む形は
+ *   お知らせが増えるたびに図の意味が動くが、1 なら「未読が複数件たまっている」絵の
+ *   ままで壊れない（お知らせ番号は単調増加で、二度と振り直さない）。
+ * ★ clip はバナーと**そのすぐ下の画面見出し**の union。バナーだけだと細すぎて
+ *   「画面の一番上に出る」が読めない。
+ * ★ **`page` を汚したまま終わる**（init script を足して `reload()` するので、以後
+ *   この context の全ロードで未読が復活する）。だから `FIGS` の**最後**に置くこと。
+ */
+async function setupWhatsNew(page) {
+  await closeAnySheet(page);
+  await page.context().addInitScript((ui) => {
+    // `seedStorage` と同じ作法。init script は about:blank でも走り、そこは
+    // opaque origin なので localStorage が SecurityError を投げる
+    if (location.origin === 'null') return;
+    try {
+      localStorage.setItem('fitness-memo/ui/v1', ui);
+    } catch {
+      // opaque origin。本物の文書で撮り直される
+    }
+  }, JSON.stringify({ manual_hint_dismissed: true, release_seen: WHATS_NEW_SEEN }));
+  await page.reload();
+  await page.getByTestId('screen-record').waitFor({ state: 'visible' });
+  const banner = page.getByTestId('whatsnew-banner');
+  await banner.waitFor({ state: 'visible' });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await settle(page);
+  // `.screen-title` は記録タブと推移タブにあり、記録タブでは月見出し（`cal-title`）。
+  // 記録タブに戻った直後なので必ず 1 つ
+  return [banner, page.locator('.screen-title')];
 }
 
 // ── 撮影 ──────────────────────────────────────────────────────────────────────
@@ -740,6 +1043,9 @@ async function shootManual(page, cx) {
       // ★ `.sheet` の 0.22s の translate と backdrop のフェードが途中で写るのを止める
       animations: 'disabled',
     });
+    // ★ **撮った後に呼ぶ。** `reorder` は押しっぱなしの状態そのものが被写体なので、
+    //   setup の中で `mouse.up()` できない
+    await fig.teardown?.(page);
     const label = `public/manual/${cx.lang}/${fig.id}.webp`;
     out.push({ shot: path, repo: manualRepo(cx.lang, fig.id), label });
     if (!check) console.log(`撮影: ${label}（${clip.width}×${clip.height}）`);
@@ -826,7 +1132,7 @@ try {
   });
 
   const seedJson = await pageA.evaluate(
-    ({ seed, weights, routines, pinned }) => {
+    ({ seed, weights, routines, pinned, labels }) => {
       const KEY = 'fitness-memo/v3';
       const db = JSON.parse(localStorage.getItem(KEY));
       // Local::now().date_naive() と揃えるため UTC ではなくローカル日付で組み立てる
@@ -854,6 +1160,12 @@ try {
           })),
           // at は当日ぶんだけ埋める（過去日バックフィルは null。ExerciseLog.at の意味）
           at: daysAgo === 0 ? Date.now() : null,
+          // ★ **付かない日は `label` キーごと出さない。** `ExerciseLog::label` は
+          //   `skip_serializing_if = "Option::is_none"`（model.rs:522）なので、
+          //   `null` を書くと読めはするが保存 JSON が実アプリと食い違う（`drops` と同じ話）
+          ...(name === labels.name && labels.on[daysAgo] !== undefined
+            ? { label: labels.defs[labels.on[daysAgo]].id }
+            : {}),
         });
         db.sessions[key] = session;
       }
@@ -868,6 +1180,12 @@ try {
       if (!pex) throw new Error(`プリセットに無い種目: ${pinned.name}`);
       pex.pins = pinned.pins;
       pex.interval_sec = pinned.interval_sec;
+      const lex = db.exercises.find((e) => e.name === labels.name);
+      if (!lex) throw new Error(`プリセットに無い種目: ${labels.name}`);
+      // ★ **`name_en` は JSON に入れない。** `Label` に無いフィールドなので、
+      //   入れても serde が黙って捨てるだけ。en への差し替えは Node 側の
+      //   `englishNames` が行う
+      lex.labels = labels.defs.map(({ id, name, color }) => ({ id, name, color }));
       db.routines = routines.map(({ id, name, names }) => ({
         id,
         name,
@@ -882,7 +1200,7 @@ try {
       //   boot → 注入 → reload の 2 ロードが 1 ロードで済む
       return localStorage.getItem(KEY);
     },
-    { seed: SEED, weights: BODY_WEIGHTS, routines: ROUTINES, pinned: PINNED },
+    { seed: SEED, weights: BODY_WEIGHTS, routines: ROUTINES, pinned: PINNED, labels: LABELS },
   );
 
   await pageA.reload();
@@ -902,7 +1220,7 @@ try {
       const { page } = await newContext(browser, {
         locale: lang === 'ja' ? 'ja-JP' : 'en-US',
         deviceScaleFactor: 2,
-        db: lang === 'en' ? englishRoutines(seedJson) : seedJson,
+        db: lang === 'en' ? englishNames(seedJson) : seedJson,
       });
       await page.goto(BASE);
       await page.getByTestId('screen-record').waitFor({ state: 'visible' });

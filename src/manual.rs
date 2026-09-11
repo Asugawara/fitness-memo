@@ -11,7 +11,7 @@
 pub struct Chapter {
     /// DOM id / testid / 図のファイル名の基底（`"man-"` を前置して使う）。ASCII のスラッグ。
     pub id: &'static str,
-    /// この章が図を持つか。
+    /// この章が図を持つか。**いまは 12 章すべてが持つ。**
     ///
     /// ★ **`true` にするなら `public/manual/{ja,en}/{id}.webp` が実在し、`ChapterText`
     ///   の `fig` / `fig_alt` が両言語とも埋まっていること。** 3 つは
@@ -22,17 +22,10 @@ pub struct Chapter {
     ///   側へ置いてある。クリップが要素の外接矩形なので内容依存で、実際に `accordions`
     ///   は ja 786×1030 / en 786×994 と高さが違う（部位名の折り返し行数の差）。
     ///
-    /// 図を持たない 6 章（`progress-target` / `labels` / `progress-labels` / `reorder` /
-    /// `backup` / `whats-new`）が `false` なのは、静止画で伝わらない（`reorder`）か、
-    /// 閉じた `<select>` しか写らない（`progress-target`）か、文章で足りる
-    /// （`labels` / `backup` / `whats-new`）ため。**`progress-labels` も文章で足りる**
-    /// 側 — チップは「すべて」「Power」のように文字で名前が出ており、位置も「種目を
-    /// 選ぶとセレクタの下に出る」で特定できる。点の色は見れば分かる。
-    ///
-    /// ★ 逆に `drop-sets` が図を持つのは、段を足す口が**文字ラベルを持たない
-    ///   アイコン 1 個**（`arrow-down-wide-narrow`）で、「回数欄のすぐ右」という位置を
-    ///   文章だけでは特定させられないため（`adr/ux/drop-sets-as-a-box-under-the-main-set.md`
-    ///   の決定 1 がラベルを置かない判断をしている）。
+    /// ★ **全章が `true` でもこのフィールドは残す。** 図を持てるかどうかは章ごとの性質で、
+    ///   「たまたま今は全部にある」とは別のこと。消すと、図の無い章を足した瞬間に
+    ///   `fig` / `fig_alt` / 実ファイルの 3 つを縛る上のテストが**言語ごとに沈黙する**
+    ///   （`fig: None` が正しいのか付け忘れなのかを型で区別できなくなる）。
     pub has_fig: bool,
 }
 
@@ -41,7 +34,7 @@ pub struct Chapter {
 pub const MANUAL_CHAPTERS: &[Chapter] = &[
     Chapter {
         id: "progress-target",
-        has_fig: false,
+        has_fig: true,
     },
     Chapter {
         id: "chart-readout",
@@ -53,11 +46,11 @@ pub const MANUAL_CHAPTERS: &[Chapter] = &[
     },
     Chapter {
         id: "labels",
-        has_fig: false,
+        has_fig: true,
     },
     Chapter {
         id: "progress-labels",
-        has_fig: false,
+        has_fig: true,
     },
     Chapter {
         id: "exercise-memo",
@@ -77,15 +70,15 @@ pub const MANUAL_CHAPTERS: &[Chapter] = &[
     },
     Chapter {
         id: "reorder",
-        has_fig: false,
+        has_fig: true,
     },
     Chapter {
         id: "backup",
-        has_fig: false,
+        has_fig: true,
     },
     Chapter {
         id: "whats-new",
-        has_fig: false,
+        has_fig: true,
     },
 ];
 

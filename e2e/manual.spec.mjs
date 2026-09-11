@@ -16,15 +16,22 @@ import { dirname, join } from 'node:path';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = process.env.E2E_BASE || '/';
 
-// 図を持つ章（計画「3. 章立て」）。無い 5 章（progress-target / labels / reorder /
-// backup / whats-new）のうち reorder / backup はテスト 8 が個別に見る。
+// 図を持つ章。**12 章すべてが持つ**ので、`src/manual.rs` の `MANUAL_CHAPTERS` と
+// 同じ順・同じ長さで並べる（章順で並べるのは、失敗したときに「何章目で落ちたか」を
+// 画面の並びから追えるようにするため）。
 const FIG_CHAPTERS = [
+  'progress-target',
   'chart-readout',
   'copy-last',
+  'labels',
+  'progress-labels',
   'exercise-memo',
   'drop-sets',
   'empty-day',
   'accordions',
+  'reorder',
+  'backup',
+  'whats-new',
 ];
 
 function normalizeBase(base) {
@@ -397,18 +404,23 @@ test('タブ往復で開いた章が保たれ、可視域に入っている', as
   expect(box.y).toBeLessThanOrEqual(viewport.height);
 });
 
-// 8. 図が無い章も本文がある ─────────────────────────────────────────────────
+// 8. 全章に本文と図がある ──────────────────────────────────────────────────
+//
+// ★ かつては「図が無い章にも本文がある」を見ていたが、全 12 章が図を持つように
+//   なって被写体が消えた。**消さずに向きを変える** — 本文（箇条書き）が 1 つ以上あり、
+//   図がちょうど 1 枚あることを全章で見る。図の中身（読める / 寸法が合う）は 3 と 4 が
+//   持つので、ここが見るのは「どの章にも両方がある」だけ。
 
-test('図が無い章にも本文がある', async ({ page }) => {
+test('全 12 章に本文と図がある', async ({ page }) => {
   await page.goto('./');
   await openManual(page);
 
-  for (const id of ['reorder', 'backup']) {
+  for (const id of FIG_CHAPTERS) {
     const group = await openChapter(page, id);
     const body = group.getByTestId('man-body');
     const items = body.locator('li');
     expect(await items.count(), `${id} に本文が無い`).toBeGreaterThan(0);
-    await expect(body.getByTestId('man-fig')).toHaveCount(0);
+    await expect(group.getByTestId('man-fig'), `${id} に図が無い`).toHaveCount(1);
   }
 });
 

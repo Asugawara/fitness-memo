@@ -636,8 +636,13 @@ h3 {
 /* 推移タブのチップは `.selectors` の中に居る。隣の `.target-select` /
    `.segmented` は `--surface` なので、`--bg` のままだと 1 段沈んで見える。
    ★ `.lbl` 自身の `background` は変えない（記録タブのカードの中では `--bg` が
-     正しい。あちらは `--surface` のカードの上に載る）。 */
-.selectors .lbl {
+     正しい。あちらは `--surface` のカードの上に載る）。
+   ★ **`:not(.on)` で門番する。** これと `.lbl.on` は詳細度が同じ (0,2,0) で、
+     ソース順が後ろのこちらが勝つ。素の `.selectors .lbl` だと選択中のチップだけ
+     `background` が `--surface` に戻り、`color: var(--accent-text)`（light では
+     #ffffff）だけが残って**白地に白文字**になる。記録タブのチップは `.selectors` の
+     外なので影響を受けず、今までどおりベタ塗り。 */
+.selectors .lbl:not(.on) {
   background: var(--surface);
 }
 

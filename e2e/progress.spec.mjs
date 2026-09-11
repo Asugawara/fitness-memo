@@ -110,6 +110,11 @@ test('1. 部位を選ぶと種目セレクタはその部位の種目だけに�
 
   await groupSelect(page).selectOption({ label: '背中' });
   expect(await exerciseLabels(page)).toEqual(['懸垂']);
+
+  // 記録がある状態では、統計と記録テーブルの容器そのものが出ている
+  // （5. の「記録が無いと両方消える」の対）
+  await expect(page.getByTestId('stats')).toBeVisible();
+  await expect(page.getByTestId('records')).toBeVisible();
 });
 
 test('2. 部位が「すべて」だと全部位の種目が並ぶ', async ({ page }) => {

@@ -154,7 +154,13 @@ test('SW が activated になる', async ({ page, browserName }) => {
 
   await page.goto('./');
   const state = await waitForSwActivated(page);
+  // ★ `waitForSwActivated` は 'activated' を返すか永遠に待つかの 2 択なので、
+  //   `toBe('activated')` はここに来た時点で落ちようがない（失敗しえない）。
+  //   `clients.claim()`（public/sw.js）でページ自身が制御下に入ったことを、
+  //   scriptURL が sw.js を指すという別経路から確かめる
   expect(state).toBe('activated');
+  const controllerScript = await page.evaluate(() => navigator.serviceWorker.controller?.scriptURL);
+  expect(controllerScript).toContain('sw.js');
 });
 
 test('破損した JSON を注入すると退避キーが作られ、復元失敗の通知が出る', async ({ page }) => {

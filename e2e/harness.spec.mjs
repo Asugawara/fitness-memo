@@ -89,7 +89,23 @@ test.describe('static-server ハーネス（アプリ非依存 / fixture dist）
     const byDirectory = await request.get(`http://localhost:${rootPort}/`);
     const byFilename = await request.get(`http://localhost:${rootPort}/index.html`);
     expect(byDirectory.status()).toBe(200);
+    expect(byFilename.status()).toBe(200);
     expect(await byDirectory.text()).toBe(await byFilename.text());
+  });
+
+  test('6. パストラバーサルは 403 になる（ROOT の外に出ない）', async ({ request }) => {
+    // ★ 生の "../" はもちろん、`%2e%2e`（エンコードした dot）も `new URL()` の
+    //   ドットセグメント正規化が特別扱いして消してしまい、サーバーに届く前に
+    //   "/package.json" へ潰れる（それだと 404 にしかならず、この分岐を通らない）。
+    //   `%2f`（エンコードした `/`）でセグメント境界そのものを隠すと、`URL` は
+    //   セグメントに分けられず正規化できない。static-server.mjs 側は
+    //   `decodeURIComponent` で `%2e`/`%2f` の両方をまとめて生の "../" に戻してから
+    //   join するので、そこで初めて ROOT の外へ出る（FIXTURE_DIST は repo root から
+    //   3 段下 = e2e/fixtures/dist なので 3 段分要る）
+    const res = await request.get(
+      `http://localhost:${rootPort}/%2e%2e%2f%2e%2e%2f%2e%2e%2fpackage.json`,
+    );
+    expect(res.status()).toBe(403);
   });
 
   test('4. 存在しないパスは 404 になる', async ({ request }) => {

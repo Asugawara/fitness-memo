@@ -85,6 +85,15 @@ test.describe('static-server ハーネス（アプリ非依存 / fixture dist）
     expect(res.headers()['content-type']).toBe('application/wasm');
   });
 
+  test('2b. .webp に content-type image/webp が付く', async ({ request }) => {
+    // ★ 未知拡張子は application/octet-stream を返す（static-server.mjs の既定）。
+    //   <img> はスニッフィングで表示されるので、これが無いと目視では気づけないまま
+    //   マニュアルの図の E2E（`image/webp` を検証するもの）が必ず落ちる
+    const res = await request.get(`http://localhost:${rootPort}/test.webp`);
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-type']).toBe('image/webp');
+  });
+
   test('3. ディレクトリURL（トレイリングスラッシュ）で index.html が返る', async ({ request }) => {
     const byDirectory = await request.get(`http://localhost:${rootPort}/`);
     const byFilename = await request.get(`http://localhost:${rootPort}/index.html`);

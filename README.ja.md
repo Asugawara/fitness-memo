@@ -22,13 +22,32 @@ iPhone のホーム画面から起動して完全オフラインで動く、個�
 
 ## 画面
 
-タブは **記録 / 推移 / 設定** の 3 つ。記録タブはカレンダーと選択日の入力欄が縦に並んだ 1 画面で、日セルをタップするとその下の入力欄がその日のものになる（[記録タブをカレンダー + 選択日エディタの単一画面にする](adr/ux/record-tab-calendar-with-day-editor.md)）。設定タブは **エクスポート / インポート・トレーニングメニュー・種目・表示数・ドロップセット・ホーム画面への追加のしかた・言語** の 7 行だけを並べ、押すとその節に入る（[設定タブの入口を節の一覧にし、中身は 1 階層下ろす](adr/ux/settings-as-a-list-of-sections.md)）。
+タブは **記録 / 推移 / 設定** の 3 つ。記録タブはカレンダーと選択日の入力欄が縦に並んだ 1 画面で、日セルをタップするとその下の入力欄がその日のものになる（[記録タブをカレンダー + 選択日エディタの単一画面にする](adr/ux/record-tab-calendar-with-day-editor.md)）。設定タブは **エクスポート / インポート・トレーニングメニュー・種目・表示数・ドロップセット・ホーム画面への追加のしかた・活用方法・言語** の 8 行だけを並べ、押すとその節に入る（[設定タブの入口を節の一覧にし、中身は 1 階層下ろす](adr/ux/settings-as-a-list-of-sections.md)）。
 
 | 記録 | 推移 | 設定 |
 |---|---|---|
 | ![記録タブ](assets/1-record.png) | ![推移タブ](assets/2-progress.png) | ![設定タブ](assets/3-menu.png) |
 
 スクリーンショットは `trunk build && node scripts/shots.mjs` で撮り直す。端末（iPhone 15 Pro 相当）・standalone 起動・ロケール・投入する記録を固定してあるので、UI を変えたら 3 枚まとめて同じ条件で更新できる。
+
+> [!NOTE]
+> 上の画面はいずれも日本語 UI。これは今は技術的な制約ではなく決定 — `scripts/shots.mjs` はどの言語コンテキストにも同じシードデータを流す（プリセットの ID は言語で変わらず、表示名だけが `ex_name` / `grp_name` で UI 言語に追従する）ので、英語 UI を撮るのにも翻訳は要らない。README は画面ごとに日英 2 枚を同期させ続けるより、代表として 1 言語に決めているだけ。英語の画面は実在する — 使い方マニュアルは日英両方を撮っており、`public/manual/en/` にある（下の「アプリ内マニュアル」参照）。
+
+## アプリ内マニュアル
+
+設定タブに新しい行「活用方法」が増えた（ホーム画面への追加のしかたのすぐ下、言語のすぐ上）。シートではなく節として開くので、タブを往復しても開いていた場所を覚えている。中身は 12 章の折りたたみ一覧で、章ごとに番号付きの短い項目が並ぶ。同時に開くのは 1 つ — 種目一覧と同じ形（[使い方マニュアルを設定タブの節にし、開く章は 1 つだけにする](adr/ux/manual-as-a-settings-section-with-one-open-chapter.md)）: 推移タブの絞り込み・グラフの読み取り欄・前回をコピー・種目ごとのラベル・ラベルで推移を絞る・「＋ メモ」で開く4つ・ドロップセット・空の日から始める・部位の折りたたみ・並び替え・書き出しと読み込み・新機能のお知らせ。記録タブにも初回だけ活用方法への手掛かりを小さく出す — ホーム画面への追加の注意書きとは並べて出さないので、常にどちらか一方だけが見える。
+
+12 章すべてが実際の画面のスクリーンショットを日英両方で持つ — `public/manual/{ja,en}/` の下に計 24 枚の `.webp`。撮影は常に**ライトテーマ固定**（[使い方マニュアルの図を手描きの模式図ではなくアプリ自身のスクリーンショットにする](adr/architecture/manual-figures-as-served-screenshots.md)）。撮り直しはいつ行っても安全 — 時計とタイムゾーンを `scripts/shots.mjs` の中で固定してあるので、何か月後に撮り直しても「今日」が動かず、中身が変わっていなければバイト単位で同じ画像になる:
+
+```sh
+node scripts/shots.mjs                     # 全部：README の 3 枚 + マニュアルの 24 枚
+node scripts/shots.mjs --only=manual       # マニュアルの 24 枚だけ（pre-commit が呼ぶのはこれ）
+node scripts/shots.mjs --only=readme       # README の 3 枚だけ（UI が落ち着いたら手で叩く）
+node scripts/shots.mjs --only=manual:<id>  # 1 章だけ日英両方、例: --only=manual:copy-last
+node scripts/shots.mjs --check             # 一時ディレクトリに撮ってバイト比較。差があれば exit 1
+```
+
+`.githooks/pre-commit` が呼ぶのは常に `--only=manual` で、しかも UI に関わるパスを触ったコミットのときだけ。README の 3 枚は意図的に手動・不定期の作業にしてあり、撮り忘れは `scripts/release.sh` の `--check` がリリース前に捕まえる想定（[マニュアルの図は pre-commit で撮り直すが、UI に関わるパスを触ったコミットに限る](adr/deploy/screenshots-in-pre-commit-on-ui-paths.md)）。図は合計で約 350KiB になるが、Service Worker のオフラインシェルには一度も入れていない — オフラインでは図が欠けることをマニュアル自身が本文で伝える設計なので、開かない人にまで毎回のインストールで背負わせる理由が無い。
 
 ## アイコンと共有画像
 
@@ -122,7 +141,9 @@ npx playwright test --project=chromium  # 軽い E2E
 npx playwright test                     # 全 project（Chromium / iPhone 15 Pro (WebKit) / Pixel 7）
 ```
 
-`.githooks/pre-commit` は `main` への `docs/` 混入をガードしたうえで、`cargo fmt --all -- --check` → `cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings` → `cargo test` → `trunk build` → `npx playwright test --project=chromium --project=harness` を順に実行する。緊急時は `SKIP_HOOKS=1 git commit` で飛ばせる。
+`.githooks/pre-commit` は `main` への `docs/` 混入をガードしたうえで、`cargo fmt --all -- --check` → `cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings` → `cargo test` → `trunk build` →（UI に関わるパスを触ったコミットのときだけ）`node scripts/shots.mjs --only=manual` → `npx playwright test --project=chromium --project=harness` を順に実行する。緊急時は `SKIP_HOOKS=1 git commit` でフック全体を飛ばせる。`SHOTS=0 git commit` はそれより狭く、**撮り直しだけ**を飛ばして fmt / clippy / test / build / E2E はそのまま走らせる — 撮影そのものが壊れているときや、コードと図のコミットを分けたいときに使う。
+
+マニュアルの図を 1 章だけ直しているときは、`node scripts/shots.mjs --only=manual:<id>`（例: `--only=manual:copy-last`）でその章だけを日英両方撮り直せる。12 枚全部は回らない。
 
 `playwright.config.mjs` は `locale: 'ja-JP'` を固定しているので既存の spec は日本語 UI を見る。英語 UI は `e2e/i18n.spec.mjs` が `en-US` に切り替えて見る。
 

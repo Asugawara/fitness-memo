@@ -7,6 +7,7 @@ pub mod day;
 pub mod drag;
 pub mod help;
 pub mod icon;
+pub mod manual;
 pub mod progress;
 pub mod routine;
 pub mod settings;
@@ -118,6 +119,15 @@ pub struct KbCtx(pub RwSignal<bool>);
 #[derive(Clone, Copy)]
 pub struct OpenGroupCtx(pub RwSignal<Option<GroupId>>);
 
+/// マニュアルで開いている章。**同時に開くのは 1 つ**。
+///
+/// ★ `OpenGroupCtx` と同じ理由で `App` に置く。「読む → 記録タブで試す → 戻る」で
+///   読まれるので、タブ往復で閉じると毎回章を探し直すことになる。**永続化はしない**のも
+///   同じ理由 — 章 index は `usize` なので `Db` の ID のように宙に浮く心配は無いが、
+///   一生に数回読むものを次回起動時まで覚えておく価値が無い。
+#[derive(Clone, Copy)]
+pub struct OpenManualCtx(pub RwSignal<Option<usize>>);
+
 /// 設定タブで開いているページ（adr/ux/settings-as-a-list-of-sections.md）。
 ///
 /// ★ `OpenGroupCtx` とまったく同じ理由でここに置く。`Settings` の中に持つと、
@@ -131,6 +141,7 @@ pub enum SettingsPage {
     Exercises,
     History,
     DropSets,
+    Manual,
     Language,
 }
 
@@ -160,6 +171,12 @@ pub fn use_kb() -> KbCtx {
 pub fn use_open_group() -> RwSignal<Option<GroupId>> {
     use_context::<OpenGroupCtx>()
         .expect("OpenGroupCtx が provide されていない")
+        .0
+}
+
+pub fn use_open_manual() -> RwSignal<Option<usize>> {
+    use_context::<OpenManualCtx>()
+        .expect("OpenManualCtx が provide されていない")
         .0
 }
 
@@ -685,6 +702,15 @@ impl TabCtx {
     }
 }
 
+/// 他画面から `Tab::Settings` などへプログラム遷移するために `TabCtx` を引く。
+///
+/// ★ これまで `TabCtx` を消費する view は無かった（`App` 自身が局所変数として
+///   閉じているだけだった）。`ManualHint` の CTA が画面間の初めてのプログラム遷移
+///   なので、ここで初めて `use_context` 経由の取り出し口が要る。
+pub fn use_tab() -> TabCtx {
+    use_context::<TabCtx>().expect("TabCtx が provide されていない")
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     // ★ **言語を最初に決める。** `storage::load` はプリセットを投入する言語と起動時通知の
@@ -716,6 +742,7 @@ pub fn App() -> impl IntoView {
     //   理由は OpenGroupCtx と SettingsPage を参照
     provide_context(OpenGroupCtx(RwSignal::new(None)));
     provide_context(SettingsPageCtx(RwSignal::new(SettingsPage::default())));
+    provide_context(OpenManualCtx(RwSignal::new(None)));
     // ★ こちらは永続化する（`HistoryCtx` の doc を参照）。起動時に 1 回だけ読む
     provide_context(HistoryCtx(RwSignal::new(storage::history_count())));
     provide_context(DropsCtx(RwSignal::new(storage::drops())));

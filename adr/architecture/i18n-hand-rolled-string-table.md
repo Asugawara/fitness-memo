@@ -5,6 +5,44 @@
 - **カテゴリ**: architecture
 - **関連**: [グラフライブラリを使わず SVG を自前で描く](no-chart-library-hand-rolled-svg.md), [ルーターを使わずタブを enum signal で切り替える](no-router-tab-enum-signal.md), [UI 依存を wasm32 の target 別 dependencies に置く](wasm-target-scoped-dependencies.md), [グラフの座標計算を `chart_layout` に切り出してテスト可能にする](chart-layout-as-a-testable-module.md), [言語はブラウザに従い、選んだらそれを優先する](../ux/language-follows-the-browser-then-the-setting.md)
 
+> **追記（マニュアル節の時点）— 構造体リテラルの網羅性が効かない場所を作った。**
+> [使い方マニュアルを設定タブの節にし、章は 1 つだけ開く](../ux/manual-as-a-settings-section-with-one-open-chapter.md)
+> の 8 章を **`chapters: &'static [ChapterText]` という配列**で持たせた。
+> フラットに 8 章 × (見出し + 段落 3〜5 + alt + 寸法) を並べると 50 フィールド × 2 言語に
+> なり、章を 1 つ並べ替えるだけで 2 か所の書き換えになるためである。
+>
+> **その代償として、この ADR が「決め手だった」と書いた性質が章の中身には効かない。**
+> `const JA: S = S { .. }` の網羅性が守るのは `manual: JA_MANUAL` というフィールドが
+> 埋まっていることまでで、**配列の要素が何番目に何を書いているかは型が見ていない。**
+>
+> 代わりにテストを 3 本置いた。
+>
+> 1. `every_language_has_the_same_manual_chapters`（`src/i18n.rs`）— 章数が
+>    `manual::MANUAL_CHAPTERS` と一致 / 見出しと本文が非空 /
+>    `has_fig == fig.is_some() == !fig_alt.is_empty()` の 3 つが揃う /
+>    **`fig_alt` が言語別の文字数上限以内**（ja 20 字 / en 45 字、`chars().count()` で測る。
+>    `len()` はバイト数なので全角では上限が実質 1/3 になる）
+> 2. `the_manual_paragraph_counts_match_across_languages`（同）— 段落数が日英で一致
+>    （片方だけ 1 段落増えるのがドリフトの典型）
+> 3. `every_manual_figure_exists_with_the_declared_size`（`src/manual.rs`）—
+>    宣言した図が実在し、WebP から読んだ寸法が言語ごとに一致し、**逆向きに孤児の
+>    ファイルが無い**
+>
+> **取り戻せない穴を明記する。** 3 本はいずれも「章数・段落数が一致」「非空」しか
+> 見ないので、**同じ段落数で意味がずれている状態は検出できない** — ja の 2 段落目が
+> ピンの説明で en の 2 段落目がインターバルの説明、という形のドリフトはテストを
+> 素通りする。章の並べ替えも同様で、`MANUAL_CHAPTERS` と `JA_MANUAL` / `EN_MANUAL` の
+> 順序がずれてもコンパイルは通る（長さが同じなので）。**レビューで読むしかない。**
+>
+> 順序を `MANUAL_ORDER` に分けて章ごとに名前付きフィールドの struct
+> （`CopyLastText { when_shown, what_copies, notes, fig_alt }`）にすれば型で守れるが、
+> 8 章ぶんの struct が増える。この規模では採らない。**文言が数倍に増えたら再検討する。**
+>
+> なお **`fig`（図の宣言寸法）は `ChapterText` 側（言語別）に置いてある。**
+> クリップが要素の外接矩形なので寸法が内容依存になり、実際に `accordions` は
+> ja 786×1030 / en 786×994 と違う。言語非依存の `MANUAL_CHAPTERS` に置いていたら
+> テスト 3 が片方の言語で必ず落ちていた。
+
 ## 背景
 
 日本語専用で作ってきたアプリを英語にも対応させることになった。UI に出る文字列リテラルは

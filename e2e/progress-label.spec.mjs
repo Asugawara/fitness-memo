@@ -336,6 +336,8 @@ test('2. チップ行はラベル定義がある種目にだけ出る', async ({
   await expect(chips(page)).toHaveCount(4);
   await expect(anyChip(page)).toHaveAttribute('aria-pressed', 'true');
   await expect(chip(page, 'P')).toHaveAttribute('aria-pressed', 'false');
+  // ラベルがある種目（ベンチプレス）では行そのものが出ている
+  await expect(page.getByTestId('progress-label-row')).toBeVisible();
 
   // ★ ラベル定義が 0 本の種目では行ごと出さない（「すべて」しか無い行は
   //   操作でも情報でもない）
@@ -434,6 +436,8 @@ test('7. 種目を切り替えると「すべて」に戻る', async ({ page }) 
   await page.getByTestId('exercise-select').selectOption({ label: 'ベンチプレス' });
   await expect(anyChip(page)).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('chart')).toHaveAttribute('data-points', '4');
+  // ラベルがある種目に戻ると行そのものが再び出る
+  await expect(page.getByTestId('progress-label-row')).toBeVisible();
 });
 
 // ── 8. 既定色 ───────────────────────────────────────────────────────────────

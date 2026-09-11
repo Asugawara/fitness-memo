@@ -177,6 +177,20 @@ test('6. ✕ で閉じても同じく既読になり、リロードしても出�
 });
 
 test('7. release_seen に整数の異常値が入っていても落ちず、他の設定は残る', async ({ page }) => {
+  // 最新の id を DOM から学習する（テスト 4 と同じ方法）。開くだけなら
+  // release_seen は動かないので、この後のループに影響しない
+  await setUiState(page, { release_seen: 0 });
+  await page.reload();
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+  await page.getByTestId('whatsnew-banner-open').click();
+  const topId = Number(
+    await page
+      .getByTestId('whatsnew-sheet')
+      .getByTestId('whatsnew-release')
+      .first()
+      .getAttribute('data-id'),
+  );
+
   // ★ "abc" のような文字列は入れない。`ui_state()`（storage.rs）は 1 フィールドでも
   //   型が合わなければ `UiState` 全体を `Default` に落とすので、文字列を入れると
   //   `lang` まで消えて必ず赤になる（history / lang の既存 spec も正常値の型しか
@@ -192,6 +206,20 @@ test('7. release_seen に整数の異常値が入っていても落ちず、他�
       ui.install_hint_dismissed,
       `release_seen=${bad} で install_hint_dismissed が残っている`,
     ).toBe(true);
+
+    // ★ `core::unseen_releases` は `id > last_seen` を未読とする。異常値でも
+    //   この比較規則どおりにバナーの有無が決まること（黙って壊れない、を実際に見る）
+    if (bad >= topId) {
+      await expect(
+        page.getByTestId('whatsnew-banner'),
+        `release_seen=${bad} でバナーが出ている`,
+      ).toHaveCount(0);
+    } else {
+      await expect(
+        page.getByTestId('whatsnew-banner'),
+        `release_seen=${bad} でバナーが出ていない`,
+      ).toBeVisible();
+    }
   }
 });
 

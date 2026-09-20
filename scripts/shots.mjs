@@ -798,6 +798,10 @@ async function setupMemoOpen(page, { ids }) {
   for (const t of ['set-note', 'pin-box', 'interval-box', 'exercise-note']) {
     await card.getByTestId(t).first().waitFor({ state: 'visible' });
   }
+  // ★ 開いた結果フッタが sticky の帯に隠れていれば rAF で隠れたぶんだけ見せる補正が
+  //   入るようになった（adr/ux/viewport-after-card-height-changes.md）。scrollUnion が
+  //   位置を測る前にその補正を着地させる（:409-418 の settle と同じ規約）
+  await settle(page);
   // ★ **セット行から種目メモまで。** 4 つ目（セット行ごとのメモ欄）はセット行の中に
   //   あるので、`pin-box` / `interval-box` / `exercise-note` の 3 つだけでは章 4 の主張
   //   （1 つのトグルで 4 つが一斉に開く）が図に写らない。

@@ -32,6 +32,10 @@
   --chip-none: #eceef1;
 
   --tabbar: 56px;
+
+  /* `block: nearest` で下端に寄せるとき sticky の帯（`.add-wrap`: 下端オフセット 8px +
+     高さ 66px）を避けて 8px 空ける。66 は E2E V5 で実測と突き合わせる */
+  --reveal-bottom: calc(var(--tabbar) + env(safe-area-inset-bottom) + 82px);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -567,6 +571,16 @@ h3 {
   padding: 12px;
   margin-bottom: 12px;
   scroll-margin-top: 12px;
+}
+
+/* `block: nearest` で下端に寄せるとき、下端固定の `.add-wrap` の裏に入らないよう
+   避ける（`--reveal-bottom` の doc を参照）。`.warn-box` は設定/バックアップ/ヘルプにも
+   使われているので `.card` 配下に限定する。`.kb-open` で帯が消えても余分に空くだけで
+   壊れない */
+.card,
+.card-foot,
+.card .warn-box {
+  scroll-margin-bottom: var(--reveal-bottom);
 }
 
 .card-head {

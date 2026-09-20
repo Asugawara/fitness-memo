@@ -1459,9 +1459,18 @@ test('メモの入口はフッタにあり、外す導線とも合計とも重�
   expect(toggle.width).toBeGreaterThanOrEqual(44);
 });
 
+// rAF を 2 フレーム待つ。scripts/shots.mjs:417 の settle と同じ書き方をこの spec に
+// 複製する（e2e はスペックごとにヘルパを複製する規約、e2e/label.spec.mjs:24-25）。
+const settle = (page) =>
+  page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
 test('メモを開いてもトグルがあった座標に破壊的操作が来ない', async ({ page }) => {
   // フッタが下がることを受け入れた代わりに、押した場所に別の（しかも破壊的な）操作が
-  // 滑り込まないことを機械で固定する
+  // 滑り込まないことを機械で固定する。
+  //
+  // ★ 開いたあとは rAF でスクロールしうるようになった（帯の裏に隠れたぶんだけ見せる）ので、
+  //   click 直後だけでなく rAF 2 回後（settle 後）にも同じ座標をサンプリングする。
+  //   片方だけ見ると、もう片方のタイミングにだけ破壊的操作が滑り込む競合を見逃す。
   const card = await addExercise(page, 'ベンチプレス');
   const rows = card.getByTestId('set-row');
   await rows.nth(0).getByTestId('set-reps').fill('10');
@@ -1473,11 +1482,24 @@ test('メモを開いてもトグルがあった座標に破壊的操作が来�
   const point = { x: before.x + before.width / 2, y: before.y + before.height / 2 };
   await card.getByTestId('note-toggle').click();
 
-  const hit = await page.evaluate(
-    ({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-testid]')?.dataset.testid ?? null,
-    point,
+  const hitAt = () =>
+    page.evaluate(
+      ({ x, y }) =>
+        document.elementFromPoint(x, y)?.closest('[data-testid]')?.dataset.testid ?? null,
+      point,
+    );
+
+  const immediate = await hitAt();
+  expect(['remove-set', 'close-card'], `トグルの座標に ${immediate} が来た（直後）`).not.toContain(
+    immediate,
   );
-  expect(['remove-set', 'close-card'], `トグルの座標に ${hit} が来た`).not.toContain(hit);
+
+  await settle(page);
+  const afterSettle = await hitAt();
+  expect(
+    ['remove-set', 'close-card'],
+    `トグルの座標に ${afterSettle} が来た（rAF 2 回後）`,
+  ).not.toContain(afterSettle);
 });
 
 test('「+ セット」はメモをプリフィルしない（重量だけ引き継ぐ）', async ({ page }) => {

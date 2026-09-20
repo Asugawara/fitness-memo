@@ -1061,6 +1061,8 @@ const JA_MANUAL: Manual = Manual {
                 "自重種目では実質「総レップ数」、時間で数える種目では「総秒数」になります。",
                 "期間を「全期間」にすると、日ごとの点が週単位にまとめられます。",
                 "週単位では、指標は週の合計、体重は週の平均です。",
+                "3M・6M・1Yの体重の線は、設定タブの「体重の線」で日ごとか週平均かを期間ごとに選べます。",
+                "既定は3M・6Mが日ごと、1Yが週平均。1Mは常に日ごとです。週1回以下の計量なら週平均でも線は変わりません。",
                 "体重の第2軸は、指標のグラフが表示されているときだけ重ねて出ます。",
                 "指標に記録が無い期間では、体重の記録があっても第2軸は出ません。",
             ],
@@ -1262,6 +1264,8 @@ const EN_MANUAL: Manual = Manual {
                 "For bodyweight exercises this becomes \"total reps\"; for time-based ones, \"total seconds.\"",
                 "Setting the period to \"All\" groups the daily points by week.",
                 "Weekly, the metric becomes a sum and body weight becomes an average.",
+                "For 3M, 6M and 1Y, choose per period under \"Weight line\" in Settings whether the body-weight line is daily or a weekly average.",
+                "By default 3M and 6M are daily and 1Y is weekly; 1M is always daily. At one weigh-in a week or fewer, weekly changes nothing.",
                 "The body-weight second axis only overlays when the metric chart has something to show.",
                 "In a period with no metric records, the second axis doesn't appear even with body weight logged.",
             ],
@@ -1585,6 +1589,16 @@ impl ReleaseNote {
 /// 直前の最新から 1 つ進める。`&'static [ReleaseNote]` ではなく `&[ReleaseNote]` と書く
 /// （clippy::redundant_static_lifetimes。`presets::PRESETS` と同じ書き方）。
 pub const RELEASES: &[ReleaseNote] = &[
+    ReleaseNote {
+        id: 5,
+        date: "2026-09-21",
+        ja: &[
+            "推移タブの体重の線を、3M・6M・1Y のそれぞれで日ごとに描くか週平均にするか選べるようにしました（設定タブ → 体重の線）。これまでは点が多いと自動で週平均になっていましたが、3M・6M は既定で日ごと、1Y は計量の回数に関係なく既定で週平均です。",
+        ],
+        en: &[
+            "The Progress tab's body-weight line can now be drawn daily or as a weekly average, chosen separately for 3M, 6M and 1Y (Settings › Weight line). It used to switch to a weekly average on its own once a period held many weigh-ins; 3M and 6M now default to daily, and 1Y defaults to weekly however often you weigh in.",
+        ],
+    },
     ReleaseNote {
         id: 4,
         date: "2026-09-11",

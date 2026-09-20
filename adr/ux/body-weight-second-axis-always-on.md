@@ -3,7 +3,12 @@
 - **状態**: 採用
 - **日付**: 2026-08-09
 - **カテゴリ**: ux
-- **関連**: [グラフライブラリを使わず SVG を自前で描く](../architecture/no-chart-library-hand-rolled-svg.md), [指標を種目の属性ではなくグラフの表示設定にする](../data-model/metric-is-a-view-setting.md), [グラフの座標計算を `chart_layout` に切り出してテスト可能にする](../architecture/chart-layout-as-a-testable-module.md)
+- **関連**: [グラフライブラリを使わず SVG を自前で描く](../architecture/no-chart-library-hand-rolled-svg.md), [指標を種目の属性ではなくグラフの表示設定にする](../data-model/metric-is-a-view-setting.md), [グラフの座標計算を `chart_layout` に切り出してテスト可能にする](../architecture/chart-layout-as-a-testable-module.md), [体重の線を 3M / 6M / 1Y ごとに日ごと / 週平均から選ぶ設定にする](weight-line-daily-or-weekly-per-period.md)（決定 5 と結果の「3M 以降は週平均」を改訂）
+
+> **一部改訂。** 決定 5「描画点が 45 を超えたら描画だけ週平均に落とす」と結果の
+> 「3M 以降は週平均に落ちるので滑らかになる」は、
+> [体重の線を 3M / 6M / 1Y ごとに日ごと / 週平均から選ぶ設定にする](weight-line-daily-or-weekly-per-period.md) で
+> 「期間ごとの設定（既定は 1Y だけ週平均）」に置き換わった。本文は当時の判断の記録として消さない。
 
 ## 背景
 

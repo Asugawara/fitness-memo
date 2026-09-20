@@ -141,6 +141,7 @@ pub enum SettingsPage {
     Exercises,
     History,
     DropSets,
+    WeightLine,
     Manual,
     Language,
 }
@@ -228,6 +229,21 @@ pub struct DropsCtx(pub RwSignal<crate::core::Drops>);
 pub fn use_drops() -> RwSignal<crate::core::Drops> {
     use_context::<DropsCtx>()
         .expect("DropsCtx が provide されていない")
+        .0
+}
+
+/// 推移タブの体重の破線を期間ごとに日ごとに描くか週平均に落とすか
+/// （adr/ux/weight-line-daily-or-weekly-per-period.md）。
+///
+/// ★ [`DropsCtx`] とまったく同じ理由でシグナルに載せる。これを読む `views::progress` の
+///   `weight_line` Memo は `Db` を購読して**1 打鍵ごとに走る**ので、そこで `storage` を
+///   叩くと `localStorage.getItem` + `serde_json::from_str` が打鍵ごとに走る。永続化する。
+#[derive(Clone, Copy)]
+pub struct WeightLinesCtx(pub RwSignal<crate::core::WeightLines>);
+
+pub fn use_weight_lines() -> RwSignal<crate::core::WeightLines> {
+    use_context::<WeightLinesCtx>()
+        .expect("WeightLinesCtx が provide されていない")
         .0
 }
 
@@ -747,6 +763,7 @@ pub fn App() -> impl IntoView {
     provide_context(HistoryCtx(RwSignal::new(storage::history_count())));
     provide_context(DropsCtx(RwSignal::new(storage::drops())));
     provide_context(DropPctCtx(RwSignal::new(storage::drop_pct())));
+    provide_context(WeightLinesCtx(RwSignal::new(storage::weight_lines())));
     // ★ 起動時に 1 回だけ評価する（上の HistoryCtx と同じ位置・同じ理由）。既読を
     //   まだ記録していなければここで基準値を書く（`whatsnew::bootstrap` の doc を参照）。
     //   言語切替クロージャの外なので、切り替えるたびに再実行されることはない

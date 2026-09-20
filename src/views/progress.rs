@@ -4,13 +4,14 @@ use chrono::{Months, NaiveDate};
 use leptos::prelude::*;
 
 use crate::core;
-use crate::core::{Drops, LabelFilter, Metric, Pick};
+use crate::core::{Drops, LabelFilter, Metric, Pick, WeightLine};
 use crate::model::{Db, ExerciseId, GroupId, Label, LabelId};
 use crate::storage;
 
 use super::chart::Chart;
 use super::{
     cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, grp_name, t, use_dates, use_db, use_drops,
+    use_weight_lines,
 };
 use crate::i18n::Lang;
 
@@ -200,6 +201,7 @@ pub fn Progress() -> impl IntoView {
     let db = use_db();
     let dates = use_dates();
     let drops = use_drops();
+    let lines = use_weight_lines();
 
     let opts = Memo::new(move |_| db.with(options));
 
@@ -380,6 +382,17 @@ pub fn Progress() -> impl IntoView {
         })
     });
 
+    // 体重の破線を日ごとに描くか週平均に落とすか（adr/ux/weight-line-daily-or-weekly-per-period.md）。
+    //
+    // ★ 1M は常に日ごと。「全期間」は上の `weight` Memo が先に週平均へ落としている（読み取り欄も
+    //   週平均になる既存挙動を変えない）ので、layout 側では触らない
+    let weight_line = Memo::new(move |_| match period.get() {
+        Period::M3 => lines.get().m3,
+        Period::M6 => lines.get().m6,
+        Period::Y1 => lines.get().y1,
+        Period::M1 | Period::All => WeightLine::Daily,
+    });
+
     // 集計から外したドロップセットがあるか。**外したことを黙らない。**
     //
     // ★ 記録タブは常に全部を数える（設定は「推移の見せ方」なので）。黙って外すと、
@@ -528,7 +541,7 @@ pub fn Progress() -> impl IntoView {
     //   `Chart` が破棄・再生成され、読み取り点の選択が毎回リセットされる
     let chart_body = move || {
         view! {
-                <Chart series=series unit=unit weight=weight colors=colors />
+                <Chart series=series unit=unit weight=weight colors=colors weight_line=weight_line />
 
                 {move || {
                     (period.get() == Period::All)

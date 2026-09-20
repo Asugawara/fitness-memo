@@ -322,6 +322,13 @@ pub struct Settings {
     /// 落とし幅（%）の見出しと注記。段を足すときの重量をここから計算する
     pub drop_pct_label: &'static str,
     pub drop_pct_note: &'static str,
+    /// 推移タブの体重の破線を日ごとに描くか週平均に落とすかの行 / そのサブページの h1
+    pub row_weight_line: &'static str,
+    /// 3M / 6M / 1Y それぞれの 2 択のラベル。**行の右端の現在値にも同じものを使う**
+    /// （`drop_sets_exclude` / `drop_sets_include` と同じ流儀）
+    pub weight_line_daily: &'static str,
+    pub weight_line_weekly: &'static str,
+    pub weight_line_note: &'static str,
     /// 言語の行 / 言語サブページの h1
     pub row_language: &'static str,
     /// 言語サブページの注記。**種目名が変わらないことを先に言う** —
@@ -395,6 +402,10 @@ const JA_SETTINGS: Settings = Settings {
     drop_sets_include: "含める",
     drop_pct_label: "落とし幅",
     drop_pct_note: "段を 1 つ足すとき、メインセットの重量から何 % 落とすか。計算して入れるのは 1 段目だけで、2 段目からは前の段の重量をそのままコピーします。小数点以下 1 桁まで",
+    row_weight_line: "体重の線",
+    weight_line_daily: "日ごと",
+    weight_line_weekly: "週平均",
+    weight_line_note: "推移タブの体重の点線を、期間ごとに日ごとのまま描くか週平均に落とすか。1M は常に日ごと、「全期間」は常に週単位です。日ごとにすると計量の多い期間では線が細かく揺れます。週平均になるのは同じ週に 2 回以上計量した週があるときだけで、週 1 回以下なら線は変わりません。タップで読める体重はどちらでも記録した数字のままです",
     row_language: "言語",
     language_note: "種目名と部位名は変わりません（自分で付けた名前として扱うため）。変えたいときは「種目」から 1 つずつ編集してください",
     edit_group: "部位を編集",
@@ -449,6 +460,10 @@ const EN_SETTINGS: Settings = Settings {
     drop_sets_include: "Included",
     drop_pct_label: "Drop by",
     drop_pct_note: "When you add a stage, how much to take off the main set's weight. Only the first stage is worked out from it; from the second on, the previous stage's weight is copied. One decimal place.",
+    row_weight_line: "Weight line",
+    weight_line_daily: "Daily",
+    weight_line_weekly: "Weekly average",
+    weight_line_note: "Whether the Progress tab's body-weight line is drawn day by day or smoothed to a weekly average, per period. 1M is always daily and \"All\" is always weekly. Drawn daily, a period with many weigh-ins looks jagged. Only weeks with two or more weigh-ins are averaged; at one a week or fewer the line is unchanged. The weight you read by tapping is always the recorded figure.",
     row_language: "Language",
     language_note: "Exercise and muscle-group names do not change — they are treated as names you gave them. Edit them one by one under Exercises if you want them in another language.",
     edit_group: "Edit muscle group",
@@ -1999,6 +2014,38 @@ impl Lang {
         }
     }
 
+    /// 設定行の右端に出す、体重の線が週平均になっている期間のまとめ。
+    /// 週平均の期間を 3M → 6M → 1Y の順に集める。無ければ「日ごと」/"Daily"、
+    /// あれば「週平均 6M・1Y」（`・` 区切り）/ "Weekly 6M, 1Y"（`, ` 区切り）。
+    pub fn weight_line_summary(self, w: crate::core::WeightLines) -> String {
+        use crate::core::WeightLine;
+        let periods: Vec<&str> = [("3M", w.m3), ("6M", w.m6), ("1Y", w.y1)]
+            .into_iter()
+            .filter(|(_, l)| *l == WeightLine::Weekly)
+            .map(|(label, _)| label)
+            .collect();
+        if periods.is_empty() {
+            match self {
+                Lang::Ja => "日ごと".to_string(),
+                Lang::En => "Daily".to_string(),
+            }
+        } else {
+            match self {
+                Lang::Ja => format!("週平均 {}", periods.join("・")),
+                Lang::En => format!("Weekly {}", periods.join(", ")),
+            }
+        }
+    }
+
+    /// 体重の線の設定サブページ、期間ごとの `.segmented` の `aria-label`。
+    /// 「3M の体重の線」/ "Weight line for 3M"
+    pub fn weight_line_for(self, period: &str) -> String {
+        match self {
+            Lang::Ja => format!("{period} の体重の線"),
+            Lang::En => format!("Weight line for {period}"),
+        }
+    }
+
     /// グラフの `aria-label`。**1 本のメソッドに畳んである。**
     ///
     /// ★ 日本語版は「{期間}の推移。最大 {n} {単位}。体重 {min}〜{max} kg。体重の線は週平均」と
@@ -2265,6 +2312,35 @@ mod tests {
             };
             assert!(confirm.contains(again), "{lang:?}: {confirm}");
         }
+    }
+
+    #[test]
+    fn weight_line_summary_lists_weekly_periods_in_order() {
+        use crate::core::{WeightLine, WeightLines};
+        assert_eq!(
+            Lang::Ja.weight_line_summary(WeightLines::default()),
+            "週平均 1Y"
+        );
+        assert_eq!(
+            Lang::En.weight_line_summary(WeightLines::default()),
+            "Weekly 1Y"
+        );
+
+        let all_daily = WeightLines {
+            m3: WeightLine::Daily,
+            m6: WeightLine::Daily,
+            y1: WeightLine::Daily,
+        };
+        assert_eq!(Lang::Ja.weight_line_summary(all_daily), "日ごと");
+        assert_eq!(Lang::En.weight_line_summary(all_daily), "Daily");
+
+        let m3_and_y1 = WeightLines {
+            m3: WeightLine::Weekly,
+            m6: WeightLine::Daily,
+            y1: WeightLine::Weekly,
+        };
+        assert_eq!(Lang::Ja.weight_line_summary(m3_and_y1), "週平均 3M・1Y");
+        assert_eq!(Lang::En.weight_line_summary(m3_and_y1), "Weekly 3M, 1Y");
     }
 
     /// ★ **推移タブのラベルのチップは、隣の 2 つのセレクタとも期間とも別語。**

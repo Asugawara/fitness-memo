@@ -422,6 +422,18 @@ struct UiState {
     ///   解釈は `core::drops_setting`（ホストのテストが届く側）に任せる。
     #[serde(default)]
     drops: Option<i64>,
+    /// 推移タブの体重の破線を週平均に落とすか。期間（3M / 6M / 1Y）ごとに 1 つ。
+    /// `0` = 日ごと / `1` = 週平均 / `None` = 既定（`core::WeightLines::default()`）。
+    ///
+    /// ★ `Option<bool>` ではなく `Option<i64>` で持つ。`drops` と同じ理由で、`bool` は
+    ///   このファイルで最も狭い型になる — 知らない値が入ると deserialize が失敗し、
+    ///   `UiState` 全体のパースが落ちて他のフィールドまで巻き添えで消える。
+    #[serde(default)]
+    weight_weekly_3m: Option<i64>,
+    #[serde(default)]
+    weight_weekly_6m: Option<i64>,
+    #[serde(default)]
+    weight_weekly_1y: Option<i64>,
     /// 推移タブで最後に見ていた部位 / 種目。**このキーで唯一 `Db` の ID を持つ**
     /// （adr/storage/db-ids-in-ui-state-behind-a-fallback.md）。
     ///
@@ -534,6 +546,26 @@ pub fn drop_pct() -> f32 {
 pub fn save_drop_pct(pct: f32) {
     update_ui(|u| {
         u.drop_pct = Some(f64::from(pct));
+    });
+}
+
+/// 期間ごとの体重の線の選択。未設定は既定（3M・6M 日ごと、1Y 週平均）。
+pub fn weight_lines() -> core::WeightLines {
+    let ui = ui_state();
+    let default = core::WeightLines::default();
+    core::WeightLines {
+        m3: core::weight_line_setting(ui.weight_weekly_3m, default.m3),
+        m6: core::weight_line_setting(ui.weight_weekly_6m, default.m6),
+        y1: core::weight_line_setting(ui.weight_weekly_1y, default.y1),
+    }
+}
+
+/// その選択を保存する。クリック 1 回きりなので debounce しない。
+pub fn save_weight_lines(w: core::WeightLines) {
+    update_ui(|u| {
+        u.weight_weekly_3m = Some(i64::from(w.m3 == core::WeightLine::Weekly));
+        u.weight_weekly_6m = Some(i64::from(w.m6 == core::WeightLine::Weekly));
+        u.weight_weekly_1y = Some(i64::from(w.y1 == core::WeightLine::Weekly));
     });
 }
 

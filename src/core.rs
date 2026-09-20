@@ -89,6 +89,44 @@ pub enum Drops {
     Include,
 }
 
+/// 推移タブの体重の破線を日ごとに描くか、週平均に落とすか。
+/// `bool` にしないのは [`Drops`] と同じ理由（`layout(.., true)` では真が何か読めない）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WeightLine {
+    Daily,
+    Weekly,
+}
+
+/// 期間ごとの選択。1M は常に Daily、「全期間」は常に週集約なので持たない。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WeightLines {
+    pub m3: WeightLine,
+    pub m6: WeightLine,
+    pub y1: WeightLine,
+}
+
+impl Default for WeightLines {
+    /// 既定は 3M・6M 日ごと、1Y 週平均（365 点を ~246px に描くと破線が帯に潰れるのは 1Y だけ）
+    fn default() -> Self {
+        Self {
+            m3: WeightLine::Daily,
+            m6: WeightLine::Daily,
+            y1: WeightLine::Weekly,
+        }
+    }
+}
+
+/// 保存値 → 選択。`Some(1)` = Weekly / `Some(0)` = Daily / それ以外（`None`・知らない値）= `default`。
+/// 既定が期間ごとに違うので `default` を引数で受ける。知らない値を clamp せず既定へ倒すのは
+/// [`drops_setting`] と同じ理由（2 択で clamp は意味を持たない）。
+pub fn weight_line_setting(saved: Option<i64>, default: WeightLine) -> WeightLine {
+    match saved {
+        Some(0) => WeightLine::Daily,
+        Some(1) => WeightLine::Weekly,
+        _ => default,
+    }
+}
+
 /// 1 セットのボリューム。**重量が入っていないセットは重量 1 として数える。**
 ///
 /// これで自重種目は自然に「総レップ数」、時間種目は「総秒数」になり、
@@ -4546,6 +4584,34 @@ mod tests {
             );
         }
         assert_eq!(Drops::default(), Drops::Exclude);
+    }
+
+    #[test]
+    fn weight_line_setting_reads_only_zero_and_one() {
+        for default in [WeightLine::Daily, WeightLine::Weekly] {
+            assert_eq!(
+                weight_line_setting(None, default),
+                default,
+                "未設定は default"
+            );
+            assert_eq!(weight_line_setting(Some(0), default), WeightLine::Daily);
+            assert_eq!(weight_line_setting(Some(1), default), WeightLine::Weekly);
+            for weird in [2, 7, -1, i64::MAX, i64::MIN] {
+                assert_eq!(
+                    weight_line_setting(Some(weird), default),
+                    default,
+                    "知らない値 {weird} は default へ倒す"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn weight_lines_default_is_daily_daily_weekly() {
+        let d = WeightLines::default();
+        assert_eq!(d.m3, WeightLine::Daily);
+        assert_eq!(d.m6, WeightLine::Daily);
+        assert_eq!(d.y1, WeightLine::Weekly);
     }
 
     /// ★ 落とし幅は自由入力なので、**丸めと clamp をここで閉じる**。100 を通すと

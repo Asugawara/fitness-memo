@@ -98,8 +98,12 @@ pub fn Chart(
     /// しかないので、省略できる形にする理由が無い。
     #[prop(into)]
     colors: Signal<Vec<Option<String>>>,
+    /// 体重の破線を日ごとに描くか週平均に落とすか。呼び側が期間の設定から決める。
+    /// `Chart` は `storage` も `Db` も引かない。
+    #[prop(into)]
+    weight_line: Signal<crate::core::WeightLine>,
 ) -> impl IntoView {
-    let plot = Memo::new(move |_| layout(&series.get(), &weight.get()));
+    let plot = Memo::new(move |_| layout(&series.get(), &weight.get(), weight_line.get()));
     let selected = RwSignal::new(None::<usize>);
 
     // 系列が変わったら選択を最新点に寄せる（読み取り欄が常に何かを示す）

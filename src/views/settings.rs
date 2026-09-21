@@ -24,19 +24,23 @@
 //!   1 文字打つたびに `Db` が動いて一覧ごと作り直され、編集中の文字列が消える
 
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
-use crate::core::Drops;
+use crate::core::{Drops, WeightLine, WeightLines};
 use crate::i18n::Lang;
-use crate::model::{Db, Exercise, ExerciseId, Group, GroupId, RoutineId};
+use crate::model::{
+    Db, Exercise, ExerciseId, Group, GroupId, Label, LabelId, MAX_LABEL_LEN, MAX_LABELS, RoutineId,
+};
 use crate::storage;
 
 use super::help::InstallHelpLink;
 use super::icon::{self, icon};
+use super::manual::ManualSection;
 use super::routine::{RoutineEditor, routine_exercise_names};
 use super::{
     SettingsPage, Sheet, cur_lang, ex_name, fmt_weight, grp_name, kb_blur, kb_focus, parse_weight,
     scroll_into_view_if_needed, t, use_db, use_drop_pct, use_drops, use_history_count, use_kb,
-    use_lang, use_open_group, use_settings_page,
+    use_lang, use_open_group, use_settings_page, use_weight_lines,
 };
 
 /// 部位を追加するときの既定色。プリセットの 6 色を順に回す。
@@ -163,6 +167,7 @@ fn add_exercise(db: &mut Db, id: ExerciseId, group: GroupId, name: String) {
         archived: false,
         pins: Vec::new(),
         interval_sec: None,
+        labels: Vec::new(),
     });
 }
 
@@ -292,6 +297,7 @@ pub fn Settings() -> impl IntoView {
     let hist = use_history_count();
     let drops = use_drops();
     let drop_pct = use_drop_pct();
+    let lines = use_weight_lines();
     // ★ 落とし幅の入力欄のため。キーボードが開くとタブ帯を隠す仕組みに乗せる
     //   （adr/pwa/hide-tabs-when-keyboard-open.md）
     let kb = use_kb();
@@ -415,8 +421,23 @@ pub fn Settings() -> impl IntoView {
                                 "settings-row-drop-sets",
                                 move || go(SettingsPage::DropSets),
                             )}
+                            // 表示数・ドロップセットと同じ「推移の見せ方」の帯。右端は現在値
+                            {section_row(
+                                t.settings.row_weight_line,
+                                Some(Signal::derive(move || cur_lang().weight_line_summary(lines.get()))),
+                                "settings-row-weight-line",
+                                move || go(SettingsPage::WeightLine),
+                            )}
                             // 手順シートを開くだけなので、節ではなく行として並べる
                             <InstallHelpLink />
+                            // 一生に数回読むものなので下寄りだが、性格が近いヘルプの行と
+                            // 隣接させて 1 つの帯にする（計画「2. マニュアル UI」）
+                            {section_row(
+                                t.manual.row_label,
+                                None,
+                                "settings-row-manual",
+                                move || go(SettingsPage::Manual),
+                            )}
                             // ★ 末尾に置く。先頭はデータを失う前に見つけてもらう必要がある
                             //   エクスポート / インポートで固定されているし、言語は
                             //   一生に一度の操作なので探しに来る頻度が最も低い。
@@ -627,6 +648,80 @@ pub fn Settings() -> impl IntoView {
                     }
                         .into_any()
                 }
+                SettingsPage::WeightLine => {
+                    // 3 行（3M / 6M / 1Y）を 1 つの配列から作る。fn ポインタで
+                    // getter / setter を持つ（マークアップを 3 回複製しない）
+                    type Get = fn(&WeightLines) -> WeightLine;
+                    type Set = fn(&mut WeightLines, WeightLine);
+                    const ROWS: [(&str, &str, Get, Set); 3] = [
+                        ("3m", "3M", |w| w.m3, |w, l| w.m3 = l),
+                        ("6m", "6M", |w| w.m6, |w, l| w.m6 = l),
+                        ("1y", "1Y", |w| w.y1, |w, l| w.y1 = l),
+                    ];
+                    // 言語 / 表示数ページと同じ形（同値ガード → 保存 → シグナル）
+                    let pick = move |set: Set, l: WeightLine| {
+                        let mut next = lines.get_untracked();
+                        set(&mut next, l);
+                        if next == lines.get_untracked() {
+                            return;
+                        }
+                        storage::save_weight_lines(next);
+                        lines.set(next);
+                    };
+                    view! {
+                        {back_head(t.settings.row_weight_line, move || go(SettingsPage::Root))}
+
+                        {ROWS
+                            .into_iter()
+                            .map(|(period, period_label, get, set)| {
+                                view! {
+                                    <div
+                                        class="wline-row"
+                                        data-testid="weight-line-row"
+                                        data-period=period
+                                    >
+                                        <span class="wline-label">{period_label}</span>
+                                        <div
+                                            class="segmented"
+                                            role="group"
+                                            aria-label=cur_lang().weight_line_for(period_label)
+                                            data-testid="weight-line-select"
+                                        >
+                                            {[
+                                                (WeightLine::Daily, t.settings.weight_line_daily, "daily"),
+                                                (WeightLine::Weekly, t.settings.weight_line_weekly, "weekly"),
+                                            ]
+                                                .into_iter()
+                                                .map(|(l, label, line_attr)| {
+                                                    view! {
+                                                        <button
+                                                            class="seg-btn"
+                                                            class:active=move || get(&lines.get()) == l
+                                                            aria-pressed=move || {
+                                                                (get(&lines.get()) == l).to_string()
+                                                            }
+                                                            data-testid="weight-line-btn"
+                                                            data-period=period
+                                                            data-line=line_attr
+                                                            on:click=move |_| pick(set, l)
+                                                        >
+                                                            {label}
+                                                        </button>
+                                                    }
+                                                })
+                                                .collect::<Vec<_>>()}
+                                        </div>
+                                    </div>
+                                }
+                            })
+                            .collect::<Vec<_>>()}
+
+                        <p class="settings-note muted" data-testid="weight-line-note">
+                            {t.settings.weight_line_note}
+                        </p>
+                    }
+                        .into_any()
+                }
                 SettingsPage::Routines => {
                     view! {
                         {back_head(t.settings.row_routines, move || go(SettingsPage::Root))}
@@ -690,6 +785,13 @@ pub fn Settings() -> impl IntoView {
                             (!ids.is_empty())
                                 .then(|| view! { <ArchivedSection ids=ids open_group=open_group /> })
                         }}
+                    }
+                        .into_any()
+                }
+                SettingsPage::Manual => {
+                    view! {
+                        {back_head(t.manual.row_label, move || go(SettingsPage::Root))}
+                        <ManualSection />
                     }
                         .into_any()
                 }
@@ -1236,6 +1338,29 @@ fn NewGroupEditor(
     }
 }
 
+/// ラベル 1 行ぶんの編集状態。
+///
+/// ★ **`id: LabelId` を持つ。`PinRow { key, value }` をそのまま写してはいけない。**
+/// 写すと `core::set_labels` に渡す `Label.id` を毎 commit `alloc_id()` するしかなく、
+/// **1 文字打つごとに全ラベルが新 ID になって `ExerciseLog.label` が全部宙に浮く** —
+/// 「改名で過去ログが外れる形は採れない」という設計の根拠が、設定画面の 1 打鍵で崩れる。
+/// `core::clean_labels` の再採番を**重複 ID だけ**に限っているのがこれの土台。
+///
+/// ★ `key` は `id` と別に持つ。`<For key>` に重複キーを渡すと wasm で panic =
+/// アプリが死ぬので、DOM のキーは画面が採る単調増加の数にする。
+struct LabelRow {
+    key: u32,
+    id: LabelId,
+    name: String,
+    /// 推移タブのデータ点の色（`#rrggbb`）。
+    /// adr/ux/label-colour-on-the-progress-dots.md
+    ///
+    /// ★ **`name` と違って空欄の概念が無い。** `<input type="color">` は常に
+    /// `#rrggbb` を返し、`core::clean_labels` が既定色を保証するので、この欄が
+    /// 空になるのは `＋` で足した直後だけ（`add_label` がその場でパレットから振る）。
+    color: String,
+}
+
 #[component]
 fn ExerciseEditor(
     id: ExerciseId,
@@ -1267,6 +1392,195 @@ fn ExerciseEditor(
         if !value.is_empty() {
             db.update(move |d| rename_exercise(d, id, &value));
         }
+    };
+
+    // ── ラベル（adr/ux/label-chips-switch-the-history-and-the-copy.md）───────
+    //
+    // **定義（作成・改名・削除）はここだけに置く。** 選択は記録タブのチップ行で
+    // 1 タップ。`ExerciseEditor` が担当するのは「種目マスタの同一性と可視性」で、
+    // ラベルは**その種目のセッションの分類体系** — 名前 / 部位 / アーカイブと同じ棚。
+    // 定義は種目ごとに生涯 1 回で、**マシンの前で必要になるものではない**
+    // （ピンが `ExerciseEditor` に無いのは「マシンをどう物理的にセットするか」だから）。
+    let labels0: Vec<Label> =
+        db.with_untracked(|d| d.exercise(id).map(|e| e.labels.clone()).unwrap_or_default());
+    let next_label_key = RwSignal::new(labels0.len() as u32);
+    // ★ `id` は `db` から**写す**（`＋` のときだけ `storage::alloc_id()` を振る）
+    let label_rows = RwSignal::new(
+        labels0
+            .into_iter()
+            .enumerate()
+            .map(|(i, l)| LabelRow {
+                key: i as u32,
+                id: l.id,
+                name: l.name,
+                color: l.color,
+            })
+            .collect::<Vec<_>>(),
+    );
+    let duplicate_label = RwSignal::new(false);
+    // 削除の確認待ちの行（`GroupEditor` の `confirming` と同じ形。インライン
+    // `warn-box` なので「シートの中のシート」にはならない）
+    let confirm_label: RwSignal<Option<u32>> = RwSignal::new(None);
+
+    // 正規化（空欄落とし・char 切り詰め・上限・重複 ID の再採番）は
+    // `core::set_labels` に委ねる。ここで trim すると規則が 2 本に割れる。
+    //
+    // ★ **空欄の行は `Db` の保存値を再送する。これが「✕ が唯一の削除経路」を守る。**
+    //   `core::clean_labels` は空名の要素を落とすので、素直に送ると**入力欄を空にして
+    //   blur するだけで定義が消える** — ✕ に置いた確認の `warn-box`（文言に「同じ名前で
+    //   作り直しても過去の記録には戻りません」という不可逆性の警告まで入っている）が
+    //   丸ごと迂回される。しかも `commit_labels` は `label_rows` の**全行**を送るので、
+    //   空にした行を放置したまま**別の行**を直すだけでも消える（`change_label` 側の
+    //   短絡だけでは足りない）。保存値を再送すれば、どの順序でも消えない。
+    //   `add_label` が作る**新規の空行は `Db` に無い**ので今までどおり落ちる
+    //   （規則が「空欄は commit しない」の 1 本に揃う）。
+    let commit_labels = move || {
+        let values: Vec<Label> = db.with_untracked(|d| {
+            let saved = d.exercise(id).map(|e| e.labels.clone()).unwrap_or_default();
+            label_rows.with_untracked(|rs| {
+                rs.iter()
+                    .map(|r| Label {
+                        id: r.id,
+                        // ★ **色は空名の行でも `saved` に落とさず、行の値をそのまま
+                        //   送る。** 名前だけ `saved` を再送するのは「✕ が唯一の削除
+                        //   経路」を守るためで（上の ★）、色にはその危険が無い —
+                        //   `clean_labels` が色で行を落とすことはない。むしろ落とすと
+                        //   **色ピッカーを触った直後の空名行で色が巻き戻る**
+                        //   （色を変えてから名前を打つ、という順序で必ず踏む）。
+                        //   この非対称は意図的
+                        color: r.color.clone(),
+                        name: if r.name.trim().is_empty() {
+                            saved
+                                .iter()
+                                .find(|l| l.id == r.id)
+                                .map(|l| l.name.clone())
+                                .unwrap_or_default()
+                        } else {
+                            r.name.clone()
+                        },
+                    })
+                    .collect()
+            })
+        });
+        db.update(move |d| storage::with_ids(|ids| crate::core::set_labels(d, id, values, ids)));
+    };
+
+    // ★ **書き込みは `on:input` ではなく `on:change`（blur / Enter）。**
+    //   `PinRow` は毎打鍵 commit だが、それを写すと既存 `P` があるとき `Power` と
+    //   打つ途中の `P` が重複になる。毎打鍵を止めないと `Only` の名前解決が曖昧に
+    //   なって TSV 往復のたびに `P` が増える。
+    //
+    // ★ **重複チェックは新規追加と改名の両方に通す**（片方だけだと裏口が残る）。
+    //   重複していたら書かずに**直前の保存値へ戻す**。
+    // 戻り値は「入力欄に書き戻すべき値」（重複で巻き戻したとき / trim で変わったとき）。
+    // 呼び側が DOM も直す — `value=` は初期値を 1 度読むだけなので、signal を書いても
+    // 入力欄は古いまま残る（day.rs の `ex_note_ref` とまったく同じ事情）。
+    let change_label = move |key: u32, value: String| -> Option<String> {
+        let trimmed = value.trim().to_string();
+        // 同名が他の行にあるか。空欄は `set_labels` が落とすので通す
+        let clash = !trimmed.is_empty()
+            && label_rows
+                .with_untracked(|rs| rs.iter().any(|r| r.key != key && r.name.trim() == trimmed));
+        if clash {
+            duplicate_label.set(true);
+            // 直前の保存値へ戻す（`db` が真実源）
+            let saved = db.with_untracked(|d| {
+                d.exercise(id)
+                    .and_then(|e| {
+                        label_rows.with_untracked(|rs| {
+                            rs.iter()
+                                .find(|r| r.key == key)
+                                .and_then(|r| e.labels.iter().find(|l| l.id == r.id))
+                                .map(|l| l.name.clone())
+                        })
+                    })
+                    .unwrap_or_default()
+            });
+            label_rows.update(|rs| {
+                if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                    r.name = saved.clone();
+                }
+            });
+            return Some(saved);
+        }
+        duplicate_label.set(false);
+        // ★ **trim した値を保存する。** 生値のままだと `"P "` が `Db` に入り、TSV の
+        //   往復でラベルが 2 本に割れる — `core::resolve_label` は `name.trim()` して
+        //   から厳密比較するので `"P "` と一致せず新しい `LabelId` を採番し、
+        //   `merge_labels` の同名判定も厳密比較なので新しい定義として足される。
+        //   結果、見分けのつかないチップが 2 個並び**過去ログは旧 ID・取り込んだログは
+        //   新 ID** に付いて履歴が分裂する。UI の重複ガードは trim 比較なので利用者は
+        //   自分ではこの状態を作れず、この経路だけが穴だった。
+        //   同じシートの `commit_name`（種目名）が既に trim しているので、それと対称。
+        //   ★ `core::clean_labels` の「取り込んだデータを trim しない」規則は触らない
+        //     （あちらが守るのは他人のファイルの中身）。
+        label_rows.update(|rs| {
+            if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                r.name = trimmed.clone();
+            }
+        });
+        // ★ **空にしただけでは `Db` を触らない。** 削除の入口は ✕（確認つき）だけに
+        //   する。画面上は空欄のまま残るので打ち直せば同じ `LabelId` で戻る
+        //   （`add_label` の「空欄は commit しない」と同じ規則）。
+        //   ここを通してしまっても `commit_labels` が保存値を再送するので消えないが、
+        //   **保存の予約（`save_debounced`）を無駄に武装させない**ためにも短絡する。
+        if trimmed.is_empty() {
+            return (trimmed != value).then_some(trimmed);
+        }
+        commit_labels();
+        // 打った値と保存した値が違うなら入力欄も揃える（見えている値と `Db` を
+        // 食い違わせない）
+        (trimmed != value).then_some(trimmed)
+    };
+
+    let add_label = move |_| {
+        let key = next_label_key.get_untracked();
+        next_label_key.set(key + 1);
+        duplicate_label.set(false);
+        label_rows.update(|rs| {
+            // ★ **既定色はその場で振る。** `core::clean_labels` も同じ規則で埋めるが、
+            //   新規行は名前が空なので commit を通らず `Db` に届かない = 画面の
+            //   色ピッカーが `#000000` のまま残る。`rs` の色を見て採るので、
+            //   ✕ で 1 本消してから ＋ で足しても残った行と同じ色にならない
+            let color =
+                crate::core::next_label_color(rs.iter().map(|r| r.color.as_str())).to_string();
+            rs.push(LabelRow {
+                key,
+                // ★ **新規だけ採番する。** 既存行は `db` から写した ID のまま
+                id: storage::alloc_id(),
+                name: String::new(),
+                color,
+            })
+        });
+        // 空欄は `set_labels` が落とすので commit は要らない（`add_pin` と同じ）
+    };
+
+    // ★ **書き込みは `on:input`**（`group-color` と同じ）。`change_label` が
+    //   `on:change` なのは重複判定のためで、色に重複の概念は無い
+    //   （`clean_labels` は同色を潰さない）。ネイティブの色ピッカーは開いている
+    //   あいだ `input` を連射するが、`save_debounced` が保存回数を吸収する。
+    //
+    // ★ **`duplicate_label` を触らない。** 色は重複警告の対象外なので、色を変えた
+    //   だけで名前の重複警告が消えると「直したつもり」の誤解を生む。
+    let change_label_color = move |key: u32, value: String| {
+        label_rows.update(|rs| {
+            if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                r.color = value;
+            }
+        });
+        commit_labels();
+    };
+
+    // ★ **確認を挟む。** `remove_pin` に確認が無いのは消えるのが数字 1 個だから。
+    //   ラベルの削除は**数か月ぶんの履歴のまとまりが不可視に外れる**。
+    //   削除は物理削除で、過去ログの `label` は宙に浮いたまま残す
+    //   （`normalize_routines` の「存在しない参照は消さない」。記録そのものは
+    //   完全に無傷で可視なので `archived` を持たせる必要も無い）。
+    let remove_label = move |key: u32| {
+        label_rows.update(|rs| rs.retain(|r| r.key != key));
+        confirm_label.set(None);
+        duplicate_label.set(false);
+        commit_labels();
     };
 
     view! {
@@ -1313,6 +1627,177 @@ fn ExerciseEditor(
                     .collect::<Vec<_>>()}
             </div>
         </div>
+
+        <div class="field">
+            <span>{t().settings.field_labels}</span>
+            <div class="lbl-edit" data-testid="label-edit">
+                <For
+                    each=move || {
+                        label_rows
+                            .with(|rs| {
+                                rs.iter()
+                                    .map(|r| (r.key, r.name.clone(), r.color.clone()))
+                                    .collect::<Vec<_>>()
+                            })
+                    }
+                    key=|(key, _, _)| *key
+                    children=move |(key, value, color)| {
+                        view! {
+                            <span class="lbl-chip">
+                                // ★ 名前入力の**前**に置く。丸い色見本 → 名前 → ✕ の順は
+                                //   推移タブのチップ（`<span class="dot">` + 名前）と同じ
+                                //   並びで、設定シートで選んだ色がどこに出るかが読める
+                                <input
+                                    class="lbl-color"
+                                    type="color"
+                                    value=color
+                                    // ★ `kb_focus` / `kb_blur` は付けない。色ピッカーは
+                                    //   ソフトキーボードを出さないので、付けると
+                                    //   ボトムタブが理由なく退避する（`group-color` と同じ）
+                                    aria-label=move || {
+                                        cur_lang()
+                                            .color_of(
+                                                &label_rows
+                                                    .with(|rs| {
+                                                        rs.iter()
+                                                            .find(|r| r.key == key)
+                                                            .map(|r| r.name.clone())
+                                                            .unwrap_or_default()
+                                                    }),
+                                            )
+                                    }
+                                    data-testid="label-color"
+                                    on:input=move |ev| {
+                                        change_label_color(key, event_target_value(&ev))
+                                    }
+                                />
+                                <input
+                                    class="text-input lbl-name"
+                                    // ★ `inputmode` を付けない = IME 付きのフルキーボードが
+                                    //   出る。ボトムタブが被るので `kb_focus` / `kb_blur` は必須
+                                    type="text"
+                                    maxlength=MAX_LABEL_LEN.to_string()
+                                    value=value
+                                    aria-label=t().settings.label_value
+                                    data-testid="label-name"
+                                    on:focusin=move |_| kb_focus(kb)
+                                    on:focusout=move |_| kb_blur(kb)
+                                    // ★ `on:input` ではなく `on:change`（blur / Enter）。
+                                    //   毎打鍵 commit すると既存 `P` があるとき `Power` と
+                                    //   打つ途中の `P` が重複になる
+                                    on:change=move |ev| {
+                                        if let Some(revert)
+                                            = change_label(key, event_target_value(&ev))
+                                        {
+                                            // ★ signal を書いても `value=` は初期値の
+                                            //   ままなので DOM も直す。抜くと「画面は
+                                            //   `H` 重複のまま・Db は `P`」になり、
+                                            //   次の 1 打鍵で古い値が保存される
+                                            if let Some(el) = ev
+                                                .target()
+                                                .and_then(|t| {
+                                                    t.dyn_into::<web_sys::HtmlInputElement>().ok()
+                                                })
+                                            {
+                                                el.set_value(&revert);
+                                            }
+                                        }
+                                    }
+                                />
+                                <button
+                                    // ★ class を必ず付ける（`smoke.spec.mjs` が
+                                    //   `[data-testid=settings-sheet] button:not([class])` を
+                                    //   0 件で固定している）。
+                                    // ★ `.pin-remove` に倣った追加のクラスは付けない —
+                                    //   `.icon-btn` が寸法とトークンを与えており、規則を
+                                    //   持たないフックを CSS に残さない（参照点は
+                                    //   `data-testid="label-remove"` が担う）
+                                    class="icon-btn"
+                                    aria-label=move || {
+                                        cur_lang()
+                                            .delete_label(
+                                                &label_rows
+                                                    .with(|rs| {
+                                                        rs.iter()
+                                                            .find(|r| r.key == key)
+                                                            .map(|r| r.name.clone())
+                                                            .unwrap_or_default()
+                                                    }),
+                                            )
+                                    }
+                                    data-testid="label-remove"
+                                    on:click=move |_| confirm_label.set(Some(key))
+                                >
+                                    {icon(icon::X)}
+                                </button>
+                            </span>
+                        }
+                    }
+                />
+                // ★ 上限に達したら出さない（押しても何も起きないボタンを作らない）
+                {move || {
+                    (label_rows.with(Vec::len) < MAX_LABELS)
+                        .then(|| {
+                            view! {
+                                <button
+                                    class="link-btn lbl-add"
+                                    aria-label=t().settings.label_add
+                                    data-testid="label-add"
+                                    on:click=add_label
+                                >
+                                    "＋"
+                                </button>
+                            }
+                        })
+                }}
+            </div>
+        </div>
+
+        {move || {
+            duplicate_label
+                .get()
+                .then(|| {
+                    view! {
+                        <div class="warn-box">
+                            <p data-testid="duplicate-label">{t().settings.duplicate_label}</p>
+                        </div>
+                    }
+                })
+        }}
+
+        // ★ **インライン `warn-box`**（`GroupEditor` / `routine.rs` と同じ形）。
+        //   `Sheet` を重ねると「シートの中のシート」になる。
+        {move || {
+            confirm_label
+                .get()
+                .map(|key| {
+                    view! {
+                        <div class="warn-box" data-testid="label-delete-confirm">
+                            <p>{t().settings.delete_label_confirm}</p>
+                            <div class="sheet-actions">
+                                <button
+                                    class="primary"
+                                    data-testid="label-delete-yes"
+                                    on:click=move |_| remove_label(key)
+                                >
+                                    {t().settings.delete_yes}
+                                </button>
+                                <button
+                                    class="link-btn"
+                                    data-testid="label-delete-no"
+                                    on:click=move |_| confirm_label.set(None)
+                                >
+                                    {t().settings.delete_no}
+                                </button>
+                            </div>
+                        </div>
+                    }
+                })
+        }}
+
+        <p class="settings-note muted" data-testid="labels-note">
+            {t().settings.labels_note}
+        </p>
 
         <div class="sheet-actions">
             <button

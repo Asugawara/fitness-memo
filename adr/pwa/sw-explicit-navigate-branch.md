@@ -5,6 +5,21 @@
 - **カテゴリ**: pwa
 - **関連**: [Service Worker はシェル全体を BUILD_ID で原子的に入れ替える](sw-atomic-shell-swap.md), [manifest の URL を全て相対にする](manifest-relative-urls.md)
 
+> **追記（マニュアル節の時点）**
+> - 下の「結果（トレードオフ）」にある **「一覧を staging 全走査で作っているので
+>   漏れは構造的に起きない」は、[Service Worker はシェル全体を BUILD_ID で原子的に入れ替える](sw-atomic-shell-swap.md)
+>   と同文なので同じ改訂が要る。** 保証は「全走査 − 明示除外リスト」で、除外は
+>   `og.png` / `public/manual/**` / dotfile の 3 つ。載せてよい条件は
+>   [クローラ向けメタデータを本番 URL のハードコードで持ち、オフラインシェルから外す](../seo/crawler-metadata-and-hardcoded-origin.md)
+>   の追記にある 5 条件
+> - **「キャッシュに無いサブリソースはオフラインで単純に失敗する」は今も真で、
+>   マニュアルの図はそれを意図的に踏んでいる。** 章を開いたときの `<img>` が
+>   オフラインで失敗するのは設計どおりで、その状態でも本文が読めることを
+>   `e2e/manual.spec.mjs` が固定している。**この 1 本を消すと、除外の正当性が
+>   機械で確かめられなくなる**（除外基準の条件 5）
+> - **navigate の分岐そのものは無変更。** 図は `<img>` なのでナビゲーションではなく、
+>   この ADR の分岐を 1 行も通らない
+
 ## 背景
 
 Service Worker の precache 一覧は `scripts/stamp-sw.sh` が staging のファイル走査から生成する（[Service Worker はシェル全体を BUILD_ID で原子的に入れ替える](sw-atomic-shell-swap.md)）。ファイル走査なので、index.html のキーは **`./index.html`** になる。

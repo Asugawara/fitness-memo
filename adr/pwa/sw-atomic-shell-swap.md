@@ -5,6 +5,29 @@
 - **カテゴリ**: pwa
 - **関連**: [fetch ハンドラで navigate を明示分岐する](sw-explicit-navigate-branch.md), [visible 復帰で `reg.update()` を呼ぶ](sw-update-on-visible.md)
 
+> **追記（マニュアル節の時点）**
+> - **「一覧を staging 全走査で作っているので漏れは構造的に起きない」の保証は
+>   「全走査 − 明示除外リスト」になっている。** 最初の例外は `og.png`
+>   （[クローラ向けメタデータを本番 URL のハードコードで持ち、オフラインシェルから外す](../seo/crawler-metadata-and-hardcoded-origin.md)）、
+>   2 つ目が `public/manual/**`
+>   （[マニュアルの図は `public/` に配信するスクリーンショットにし、`<img>` で参照する](../architecture/manual-figures-as-served-screenshots.md)）。
+>   載せてよい条件は 5 つに落として同 ADR の追記に書いた
+> - **要件「完全にオフラインでも動作する」に対し、マニュアルの図はこのアプリで
+>   初めての「オフラインで出ないもの」である。** 起動は壊れない（`index.html` /
+>   wasm / css はシェルに残る）が、**完全オフラインの範囲から図を明示的に外した。**
+>   欠けるのは図だけで、本文は wasm 内の i18n 文字列なので読める
+> - **除外条件は `scripts/stamp-sw.sh` の `shell_files()` に一本化した。**
+>   以前は SHELL と BUILD_ID に同じ条件が 2 回書かれていて、片方だけ直すと
+>   「中身が同一のシェル」に新しいキャッシュ世代が切られ、全クライアントが
+>   約 1.0MB を無駄に再ダウンロードする形だった。**BUILD_ID 側の除外は成果物から
+>   観測できず E2E で固定できないので、一本化そのものが唯一の担保になる。**
+>   実測で `public/manual/` にファイルを足しても消しても BUILD_ID は
+>   `5eefb38d25f5e488` のまま動かないことを確認した
+> - **dotfile も除外に加えた**（既存の穴）。`copy-dir` は隠しファイルもコピーするので
+>   `public/icons/.DS_Store` があると SHELL に載るが、`docs/` 側は `.gitignore` で
+>   落ちるため Pages で 404 → `cache.addAll` 拒否 → **install 失敗で全端末が旧版に
+>   固定される**（無言。ローカル E2E では通る）
+
 ## 背景
 
 要件は「完全にオフラインでも動作する」。Service Worker でアプリシェル（index.html / js / wasm / css / manifest / icons）をキャッシュする必要がある。

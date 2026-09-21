@@ -381,6 +381,8 @@ const UI_KEY: &str = "fitness-memo/ui/v1";
 struct UiState {
     #[serde(default)]
     install_hint_dismissed: bool,
+    #[serde(default)]
+    manual_hint_dismissed: bool,
     /// 設定画面で**明示的に選ばれた**言語。`None` は「まだ選んでいない」で、
     /// このときだけブラウザの言語に従う。
     ///
@@ -420,6 +422,18 @@ struct UiState {
     ///   解釈は `core::drops_setting`（ホストのテストが届く側）に任せる。
     #[serde(default)]
     drops: Option<i64>,
+    /// 推移タブの体重の破線を週平均に落とすか。期間（3M / 6M / 1Y）ごとに 1 つ。
+    /// `0` = 日ごと / `1` = 週平均 / `None` = 既定（`core::WeightLines::default()`）。
+    ///
+    /// ★ `Option<bool>` ではなく `Option<i64>` で持つ。`drops` と同じ理由で、`bool` は
+    ///   このファイルで最も狭い型になる — 知らない値が入ると deserialize が失敗し、
+    ///   `UiState` 全体のパースが落ちて他のフィールドまで巻き添えで消える。
+    #[serde(default)]
+    weight_weekly_3m: Option<i64>,
+    #[serde(default)]
+    weight_weekly_6m: Option<i64>,
+    #[serde(default)]
+    weight_weekly_1y: Option<i64>,
     /// 推移タブで最後に見ていた部位 / 種目。**このキーで唯一 `Db` の ID を持つ**
     /// （adr/storage/db-ids-in-ui-state-behind-a-fallback.md）。
     ///
@@ -478,6 +492,11 @@ pub fn install_hint_dismissed() -> bool {
     ui_state().install_hint_dismissed
 }
 
+/// マニュアルへの手掛かり（記録タブ）を利用者が閉じたか。
+pub fn manual_hint_dismissed() -> bool {
+    ui_state().manual_hint_dismissed
+}
+
 /// 設定画面で選ばれた言語。**未設定なら `None`**（呼び側がブラウザの言語に倒す）。
 pub fn saved_lang() -> Option<Lang> {
     ui_state().lang.as_deref().and_then(i18n::parse_saved)
@@ -530,6 +549,26 @@ pub fn save_drop_pct(pct: f32) {
     });
 }
 
+/// 期間ごとの体重の線の選択。未設定は既定（3M・6M 日ごと、1Y 週平均）。
+pub fn weight_lines() -> core::WeightLines {
+    let ui = ui_state();
+    let default = core::WeightLines::default();
+    core::WeightLines {
+        m3: core::weight_line_setting(ui.weight_weekly_3m, default.m3),
+        m6: core::weight_line_setting(ui.weight_weekly_6m, default.m6),
+        y1: core::weight_line_setting(ui.weight_weekly_1y, default.y1),
+    }
+}
+
+/// その選択を保存する。クリック 1 回きりなので debounce しない。
+pub fn save_weight_lines(w: core::WeightLines) {
+    update_ui(|u| {
+        u.weight_weekly_3m = Some(i64::from(w.m3 == core::WeightLine::Weekly));
+        u.weight_weekly_6m = Some(i64::from(w.m6 == core::WeightLine::Weekly));
+        u.weight_weekly_1y = Some(i64::from(w.y1 == core::WeightLine::Weekly));
+    });
+}
+
 /// 推移タブで最後に見ていた対象の**生の保存値** `(部位, 種目)`。
 ///
 /// ★ ここでは解かない。`Id` へのパースと「今も候補にあるか」の検証は
@@ -577,6 +616,21 @@ pub fn save_release_seen(id: u32) {
     // ★ 読んでから 1 フィールドだけ差し替える（`save_lang` と同じ理由）
     let mut next = ui_state();
     next.release_seen = Some(i64::from(id));
+    if let Ok(json) = serde_json::to_string(&next) {
+        let _ = store.set_item(UI_KEY, &json);
+    }
+}
+
+/// マニュアルへの手掛かり（記録タブ）を今後出さない。
+///
+/// クリック 1 回きりなので debounce しない（`dismiss_install_hint` と同じ）。
+pub fn dismiss_manual_hint() {
+    let Some(store) = store() else {
+        return;
+    };
+    // ★ 読んでから 1 フィールドだけ差し替える（`dismiss_install_hint` と同じ理由）
+    let mut next = ui_state();
+    next.manual_hint_dismissed = true;
     if let Ok(json) = serde_json::to_string(&next) {
         let _ = store.set_item(UI_KEY, &json);
     }

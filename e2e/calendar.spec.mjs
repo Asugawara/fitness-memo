@@ -489,10 +489,15 @@ test('実施日に部位カラーのドットが出て、4 部位を記録して
   await expect(cell).toHaveAttribute('data-trained', 'true');
   await expect(cell.getByTestId('cal-dot')).toHaveCount(3);
 
-  const colors = await cell
+  // ★ `getComputedStyle` の色数比較ではなく、`src/views/calendar.rs:225` が
+  //   `style="background:{color}"` に書く値そのものをリテラルで見る。
+  //   `src/presets.rs` の部位カラー定数（胸 → 背中 → 肩）が並び順の頭 3 色。
+  //   4 つ目の腕（`#7a56c9`）は頭打ちで出ない
+  const styles = await cell
     .getByTestId('cal-dot')
-    .evaluateAll((els) => els.map((el) => getComputedStyle(el).backgroundColor));
-  expect(new Set(colors).size, `部位ごとに別の色が出る: ${colors.join(' ')}`).toBe(3);
+    .evaluateAll((els) => els.map((el) => el.getAttribute('style')));
+  expect(styles).toEqual(['background:#e0524a', 'background:#2f7fd1', 'background:#e0912a']);
+  expect(styles).not.toContain('background:#7a56c9');
 
   // 記録の無い日にはドットが出ない
   await expect(dayCell(page, daysAgo(1))).toHaveAttribute('data-trained', 'false');

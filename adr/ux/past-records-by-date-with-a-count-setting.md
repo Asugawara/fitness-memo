@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-23
 - **カテゴリ**: ux
-- **関連**: [「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md)（「前回 —」の表記を本 ADR が改訂。コピーの挙動は変えない） / [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（決定 4 が「`.last-row` の直下にメモを置かない」と決めていた。**本 ADR はそれを守る**） / [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（**運ぶことと履歴に並べることは別の要件**。コピーは今までどおり両方を運ぶ） / [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md)（置き場の 3 条件） / [言語はブラウザに従い、選んだらそれを優先する](language-follows-the-browser-then-the-setting.md)（設定行 + サブページ + `.segmented` の型） / [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](settings-as-a-list-of-sections.md)（6 行目の置き場所） / [指標を種目の属性ではなくグラフの表示設定にする](../data-model/metric-is-a-view-setting.md)（永続化する / しないの線） / [1 日 1 種目 1 ログにする](../data-model/one-log-per-exercise-per-day.md)（`Vec` になるのは日をまたぐ方向）
+- **関連**: [「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md)（「前回 —」の表記を本 ADR が改訂。コピーの挙動は変えない） / [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（決定 4 が「`.last-row` の直下にメモを置かない」と決めていた。**本 ADR はそれを守る**） / [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（**運ぶことと履歴に並べることは別の要件**。コピーは今までどおり両方を運ぶ） / [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md)（置き場の 3 条件） / [言語はブラウザに従い、選んだらそれを優先する](language-follows-the-browser-then-the-setting.md)（設定行 + サブページ + `.segmented` の型） / [設定タブの入口を節の一覧にし、中身は 1 階層下ろす](settings-as-a-list-of-sections.md)（6 行目の置き場所） / [指標を種目の属性ではなくグラフの表示設定にする](../data-model/metric-is-a-view-setting.md)（永続化する / しないの線） / [1 日 1 種目 1 ログにする](../data-model/one-log-per-exercise-per-day.md)（`Vec` になるのは日をまたぐ方向） / [チップでラベルを選ぶと履歴とコピーが切り替わる](label-chips-switch-the-history-and-the-copy.md)（決定 6 を守ったうえで 4 列目を足し、決定 4 の `first()` 規則を強めた相手）
 
 ## 背景
 
@@ -42,6 +42,8 @@
 
 `show_copy` / `uses_weight` / `copy_last` の 3 つ。表示件数がいくつでも先頭 1 件だけを見る。
 
+★ **`uses_weight` はこの規則から 1 段強くなった**（[チップでラベルを選ぶと履歴とコピーが切り替わる](label-chips-switch-the-history-and-the-copy.md)）。ラベルで履歴を絞れるようになったので、`history` の `first()` を見ると `[S]`（履歴 0 件）に切り替えたとたんに「重量未入力」の警告が全行から消える。「この種目は重量を使うか」は**種目の性質**でモードの性質ではないので、**無絞りの `core::last_log_before` を引く専用 Memo** に差し替えた。下の「表示設定は表示だけを変える」をラベルにも降ろしたもので、`show_copy` / `copy_last` は絞り込み後の `history` を読み続ける（そちらは「今この画面が見せているもの」に従うのが正しい）。
+
 ### 5. 並びは降順（新しい順）
 
 `history[0]` が「前回」で、`core::last_log_before` と必ず一致する。
@@ -51,6 +53,10 @@
 `.last-rows` が `grid-template-columns: max-content 1fr max-content` を持ち、
 各 `.last-row` が `grid-template-columns: subgrid` でそれを借りる。
 日付は左揃え、指標は `justify-self: end` で右揃え。行間は親の `row-gap`。
+
+★ **ラベル定義がある種目では 4 列になる**（[チップでラベルを選ぶと履歴とコピーが切り替わる](label-chips-switch-the-history-and-the-copy.md)）。ラベル名を `.when` と同じ span に入れると日付列の `max-content` がラベル名で決まってセット列の開始位置がずれ、**この決定が無効になる**。独立した 4 列目にすればラベル列の幅は全エントリのラベル名で 1 回決まり、日付列は日付だけで決まるので**桁は縦に揃ったまま**。列幅は `max-width: 4em` + ellipsis で cap する（cap しないと 12 文字のラベル 1 本で `.sets` が 234px → 80px になり `100×10` が 3 行に折り返す。`6em` でも `100×3` ×4 が 2 行になるので足りない — どちらも 393×852 の実測）。
+
+★ **`data-labels` 属性と 4 つ目の span は必ず同じ Memo 1 本から出す。** subgrid 軸に implicit track は無いので、3 トラックの親に 4 セル入れると 4 個目が次の行へ落ち、4 トラックに 3 セルだと `.metric` が `1fr` 列に座る。定義が 0 本の種目では属性も span も出ないので、**既存カードは 1px も動かない**（`e2e/label.spec.mjs` が実測で固定している）。
 
 ## 理由
 

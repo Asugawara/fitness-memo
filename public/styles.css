@@ -382,6 +382,43 @@ h3 {
   font-weight: 600;
 }
 
+/* 記録タブに初回だけ出す、マニュアルへの手掛かり。
+   ★ 第 3 のトーン。.notice（閉じられる一時通知、ベタ塗り）でも .install-hint
+     （常駐する警告、枠線 + --warn）でもない。警告ではないので面は --surface、
+     枠は --line にとどめ、押すと何が起きるかだけを CTA の --accent で示す
+     （install-guide-banner-and-sheet.md「.notice のようなベタ塗りにしない」）。 */
+.man-hint {
+  margin: 16px 0 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.man-hint p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.man-hint-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.man-hint-cta {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* ── 記録タブ（選択日の入力欄） ─────────────────────────────────────────── */
 
 /* カレンダーと入力欄の境。上に月フッタ、下に日付見出しが来る */
@@ -548,6 +585,102 @@ h3 {
   color: var(--muted);
 }
 
+/* ── 種目ごとのラベル（adr/ux/label-chips-switch-the-history-and-the-copy.md）──
+   チップ行は `.card-head` の直後・`.last-rows` の直前。定義が 0 本の種目では
+   Rust 側がブロックごと描かないので、既存カードの幾何は 1px も動かない。
+
+   ★ **接頭辞は `.lbl-*` で、`.opt` のクラス名は共有しない。** `.opt` は設定シートの
+   部位選択専用で、3 つ目の画面で共有すると将来の設定側の変更がカードを黙って壊す
+   （`.rtn-*` が「あの画面固有」として存在する規約に倣う）。
+
+   ★ **折り返す**（横スクロールにしない）。隠れているチップがあることが静止時に
+   読めないので、`overflow-x` は採らない。行数はラベル名の長さで振れる
+   （`MAX_LABELS` の doc）。
+
+   ★ **推移タブのラベル絞り込みでも共有する**（3 つ目の面。
+   adr/ux/label-colour-on-the-progress-dots.md）。理由は `.lbl-edit` を設定シートと
+   共有したのと同じ — 同じ「ラベル」という概念の別の面（選ぶ / 定義する / 絞る）で、
+   チップの絵が面ごとに違うと「同じものだ」と読めなくなる。`.opt` を共有しないのは
+   あちらが設定シートの部位選択専用だから（上の ★）で、これは変えない。 */
+.lbl-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* `.opt` との差分は 2 つだけ。
+   - `min-width: 44px`: 1 文字ラベル `H` は `padding: 0 12px` だけでは 44px を割る
+     （タップ標的の下限。判定は E2E が丸めて見る）
+   - `font-size: 13px`: `.opt` は指定を持たず 15px を継ぐ。カードの中の副次的な
+     操作なので 1 段落とす */
+.lbl {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 13px;
+}
+
+/* 選択中。★ **`.opt.on` のトークンを 1 文字も変えない** —
+   「選択中」がアプリ全体で同じ絵に見えることが読みやすさそのもの */
+.lbl.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+/* 推移タブのチップは `.selectors` の中に居る。隣の `.target-select` /
+   `.segmented` は `--surface` なので、`--bg` のままだと 1 段沈んで見える。
+   ★ `.lbl` 自身の `background` は変えない（記録タブのカードの中では `--bg` が
+     正しい。あちらは `--surface` のカードの上に載る）。
+   ★ **`:not(.on)` で門番する。** これと `.lbl.on` は詳細度が同じ (0,2,0) で、
+     ソース順が後ろのこちらが勝つ。素の `.selectors .lbl` だと選択中のチップだけ
+     `background` が `--surface` に戻り、`color: var(--accent-text)`（light では
+     #ffffff）だけが残って**白地に白文字**になる。記録タブのチップは `.selectors` の
+     外なので影響を受けず、今までどおりベタ塗り。 */
+.selectors .lbl:not(.on) {
+  background: var(--surface);
+}
+
+/* `.selectors` が `gap: 8px` を持つので、`.lbl-row` の `margin-top: 8px` と
+   二重になる。行間の規則は親（`.selectors`）に 1 本化する。 */
+.selectors > .lbl-row {
+  margin-top: 0;
+}
+
+/* チップの色見本（adr/ux/label-colour-on-the-progress-dots.md）。
+   `.dot` は既に `background: var(--dot, ...)` を読むので、色は Rust 側が
+   `style="--dot:#rrggbb"` で載せるだけ。
+
+   ★ **`.lbl` を flex コンテナにしない**（`.dot` の `flex: none` に釣られない）。
+     flex 化すると `.lbl` の中身が「行」になり、`min-width: 44px` で広がった
+     1 文字チップ（記録タブの `H`）の文字が中央から左寄せへ退行する。E2E は
+     チップの寸法しか見ていないのでこの退行は自動では捕まらない。
+     代わりに `.dot` 側を inline-block にして、`text-align` の中央揃えを保つ。 */
+.lbl > .dot {
+  display: inline-block;
+  vertical-align: -1px;
+  margin-right: 6px;
+}
+
+/* ★ **選択中は丸に縁を足す。** `.lbl.on` の背景は `var(--accent)` なので、
+   推移タブの先頭チップ（「すべて」= `--dot: var(--accent)`）は点いた瞬間に
+   丸が背景と同色になって消える — 既定がその状態なので、「ラベルなしの点は
+   `--accent`」という凡例が初見でいちばん読めない。
+   ★ 縁の色は `--accent-text`（`.lbl.on` の文字色）。同じ面の文字と同じ色なので
+     コントラストは文字と同じだけ確保される。
+   ★ **`.lbl` / `.lbl.on` 自体は 1 文字も変えない**（`.opt.on` とトークンを揃える
+     規約と、記録タブの 1 文字チップの寸法・中央揃えを守るため）。足すのは
+     `.dot` 側だけ。ラベルのチップでも縁が付くが、色は青系を外してあるので
+     見分けは縁の有無ではなく色そのものが担う。 */
+.lbl.on > .dot {
+  box-shadow: 0 0 0 1px var(--accent-text);
+}
+
 /* ★ **3 列を全エントリで揃える。** 日付は "8/3 (月)" と "8/17 (月)" で幅が違うので、
    エントリごとに flex で組むとセット列の開始位置が行ごとにずれ、
    **縦に数字を読む**という履歴の目的が崩れる（日付表記にしたのはそのためだった）。
@@ -587,6 +720,39 @@ h3 {
 .last-row .metric {
   justify-self: end;
   font-variant-numeric: tabular-nums;
+}
+
+/* 履歴のラベル列。**定義がある種目だけ 4 列にする**（属性セレクタなので詳細度が
+   勝つ。`data-labels` が無いあいだは gutter が 2 本のままで、定義 0 の種目は 1px も
+   動かない）。ラベル名を `.when` と同じ span に入れると日付列の `max-content` が
+   ラベル名で決まってセット列の開始位置がずれ、past-records ADR 決定 6（subgrid で
+   桁を縦に揃える）が無効になる。独立した 4 列目にすればラベル列の幅は全エントリの
+   ラベル名で 1 回決まり、日付列は日付だけで決まるので**桁は縦に揃ったまま**。
+
+   ★ `data-labels` の有無と `<span class="label">` の描画は Rust 側で同じ
+   `has_labels` Memo 1 本から出している。subgrid 軸に implicit track は無いので、
+   列数とセル数がずれると行が崩れる。 */
+.last-rows[data-labels] {
+  grid-template-columns: max-content max-content 1fr max-content;
+}
+
+/* ★ **列幅を cap する。** ラベル列は**表示中の全行の最長ラベル**で決まるので、
+   「指定なし」で 12 文字のラベルが 1 本混ざると `.sets` に残る幅が 234px → 80px に
+   なり、`100×10` が 3 行に折り返して「数字を縦に読む」（決定 6）が薄れる。
+
+   ★ **4em（実測 48px）まで詰める。6em では足りない。** 6em だと `.sets` に残るのが
+     152px で、**`100×3` を 4 セット打った日が 2 行になる**（393×852 の実測。
+     HPS の Power 日として最も普通の記録なので、決定 6 を守れていないことになる）。
+     4em なら `.sets` が 176px 残り、`100×3` ×4 も `100×10` ×3 も 1 行に収まる。
+     対価は省略が早く出ることだけで（`Power` は約 33px で無傷、`Hypertrophy` は
+     `Hypert…`）、全名はチップ行に常に出ているので文脈は失われない。
+     `e2e/label.spec.mjs` の 9 番が `.sets` の**高さ**で固定している
+     （`getClientRects().length` は grid item では常に 1 なので折り返しを見られない）。 */
+.last-row .label {
+  max-width: 4em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .copy {
@@ -855,6 +1021,56 @@ h3 {
   color: var(--muted);
 }
 
+/* ── 設定シートのラベル編集（adr/ux/label-chips-switch-the-history-and-the-copy.md）──
+   `.pin-*` の隣に置く。値の性質（種目に貼り付く定義）が同じなので寸法とトークンを
+   揃えるが、**入力がテキスト（IME 付き）なので入力欄は幅広**にする。
+
+   ★ 接頭辞は記録タブのチップ（`.lbl` / `.lbl-row`）と共有する。同じ「ラベル」という
+     概念の 2 つの面（選ぶ / 定義する）なので、`.pin-*` が記録タブに閉じているのとは
+     事情が違う。衝突しないのは `.lbl-edit` 以下が設定シートにしか出ないため。 */
+.lbl-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  /* 列間 10px は `.pin-box` と同じ理由（「✕ がどのチップのものか」を間隔で読ませる） */
+  gap: 6px 10px;
+}
+
+.lbl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* ★ `.pin-num` の 2.9em では 12 文字のラベルが入らない。`.text-input` を土台に
+   幅だけ与える（`.field` の中で 100% に伸びると ✕ が押し出される）。
+   ★ **子孫セレクタ（0,2,0）が要る。** `.text-input`（0,1,0）はこの節より後ろに
+     あるので、同詳細度では `width: 100%` に負ける（`.pin-add` と同じ事情）。 */
+.lbl-edit .lbl-name {
+  width: 7.5em;
+}
+
+/* ラベルの色ピッカー（adr/ux/label-colour-on-the-progress-dots.md）。
+   `.field input[type="color"]`（部位の色）は 64px 幅だが、この行は
+   色 + 名前 7.5em + ✕ + gap が 393px（iPhone 15 の CSS 幅）に収まる必要があるので
+   44px まで詰める。**タップ標的の 44px は割らない。**
+
+   ★ **子孫 2 段（0,3,0）が要る。** `.field input[type="color"]`（0,2,1）に
+     `.lbl-edit .lbl-color`（0,2,0）では負ける（クラス 2 + 要素 1 のほうが強い）。
+     `.field` を頭に足して 0,3,0 にする。 */
+.field .lbl-edit .lbl-color {
+  width: 44px;
+  min-height: 44px;
+  padding: 2px;
+}
+
+/* 「＋」。`.pin-box .pin-add` と同じ規則（めったに使わない追加に彩度を与えない）。
+   詳細度の事情も同じで、`.link-btn`（0,1,0）と同詳細度では上書きできない。 */
+.lbl-edit .lbl-add {
+  min-width: 44px;
+  color: var(--muted);
+}
+
 /* ── インターバル（adr/ux/interval-seconds-on-the-exercise.md）───────────────
    ピンの真下に置く。値の性質（種目に貼り付く設定）が同じなので、寸法もトークンも
    `.pin-*` と揃える — 段が変わると「その日のメモ」と同じ列に見えてしまう。
@@ -880,6 +1096,27 @@ h3 {
   margin-top: 8px;
   font-size: 13px;
   color: var(--muted);
+}
+
+/* 体重の線（設定）: 期間ラベル + 2 択のセグメントを 1 行に。`.pct-box` と同じ寸法
+   （adr/ux/weight-line-daily-or-weekly-per-period.md） */
+.wline-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.wline-label {
+  flex: none;
+  min-width: 2.2em;
+  font-weight: 600;
+}
+
+.wline-row > .segmented {
+  flex: 1;
 }
 
 /* 入力欄そのものは `.pin-num` とセレクタを共有している（同じ見た目の同じ部品）。
@@ -1554,13 +1791,21 @@ h3 {
   stroke-linecap: round;
 }
 
+/* ★ **点だけが `--dot` を読む**（adr/ux/label-colour-on-the-progress-dots.md）。
+   ラベルの色は利用者が選ぶ値なのでクラスで表現できず、Rust 側が
+   `style="--dot:#rrggbb"` を `<circle>` **自身**に載せる。`--dot` は継承変数なので
+   `.chart-wrap` や `svg` に置くと全点が同色になる。
+   ★ 折れ線（`.chart-line`）・軸・体重（`.chart-dot-weight`）は `--accent` /
+   `--muted` のまま。ラベルは「その日の狙い」で、線が繋ぐのは狙いをまたいだ推移。 */
 .chart-dot {
-  fill: var(--accent);
+  fill: var(--dot, var(--accent));
 }
 
+/* 選択中。`fill: var(--surface)` は維持する（中を抜いて縁で示す絵）。
+   縁だけをラベルの色にするので、選択しても「どのラベルの点か」が消えない。 */
 .chart-dot.selected {
   fill: var(--surface);
-  stroke: var(--accent);
+  stroke: var(--dot, var(--accent));
   stroke-width: 2;
 }
 
@@ -2383,6 +2628,101 @@ h3 {
    .link-btn と同じ詳細度なので、色を上書きするにはこの位置（後方）である必要がある */
 .danger {
   color: var(--warn);
+}
+
+/* ── 使い方マニュアル（設定タブ） ───────────────────────────────────────── */
+
+.man-note {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+/* 節の先頭の注記だけ上の余白を落とす（見出しとのあいだは .man-section が持つ）。
+   ★ かつては導入文（.man-intro）が先頭で margin-top: 0 を持っていた。
+     導入文を外したので、その役割をここへ移してある。 */
+.man-section > p:first-child {
+  margin-top: 0;
+}
+
+/* 図はライトテーマで撮ってある。ライトで見ている人には図と自分の画面の色が
+   一致しているので断る必要がない。ダークで見ている人にだけ出す。
+   ★ i18n.rs 側では分岐しない。テーマは CSS の世界の情報で、Rust 側は
+   `prefers-color-scheme` を購読していない（`matchMedia` を見に行くと再レンダリングの
+   配線が要る）。表示の有無だけなら CSS で足りる。このアプリに `data-theme` の
+   明示切り替えは無く `prefers-color-scheme` だけなので、それで足りる */
+.man-light-note {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .man-light-note {
+    display: block;
+  }
+}
+
+/* マニュアルの章見出し。.fold-group（部位ブロックを折りたたむシート、上の節）と
+   見た目の規則は同じだが独立して持つ。.fold-group はシート専用の性質を自身の
+   コメントで明言しており、ここはシートではない設定タブの節本体だから。
+   .grp-toggle 自体と aria-expanded のフックは共有する。 */
+.man-group {
+  border-bottom: 1px solid var(--line);
+}
+
+.man-group:last-child {
+  border-bottom: 0;
+}
+
+/* ★ <h3> ではなく <h2> を使う（h1 → h2 の 1 本、adr/ux/focus-ring-and-heading-order.md）
+   ので、.fold-group > h3 と同じ打ち消しをここにも書く。片方だけ直すと、
+   ここだけ UA の h2 { font-size: 1.5em } が生き残って見出しの大きさが食い違う */
+.man-group > h2 {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+/* .grp-toggle は <h2> の中の唯一の子。.fold-group .grp-toggle と同じ理由で
+   width を明示する（display: flex だけでは h2 の幅まで伸びない） */
+.man-group .grp-toggle {
+  width: 100%;
+}
+
+.man-body {
+  padding: 0 0 12px;
+}
+
+/* 章の本文は番号付きの箇条書き。1 項目 = 1 つの事実。
+   ★ padding-left は UA 既定（40px）だと 393px 幅で本文が窮屈になるので詰める。 */
+.man-list {
+  margin: 0;
+  padding-left: 1.4em;
+  font-size: 13px;
+}
+
+.man-list > li {
+  margin-top: 6px;
+}
+
+.man-list > li:first-child {
+  margin-top: 0;
+}
+
+/* 図は必ず補助。オフラインでは alt だけが残るので、本文だけで手順が完結していること。
+   .hlp-fig（max-width: 200px）と違って広く取るのは、これがアプリの実画面で
+   小さいと読めないため。 */
+.man-fig {
+  max-width: 365px;
+  margin: 10px auto 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.man-fig img {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 /* ── データの書き出し / 読み込み ─────────────────────────────────────────── */

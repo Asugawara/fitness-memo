@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-19
 - **カテゴリ**: ux
-- **関連**: [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（入口を共有する相手）, [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md)（スコープの対比）, [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [数値入力に `type="number"` を使わない](text-input-not-number.md), [表計算で開ける TSV で書き出す](../storage/tsv-export-for-spreadsheets.md), [取り込みは「足すだけ」に固定する](../storage/import-is-merge-only.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（住み分けの相手）, [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](interval-seconds-on-the-exercise.md)（この ADR の制約と作法をそのまま継いだ隣人）
+- **関連**: [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（入口を共有する相手）, [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md)（スコープの対比）, [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [数値入力に `type="number"` を使わない](text-input-not-number.md), [表計算で開ける TSV で書き出す](../storage/tsv-export-for-spreadsheets.md), [取り込みは「足すだけ」に固定する](../storage/import-is-merge-only.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（住み分けの相手）, [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](interval-seconds-on-the-exercise.md)（この ADR の制約と作法をそのまま継いだ隣人）, [チップでラベルを選ぶと履歴とコピーが切り替わる](label-chips-switch-the-history-and-the-copy.md)（決定 9 の隣人だが逆の判断をした相手）
 
 ## 背景
 
@@ -97,6 +97,14 @@ pub pins: Vec<String>,
 `ExerciseEditor` が担当するのは「種目マスタの同一性と可視性」（名前 / 部位 / アーカイブ）で、ピンは「そのマシンをどう物理的にセットするか」。層が違ううえ、あれはモーダルシートの中で**マシンの前で開く場所ではない**。
 
 入口が 1 つなら、同じフィールドに書き込む `RwSignal` のミラーも 1 本で済む。
+
+★ **種目ごとのラベルは逆の判断になった**（[チップでラベルを選ぶと履歴とコピーが切り替わる](label-chips-switch-the-history-and-the-copy.md)）。ラベルの定義（作成・改名・削除）は**設定タブの種目編集シートだけ**に置き、記録タブには選択のチップ行しか出さない。
+
+差は値の性質にある。ピンは「マシンの前で**読む**値」なので近くに要るが、ラベルの定義は種目ごとに**生涯 1 回**で、マシンの前で必要になるものではない（選ぶほうは 1 タップでカードにある）。**読むものは近くに、決めるものは奥に。**
+
+副産物として、本 ADR が「本当の穴」と認めた点（アーカイブ済み種目のピンを直せない）が、ラベルでは最初から塞がっている。
+
+★ **チップ行を `.card-head` に入れる案も、本 ADR の実測で却下された。** ヘッダ 24px → 44px・5 枚で 100px という数字と、`.card-head button` を 0 件で固定した e2e 4 箇所がそのまま効いている。ラベルのチップ行は `.card-head` の**外**（直後）に置き、定義が 0 本の種目では描かないことで既存カードの高さを守った。
 
 ## 理由
 

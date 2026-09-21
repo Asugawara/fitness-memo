@@ -23,6 +23,7 @@ use crate::model::{Db, Group, GroupId, Session};
 use super::day::DayEditor;
 use super::help::InstallBanner;
 use super::icon::{self, icon};
+use super::manual::ManualHint;
 use super::routine::SaveDayAsRoutine;
 use super::{cur_lang, fmt_metric, t, use_dates, use_db};
 
@@ -258,6 +259,13 @@ pub fn Calendar() -> impl IntoView {
                     <dd data-testid="cal-sets">{move || data.with(|m| m.sets).to_string()}</dd>
                 </div>
             </dl>
+
+            // ★ `DayEditor` の**直前**に置く。記録タブ末尾（`InstallBanner` の近く）は
+            //   393×659・記録ゼロでも上端 685px で可視域外になる実測があり
+            //   （adr/ux/install-guide-banner-and-sheet.md:78）、そこへ置くと
+            //   「気づきづらい説明が気づきづらい場所にある」矛盾をそのまま引き継ぐ。
+            //   install バナーと縦に並ばない条件は `ManualHint` 自身が持つ
+            <ManualHint />
 
             // ★ 選択日の入力欄。読み取り専用のサマリと「この日を編集」ボタンは持たない。
             //   日をタップした時点でここがその日のものになるので、記録がある日も無い日も

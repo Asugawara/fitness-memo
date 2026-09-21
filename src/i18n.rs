@@ -128,6 +128,8 @@ pub struct S {
     pub day: Day,
     /// `views/help.rs` — ホーム画面への追加の案内
     pub help: Help,
+    /// `views/manual.rs` — 設定タブの使い方マニュアル
+    pub manual: Manual,
     /// `views/backup.rs` — エクスポート / インポート
     pub backup: Backup,
     /// `views/whatsnew.rs` — 新機能のお知らせバナーとシート。お知らせ本文自体は
@@ -145,6 +147,7 @@ const JA: S = S {
     routine: JA_ROUTINE,
     day: JA_DAY,
     help: JA_HELP,
+    manual: JA_MANUAL,
     backup: JA_BACKUP,
     releases: JA_RELEASES,
 };
@@ -159,6 +162,7 @@ const EN: S = S {
     routine: EN_ROUTINE,
     day: EN_DAY,
     help: EN_HELP,
+    manual: EN_MANUAL,
     backup: EN_BACKUP,
     releases: EN_RELEASES,
 };
@@ -318,6 +322,13 @@ pub struct Settings {
     /// 落とし幅（%）の見出しと注記。段を足すときの重量をここから計算する
     pub drop_pct_label: &'static str,
     pub drop_pct_note: &'static str,
+    /// 推移タブの体重の破線を日ごとに描くか週平均に落とすかの行 / そのサブページの h1
+    pub row_weight_line: &'static str,
+    /// 3M / 6M / 1Y それぞれの 2 択のラベル。**行の右端の現在値にも同じものを使う**
+    /// （`drop_sets_exclude` / `drop_sets_include` と同じ流儀）
+    pub weight_line_daily: &'static str,
+    pub weight_line_weekly: &'static str,
+    pub weight_line_note: &'static str,
     /// 言語の行 / 言語サブページの h1
     pub row_language: &'static str,
     /// 言語サブページの注記。**種目名が変わらないことを先に言う** —
@@ -363,6 +374,18 @@ pub struct Settings {
     /// 種目のアーカイブ
     pub archive_exercise: &'static str,
     pub archive_explain: &'static str,
+    /// 種目ごとのラベル。**定義（作成・改名・削除）はこのシートだけに置く**
+    /// （選択は記録タブのチップ行で 1 タップ）。
+    /// adr/ux/label-chips-switch-the-history-and-the-copy.md
+    pub field_labels: &'static str,
+    /// ラベル欄の注記。**何のためのものかを書く**（`routines_empty` と同じ規則）
+    pub labels_note: &'static str,
+    pub label_value: &'static str,
+    pub label_add: &'static str,
+    pub duplicate_label: &'static str,
+    /// 削除の確認。**「同じ名前で作り直しても戻らない」を必ず含める** —
+    /// 参照は ID なので、消すと過去の記録はそのラベルから永久に外れる（本物の罠）
+    pub delete_label_confirm: &'static str,
 }
 
 const JA_SETTINGS: Settings = Settings {
@@ -379,6 +402,10 @@ const JA_SETTINGS: Settings = Settings {
     drop_sets_include: "含める",
     drop_pct_label: "落とし幅",
     drop_pct_note: "段を 1 つ足すとき、メインセットの重量から何 % 落とすか。計算して入れるのは 1 段目だけで、2 段目からは前の段の重量をそのままコピーします。小数点以下 1 桁まで",
+    row_weight_line: "体重の線",
+    weight_line_daily: "日ごと",
+    weight_line_weekly: "週平均",
+    weight_line_note: "推移タブの体重の点線を、期間ごとに日ごとのまま描くか週平均に落とすか。1M は常に日ごと、「全期間」は常に週単位です。日ごとにすると計量の多い期間では線が細かく揺れます。週平均になるのは同じ週に 2 回以上計量した週があるときだけで、週 1 回以下なら線は変わりません。タップで読める体重はどちらでも記録した数字のままです",
     row_language: "言語",
     language_note: "種目名と部位名は変わりません（自分で付けた名前として扱うため）。変えたいときは「種目」から 1 つずつ編集してください",
     edit_group: "部位を編集",
@@ -411,6 +438,12 @@ const JA_SETTINGS: Settings = Settings {
     add: "追加",
     archive_exercise: "この種目をアーカイブ",
     archive_explain: "アーカイブは記録を消しません。過去のログは残り、「種目を追加」に出なくなります",
+    field_labels: "ラベル",
+    labels_note: "同じ種目で狙いを変えるとき（高重量・高回数など）に付けます。記録タブでラベルを選ぶと、そのラベルの前回だけが出ます",
+    label_value: "ラベルの名前",
+    label_add: "ラベルを追加",
+    duplicate_label: "同じ名前のラベルがあります",
+    delete_label_confirm: "このラベルを削除します。過去の記録は消えませんが、同じ名前で作り直しても過去の記録には戻りません",
 };
 
 const EN_SETTINGS: Settings = Settings {
@@ -427,6 +460,10 @@ const EN_SETTINGS: Settings = Settings {
     drop_sets_include: "Included",
     drop_pct_label: "Drop by",
     drop_pct_note: "When you add a stage, how much to take off the main set's weight. Only the first stage is worked out from it; from the second on, the previous stage's weight is copied. One decimal place.",
+    row_weight_line: "Weight line",
+    weight_line_daily: "Daily",
+    weight_line_weekly: "Weekly average",
+    weight_line_note: "Whether the Progress tab's body-weight line is drawn day by day or smoothed to a weekly average, per period. 1M is always daily and \"All\" is always weekly. Drawn daily, a period with many weigh-ins looks jagged. Only weeks with two or more weigh-ins are averaged; at one a week or fewer the line is unchanged. The weight you read by tapping is always the recorded figure.",
     row_language: "Language",
     language_note: "Exercise and muscle-group names do not change — they are treated as names you gave them. Edit them one by one under Exercises if you want them in another language.",
     edit_group: "Edit muscle group",
@@ -459,6 +496,12 @@ const EN_SETTINGS: Settings = Settings {
     add: "Add",
     archive_exercise: "Archive this exercise",
     archive_explain: "Archiving deletes nothing. Past records stay, and the exercise stops appearing under Add exercise.",
+    field_labels: "Labels",
+    labels_note: "Use these when you vary your aim on the same exercise — heavy singles, high reps, and so on. Pick a label on the Record tab and you see only that label's last session.",
+    label_value: "Label name",
+    label_add: "Add a label",
+    duplicate_label: "A label with that name already exists.",
+    delete_label_confirm: "Delete this label? Your records stay, but making a label with the same name again will not bring them back to it.",
 };
 
 // ── core.rs ─────────────────────────────────────────────────────────────────
@@ -550,9 +593,27 @@ pub struct Progress {
     /// ドロップセットを集計から外していることの断り。**外したことを黙らない**
     /// （記録タブは常に全部数えるので、黙ると同じ日の合計が食い違う理由が出ない）
     pub drops_hidden_note: &'static str,
+    /// ラベルのチップ行の `aria-label`。見えるラベルは置かないのでここだけが頼り
+    /// （対象セレクタ 2 つと同じ作法）
+    pub pick_label: &'static str,
+    /// ラベルのチップ行の先頭（絞り込みなし）。
+    ///
+    /// ★ **`period_all` / `all_groups` / `all_exercises` と同語にしない。**
+    ///   期間の「全期間」/"All" と 2 つのセレクタの「すべての〜」がすぐ隣に並ぶので、
+    ///   同じ語だとどれの「すべて」か取り違える（`all_groups` の ★ と同じ理由）。
+    ///
+    /// ★ 記録タブのチップ行の「指定なし」/"Any" とも別語。あちらのチップは
+    ///   **今日のログの宛先**も兼ねるので「絞らない」ではなく「付けない」で、
+    ///   こちらは表示の絞り込みしか意味しない
+    ///   （adr/ux/label-colour-on-the-progress-dots.md）
+    pub all_labels: &'static str,
     /// この期間・この対象に記録が無い
     pub empty_period_exercise: &'static str,
     pub empty_period: &'static str,
+    /// ラベルで絞った結果が 0 件。**`empty_period_exercise` と分ける** —
+    /// 種目には記録があるのにチップで絞って消えた、が読み取れないと
+    /// 「すべて」に戻せば見えることに気づけない
+    pub empty_period_label: &'static str,
     /// サマリの 3 つ
     pub stat_delta: &'static str,
     pub stat_best: &'static str,
@@ -581,8 +642,11 @@ const JA_PROGRESS: Progress = Progress {
     weekly_note: "全期間は週単位で集計しています",
     weekly_note_with_weight: "全期間は週単位で集計しています（体重は週平均）",
     drops_hidden_note: "ドロップセットの段は含めていません（設定で変えられます）",
+    pick_label: "ラベル",
+    all_labels: "すべて",
     empty_period_exercise: "この期間、この種目の記録はありません",
     empty_period: "この期間の記録はありません",
+    empty_period_label: "この期間、このラベルの記録はありません",
     stat_delta: "前回比",
     stat_best: "期間内ベスト",
     stat_average: "期間内平均",
@@ -608,8 +672,11 @@ const EN_PROGRESS: Progress = Progress {
     weekly_note: "Over all time, figures are grouped by week.",
     weekly_note_with_weight: "Over all time, figures are grouped by week (body weight is a weekly average).",
     drops_hidden_note: "Drop sets are not included. You can change this in Settings.",
+    pick_label: "Label",
+    all_labels: "All labels",
     empty_period_exercise: "No records for this exercise in this period.",
     empty_period: "No records in this period.",
+    empty_period_label: "No records for this label in this period.",
     stat_delta: "vs. last",
     stat_best: "Best in period",
     stat_average: "Average in period",
@@ -729,6 +796,13 @@ pub struct Day {
     pub remove_confirm: &'static str,
     pub remove_yes: &'static str,
     pub remove_no: &'static str,
+    /// ラベルのチップ行の `aria-label`。**定義がある種目にしか出ない**
+    /// （adr/ux/label-chips-switch-the-history-and-the-copy.md）
+    pub labels: &'static str,
+    /// 先頭のチップ。**「ラベルなし」にしない** — これは `LabelFilter::Any`
+    /// （絞らない）であって「ラベルが無いログだけ」ではない。半年ラベルなしで
+    /// 記録してきた利用者が押したときに昨日の記録が出る側の意味にする
+    pub label_any: &'static str,
 }
 
 const JA_DAY: Day = Day {
@@ -771,6 +845,8 @@ const JA_DAY: Day = Day {
     remove_confirm: "この日の記録が消えます",
     remove_yes: "外す",
     remove_no: "やめる",
+    labels: "ラベル",
+    label_any: "指定なし",
 };
 
 const EN_DAY: Day = Day {
@@ -813,6 +889,8 @@ const EN_DAY: Day = Day {
     remove_confirm: "This day's record will be deleted.",
     remove_yes: "Remove",
     remove_no: "Cancel",
+    labels: "Labels",
+    label_any: "Any",
 };
 
 // ── views/help.rs ───────────────────────────────────────────────────────────
@@ -898,6 +976,464 @@ const EN_HELP: Help = Help {
     already_where: "While still in the Safari tab,",
     already_body: "open the Settings tab, save a file with Export, then load it with Import in the home-screen app.",
     already_order: "Exporting after you add it to the home screen achieves nothing — that side is empty. The order matters.",
+};
+
+// ── views/manual.rs ─────────────────────────────────────────────────────────
+
+/// マニュアルの 1 章の文言。**章の骨格（順序・図の有無）は `manual.rs` の
+/// [`crate::manual::Chapter`] / [`crate::manual::MANUAL_CHAPTERS`] が持つ。**
+///
+/// ★ **`fig` は言語別。** クリップは要素の外接矩形なので内容依存で、同じ章でも
+///   ja / en で寸法が違いうる（`adr/architecture/manual-figures-as-served-screenshots.md`）。
+pub struct ChapterText {
+    pub title: &'static str,
+    /// 段落 3〜5。**図が無くても本文だけで手順が完結すること**
+    /// （図はオフラインでは出ないので、あくまで補助）。
+    pub body: &'static [&'static str],
+    /// 図の alt。**1 行に収まる短いラベル**にすること。説明は `body` が持つ。
+    ///
+    /// ★ **WebKit は alt を折り返さない。** `RenderImage::paintMissingImageState` →
+    ///   `hasRoomForAltText` が alt 全文を 1 本の `TextRun` として測り、幅に収まらなければ
+    ///   **何も描かない**。Blink は折り返して出すので Chrome で見ても気づけないが、
+    ///   主対象は iPhone なので、長い alt は圏外で**図の代わりに何も出ない**ことになる。
+    ///   上限は `every_language_has_the_same_manual_chapters` が言語別に固定している。
+    pub fig_alt: &'static str,
+    /// 図の宣言寸法（デバイスピクセル）。`<img width height>` に出してレイアウトシフトを
+    /// 防ぐ値で、`manual::tests::every_manual_figure_exists_with_the_declared_size` が
+    /// `public/manual/<lang>/<id>.webp` の実ファイルと突き合わせる。
+    ///
+    /// ★ 撮り直して寸法が動いたらここを手で直す。放っておくと E2E（配信物の
+    ///   `<img>` と実ファイルの比較）が落ちる。`.githooks/pre-commit` のコメント参照。
+    pub fig: Option<(u32, u32)>,
+}
+
+/// 使い方マニュアル全体の文言。
+///
+/// ★ **設定タブの節として持つ**（シートにしない）理由と、記録タブに出す
+///   `hint_*` の排他条件・配置は `adr/ux/manual-as-a-settings-section-with-one-open-chapter.md`
+///   に書く。
+pub struct Manual {
+    /// 設定タブの行ラベル。マニュアル節の `<h1>` にも使う。
+    pub row_label: &'static str,
+    /// 圏外では図が出ないことを先に言う。「黙って欠ける」を作らない
+    pub offline_note: &'static str,
+    /// 図はライトテーマの画面であることを断る（ダークテーマ利用者への注記）
+    pub light_note: &'static str,
+    /// ホーム画面追加は `help.rs` の手順シートが説明済みなので、重複させず 1 行で誘導する
+    pub see_install_help: &'static str,
+    /// 記録タブに初回だけ出す手掛かり（`install_hint` と同じ 3 点セット）の本文
+    pub hint_body: &'static str,
+    pub hint_cta: &'static str,
+    /// ✕ の `aria-label`（見た目は ✕ でも支援技術には言葉で届く）
+    pub hint_dismiss: &'static str,
+    /// [`crate::manual::MANUAL_CHAPTERS`] と同じ順・同じ長さ
+    pub chapters: &'static [ChapterText],
+}
+
+const JA_MANUAL: Manual = Manual {
+    row_label: "活用方法",
+    offline_note: "圏外では図が表示されません。文章だけで手順が分かるようにしてあります。",
+    light_note: "図はライトテーマの画面です。ダークテーマで使っていても配置は同じです。",
+    see_install_help: "ホーム画面への追加は「ホーム画面への追加のしかた」を見てください。",
+    hint_body: "このアプリには気づきにくい機能がいくつかあります。設定タブの「活用方法」でまとめて確認できます。",
+    hint_cta: "活用方法を見る ›",
+    hint_dismiss: "この案内を今後表示しない",
+    chapters: &[
+        ChapterText {
+            title: "推移タブの絞り込み",
+            body: &[
+                "推移タブには「部位」と「種目」の2つのセレクタがあります。",
+                "部位を選ぶと、種目セレクタの候補はその部位の種目だけになります。",
+                "種目を直接選ぶと、部位セレクタは自動でその種目の部位に切り替わります。",
+                "部位を「すべて」に戻すと種目の選択も外れます（食い違った組み合わせにはなりません）。",
+                "両方「すべて」のままだとグラフは出ません。どちらか一方を選ぶと表示されます。",
+                "最後に選んだ組み合わせは端末に残り、次に開いたときも引き継がれます。",
+            ],
+            fig_alt: "部位と種目のセレクタ",
+            fig: Some((770, 128)),
+        },
+        ChapterText {
+            title: "グラフの読み取り欄",
+            body: &[
+                "読み取り欄は常に表示され、既定では一番新しい点の日付と数値を示します。",
+                "グラフをタップすると、読み取り欄はタップした点へ移動します（値は変わりません）。",
+                "指標が「ボリューム」のとき、重量未入力のセットは1kgとして計算されます。",
+                "自重種目では実質「総レップ数」、時間で数える種目では「総秒数」になります。",
+                "期間を「全期間」にすると、日ごとの点が週単位にまとめられます。",
+                "週単位では、指標は週の合計、体重は週の平均です。",
+                "3M・6M・1Yの体重の線は、設定タブの「体重の線」で日ごとか週平均かを期間ごとに選べます。",
+                "既定は3M・6Mが日ごと、1Yが週平均。1Mは常に日ごとです。週1回以下の計量なら週平均でも線は変わりません。",
+                "体重の第2軸は、指標のグラフが表示されているときだけ重ねて出ます。",
+                "指標に記録が無い期間では、体重の記録があっても第2軸は出ません。",
+            ],
+            fig_alt: "グラフと下の読み取り欄",
+            fig: Some((734, 438)),
+        },
+        ChapterText {
+            title: "前回をコピー",
+            body: &[
+                "「前回をコピー」はその日のセットが空のときだけ出ます。",
+                "入るのは直近1回分だけ。表示件数を2〜3件にしても変わりません。",
+                "種目メモは今日の欄が空のときだけ入ります。書いてあれば上書きしません。",
+                "セットメモは今日その行に書いた内容が優先。空の行にだけ前回のメモが入ります。",
+                "体重とその日の体調メモは持ち込みません。",
+            ],
+            fig_alt: "空のカードと「前回をコピー」",
+            fig: Some((762, 618)),
+        },
+        ChapterText {
+            title: "種目ごとのラベル",
+            body: &[
+                "ラベルは種目ごとに、設定タブの「種目」→編集シート→「ラベル」で定義します（1種目6個、名前12文字まで）。",
+                "最初からある種目にはラベルがなく、用途は同じ種目で狙い（高重量・高回数など）を変えることです。",
+                "行の左端の色見本で色を選べます。新規ラベルには重ならない色が自動で付き、色の意味は推移タブに出ます。",
+                "定義すると記録タブのカードにチップが出ます（種目名の下）。先頭は「指定なし」（絞らない意味）。",
+                "ラベルを選ぶと「前回までの記録」と「前回をコピー」がそのラベルの回だけになります。",
+                "記録が無ければ「記録なし」と出てコピーのボタンも出ません。ラベルなしの前回には落ちません。",
+                "ラベルは「その日・その種目に1つ」。セットを入れないと保存されず「指定なし」に戻ります。",
+                "定義を消すのは行の✕だけ（確認あり）。名前を空にしても定義は消えません。",
+                "削除しても過去の記録は消えず、同名で作り直しても紐づき直しません。",
+                "削除したラベルを選んでいた場合は「指定なし」に戻ります。",
+                "書き出すTSVには「ラベル」列がありますが、色は含まれません。",
+            ],
+            fig_alt: "カードのラベルのチップ行",
+            fig: Some((710, 164)),
+        },
+        ChapterText {
+            title: "ラベルで推移を絞る",
+            body: &[
+                "推移タブでラベル定義のある種目を選ぶと、セレクタの下にチップの行が出ます。",
+                "部位だけの選択時や、ラベル未定義の種目では出ません（複数種目の合算はできないため）。",
+                "先頭チップは「すべて」。押すとグラフの点・記録の表・統計がそのラベルの日だけに絞られます。",
+                "記録タブの先頭チップは「指定なし」で語が違います。",
+                "「すべて」のとき、ラベル付きの日の点だけがその色で出ます。折れ線・軸・体重の破線は色を変えません。",
+                "チップ行そのものが凡例で、グラフの上に別の凡例はありません。",
+                "各チップの丸が色を示し、先頭「すべて」の丸はラベルなしの色を指します。",
+                "色が読めなくてもグラフの意味は変わりません。",
+                "この絞り込みは端末に残りません。部位・種目の選択とは違い、指標や期間と同じ「今の見方」の扱いです。",
+                "種目を切り替えると絞りは外れます（ラベルは種目ごとに別のIDのため）。部位だけの変更では外れません。",
+                "ラベルを削除すると「すべて」に戻ります。",
+                "絞った結果記録が無ければ「この期間、このラベルの記録はありません」と出ます。「すべて」に戻すか期間を広げれば見えます。",
+                "点が多いと最新の点にしか色が出ません。",
+                "チップで1つに絞ると点数が減り、色も戻ります（推移を追うにはチップ絞りが本線です）。",
+                "「全期間」では週単位にまとまり、週の点が全部同じラベルのときだけ色が残ります（1つに絞れば消えません）。",
+            ],
+            fig_alt: "ラベルのチップと色付きの点",
+            fig: Some((770, 738)),
+        },
+        ChapterText {
+            title: "「＋ メモ」で開く4つ",
+            body: &[
+                "「＋ メモ」を押すと、ピン・インターバル（秒）・種目メモ・セット行のメモの4つが一度に開きます。",
+                "「－ メモ」を押すと4つまとめて畳まれます。",
+                "ピンとインターバルは種目そのものに貼り付く設定で、日をまたいで残ります（マシンの設定値の打ち直しを防ぎます）。",
+                "閉じているあいだも、入力済みの内容は薄い字で読めます。確認のためだけに開き直す必要はありません。",
+                "インターバルは参考の秒数の表示で、カウントダウンはありません。",
+            ],
+            fig_alt: "一斉に開いた4つの入力欄",
+            fig: Some((718, 1024)),
+        },
+        ChapterText {
+            title: "ドロップセット",
+            body: &[
+                "セット行の回数欄の右のアイコン（下向き矢印）で、メインセットの下に段が1行増えます（＋メモを開かなくても押せます）。",
+                "段には番号が付きません（メインセットとの違いです）。",
+                "1段目の重量は、メインセットの重量から落とし幅を引いた値が入ります（既定20%、設定タブの「ドロップセット」で変更可）。",
+                "2段目からは落とし幅を掛け直さず、前の段の重量をそのままコピーします。回数はどの段も空で始まります。",
+                "重量が入らないセット（自重種目など）は、段の重量も空のままです。",
+                "段の行の＋でさらに足せます（1メインセットにつき4段まで、上限で＋が消えます）。行ごとの✕で消せます。",
+                "段を足しただけで回数が空の行は保存されず、「回数を入れると保存されます」と出ます。",
+                "推移タブは既定で段を含めません（含めると基準が日によって膨らむため）。",
+                "設定タブの「ドロップセット」で切り替えられ、効く範囲はグラフ・統計・記録の一覧です。",
+                "含めない設定で実際に段があると、推移タブに「ドロップセットの段は含めていません（設定で変えられます）」と出ます。",
+                "記録タブの合計・カレンダー・月ごとの集計は、設定にかかわらず常に段も数えます。",
+                "そのため同じ日でも記録タブと推移タブで合計が違って見えることがあります。",
+                "「＋ セット」の行には段が付きません。",
+                "前回をコピー・メニューの展開・日のコピーは段ごと持ってきます。",
+                "カードの「前回までの記録」にはメインセットだけ出ます。",
+            ],
+            fig_alt: "段が2つ入ったセット行",
+            fig: Some((710, 510)),
+        },
+        ChapterText {
+            title: "空の日から始める",
+            body: &[
+                "候補リストは、その日にまだ1枚もカードが無いときだけ出ます。",
+                "1種目でも追加すると候補は消え、未来の日には出ません。",
+                "「最近の記録から」は直近180日以内・最大4件まで遡ります。種目名も表示され、同じ部位の日でも見分けられます。",
+                "候補を選ぶとその日は「実施済み」として扱われ、カレンダーのドット・月末の集計・グラフに反映されます。",
+                "「最近の記録から」はセット付きの記録をそのままコピーするので必ず実施済みになります。",
+                "保存したメニューを展開する場合は違い、履歴の無い種目は空のカードだけになります。",
+                "メニューの全種目に履歴が無ければ、その日は実施済みになりません。",
+                "やらなかった種目があれば、そのカードの「この日から外す」で取り消せます。",
+            ],
+            fig_alt: "空の日に出る候補リスト",
+            fig: Some((762, 734)),
+        },
+        ChapterText {
+            title: "部位の折りたたみ",
+            body: &[
+                "部位ごとに折りたためる一覧は3か所にありますが、同時に開ける数が違います。",
+                "設定タブの「種目」節と、記録タブの「種目を追加」シートは、どちらも一度に1つの部位しか開けません。",
+                "メニュー編集シートの「選択中」だけは複数の部位を同時に開けます（胸と脚を行き来する使い方を想定）。",
+                "メニューを作る入口は2つあります。",
+                "「＋ この日をメニューにする」は、その日に実際にセット付きの記録があるときだけ出ます（空のカードだけでは出ません）。",
+            ],
+            fig_alt: "1つだけ開く種目の追加シート",
+            fig: Some((786, 1030)),
+        },
+        ChapterText {
+            title: "並び替え",
+            body: &[
+                "並び替えは3か所で掴む場所と待ち時間が違います。",
+                "種目カードの見出し行とメニュー編集シートの行は、掴んでから250ミリ秒待つと始まります。",
+                "セット行だけは違い、左端のセット番号を掴んだ瞬間に動き始めます（待ち時間はありません）。",
+                "見出し行やメニューの行が待つのは、即座に動くと縦のフリックスクロールと区別できないためです。",
+                "キーボードでの並び替えはAlt+↑/↓で行えます（矢印キーだけでは入力欄のカーソル移動と衝突します）。",
+            ],
+            fig_alt: "番号で持ち上げたセット行",
+            fig: Some((710, 332)),
+        },
+        ChapterText {
+            title: "書き出しと読み込み",
+            body: &[
+                "設定タブの「エクスポート / インポート」でTSV形式のファイルを書き出せます。",
+                "TSVファイルは表計算ソフトでそのまま開けます。",
+                "iOSでは共有シートから「ファイルに保存」を選んでください。",
+                "読み込みは基本的に追加だけです。",
+                "同じ日・同じ種目でセットの内容が食い違う場合は、「セット数→ボリューム→各セットの中身」の順で比べて多いほうが残ります。",
+                "ファイル側が多ければ今ある記録が入れ替わり、確認画面に「入れ替わる記録があります」と出ます。",
+                "今ある記録のほうが多ければ何も起きず「新しく取り込むものはありません」と出ます。",
+                "この場合、ファイルの内容は捨てられます。",
+                "取り込んだ直後なら「元に戻す」で戻せます。",
+                "1度目は確認表示、もう一度押すと実際に戻ります。",
+                "シートを閉じるとこの機会は失われます。",
+                "TSVには種目のID・色・並び順・アーカイブ状態は含まれません。",
+                "記録時刻の列は書き出されますが、読み込み時には使われません。",
+            ],
+            fig_alt: "書き出しと読み込みのシート",
+            fig: Some((786, 540)),
+        },
+        ChapterText {
+            title: "新機能のお知らせ",
+            body: &[
+                "新しい機能が入ると、画面の一番上に細い帯が出ます。",
+                "記録・推移・設定のどのタブでも同じ位置に出ます。",
+                "押すと、まだ読んでいないぶんをまとめて1枚で読めます。",
+                "複数回分たまっていても1回で読み切れます。",
+                "帯の✕を押すか開いた画面を閉じると既読になり、その回のお知らせは二度と出ません。",
+                "アプリの中に読み返す場所はありません。内容はREADMEとGitHubに残っています。",
+                "開いたまま閉じずに離れると未読のままで、次も出ます。",
+                "使い始めたばかりの端末や、この仕組みが入る前から使っている端末には過去のお知らせは出ません。",
+                "次の新しいお知らせが入ったときから出ます。",
+            ],
+            fig_alt: "画面最上段のお知らせの帯",
+            fig: Some((786, 202)),
+        },
+    ],
+};
+
+const EN_MANUAL: Manual = Manual {
+    row_label: "Making the most of it",
+    offline_note: "Offline, the figures do not load. The text alone is enough to follow each step.",
+    light_note: "The figures show the light theme. The layout is the same if you use the dark theme.",
+    see_install_help: "See \"How to add it to your home screen\" for adding this app to your home screen.",
+    hint_body: "This app has a few features that are easy to miss. See \"Making the most of it\" in the Settings tab for a rundown.",
+    hint_cta: "Make the most of it ›",
+    hint_dismiss: "Do not show this again",
+    chapters: &[
+        ChapterText {
+            title: "Filtering on the Progress tab",
+            body: &[
+                "The Progress tab has two selectors: muscle group and exercise.",
+                "Choosing a group narrows the exercise selector to that group's exercises only.",
+                "Choosing an exercise switches the group selector to that exercise's group automatically.",
+                "Setting the group back to \"All\" also clears the exercise (no mismatched pairs).",
+                "The chart doesn't appear while both stay on \"All.\" Picking either one shows it.",
+                "The last combination picked stays on the device and persists next time you open the tab.",
+            ],
+            fig_alt: "The group and exercise selectors",
+            fig: Some((770, 128)),
+        },
+        ChapterText {
+            title: "Reading the chart",
+            body: &[
+                "The readout line under the chart is always visible and shows the latest point by default.",
+                "Tapping the chart moves the readout to that point — tapping doesn't change a value.",
+                "When the metric is Volume, a set with no weight counts as 1kg.",
+                "For bodyweight exercises this becomes \"total reps\"; for time-based ones, \"total seconds.\"",
+                "Setting the period to \"All\" groups the daily points by week.",
+                "Weekly, the metric becomes a sum and body weight becomes an average.",
+                "For 3M, 6M and 1Y, choose per period under \"Weight line\" in Settings whether the body-weight line is daily or a weekly average.",
+                "By default 3M and 6M are daily and 1Y is weekly; 1M is always daily. At one weigh-in a week or fewer, weekly changes nothing.",
+                "The body-weight second axis only overlays when the metric chart has something to show.",
+                "In a period with no metric records, the second axis doesn't appear even with body weight logged.",
+            ],
+            fig_alt: "A chart with the readout line below it",
+            fig: Some((734, 438)),
+        },
+        ChapterText {
+            title: "Copy last time",
+            body: &[
+                "\"Copy last time\" only appears while today's sets are still empty.",
+                "Only the single most recent record loads, even with the history count set to 2 or 3.",
+                "The exercise note fills in only when today's is empty; it never overwrites what you typed.",
+                "A set's note keeps what you typed today; the previous note fills only empty rows.",
+                "Body weight and the day's condition note are never copied.",
+            ],
+            fig_alt: "An empty card with Copy last time",
+            fig: Some((762, 618)),
+        },
+        ChapterText {
+            title: "Labels on an exercise",
+            body: &[
+                "Labels are defined per exercise, from Settings → \"Exercises\" → the edit sheet → \"Labels\" (up to 6 per exercise, names up to 12 characters).",
+                "Exercises that ship with the app have no labels; they exist for switching the goal on the same exercise — heavy weight vs. high reps.",
+                "Pick a colour from the swatch at the row's left edge. New labels get an automatic non-colliding colour, shown on the Progress tab.",
+                "Once defined, a chip row appears on that exercise's Record-tab card, below the name. The first chip, \"Any,\" is the default (no filter).",
+                "Picking a label narrows \"Past records\" and \"Copy last time\" to sessions with that label.",
+                "With no records for that label, it shows \"No records\" and hides \"Copy last time\" — it never falls back to the label-less record.",
+                "A label applies to one exercise per day; picking one without entering a set isn't saved and resets to \"Any.\"",
+                "Only the row's ✕ deletes a label (with confirmation) — clearing its name does not.",
+                "Deleting a label keeps past records; recreating the same name doesn't relink them.",
+                "A deleted, selected label resets to \"Any.\"",
+                "The exported TSV has a \"Label\" column, but not the colour.",
+            ],
+            fig_alt: "The label chips on a card",
+            fig: Some((710, 164)),
+        },
+        ChapterText {
+            title: "Filtering progress by label",
+            body: &[
+                "On the Progress tab, choosing an exercise with labels defined shows a chip row below the selectors.",
+                "It doesn't appear for a muscle-group-only selection or for an exercise with no labels (labels can't combine across exercises).",
+                "The first chip, \"All labels,\" narrows the chart's points, the record table, and the stats to that label's days.",
+                "The Record tab's first chip reads \"Any\" instead — a different word.",
+                "Under \"All labels,\" only labelled days are drawn in their colour. The line, axes, and body-weight dashed line never change colour.",
+                "The chip row itself is the legend, with no separate legend above the chart.",
+                "Each dot shows a colour, and the \"All labels\" dot is the unlabelled colour.",
+                "The chart's meaning holds even if you can't tell colours apart.",
+                "This filter isn't remembered on the device — unlike the group and exercise, it's treated like the metric or period, as \"how you're looking now.\"",
+                "Switching exercises clears the filter (labels use a separate ID per exercise); changing only the group doesn't.",
+                "Deleting the label resets the filter to \"All labels.\"",
+                "If filtering leaves no records, it shows \"No records for this label in this period.\" Switch back to \"All labels\" or widen the period to see them.",
+                "With many points, colour only shows on the latest one.",
+                "Narrowing to one chip brings the point count down and the colour back — narrowing is the main way to follow one label's trend.",
+                "Setting the period to \"All\" groups points by week; a week keeps its colour only when every point shares one label (narrowing to one label keeps colour, even under \"All\").",
+            ],
+            fig_alt: "Label chips and coloured dots",
+            fig: Some((770, 738)),
+        },
+        ChapterText {
+            title: "The four things \"+ Note\" opens",
+            body: &[
+                "Tapping \"+ Note\" opens four things at once: pins, interval (seconds), the exercise note, and each set's note.",
+                "Tapping \"- Note\" folds all four back up together.",
+                "Pins and interval attach to the exercise itself and carry over across days (so you don't retype a machine's settings each time).",
+                "Anything already filled in stays visible in dim text while closed — no need to reopen just to check it.",
+                "The interval is only a reference number of seconds; there's no countdown.",
+            ],
+            fig_alt: "The four fields opened at once",
+            fig: Some((718, 1024)),
+        },
+        ChapterText {
+            title: "Drop sets",
+            body: &[
+                "Tapping the icon (a down arrow) next to a set row's reps field adds one drop below the main set (works without opening \"+ Note\").",
+                "Drops have no number, unlike a main set.",
+                "The first drop's weight is prefilled as the main weight minus the drop percentage (default 20%, changeable under \"Drop sets\" in Settings).",
+                "From the second drop onward, the percentage isn't reapplied — each drop copies the weight above it. Reps always start empty on every drop.",
+                "For sets with no weight (bodyweight exercises, for example), a drop's weight also starts empty.",
+                "The + on a drop's row adds another drop (up to 4 per main set; the + disappears at the limit). Each drop has its own ✕ to remove it.",
+                "A drop with empty reps isn't saved; that row shows \"Enter reps and this set is saved.\"",
+                "The Progress tab excludes drops by default (including them would inflate the day's baseline).",
+                "Toggle it under \"Drop sets\" in Settings — it affects the chart, stats, and record list.",
+                "When drops are excluded and the range actually has some, the Progress tab shows \"Drop sets are not included. You can change this in Settings.\"",
+                "The Record tab's totals, calendar, and monthly aggregates always count drops, whatever the setting says.",
+                "Because of that, the same day's total can differ between the Record tab and the Progress tab.",
+                "A row added with \"+ Set\" never gets a drop.",
+                "\"Copy last time,\" expanding a routine, and copying a day all bring drops along.",
+                "The card's \"Past records\" shows only the main set.",
+            ],
+            fig_alt: "A set row with two drop stages",
+            fig: Some((710, 510)),
+        },
+        ChapterText {
+            title: "Starting from an empty day",
+            body: &[
+                "The candidate list only appears on a day with no cards yet.",
+                "It disappears once a card is added, and never appears on a future day.",
+                "\"From recent records\" looks back up to 180 days and shows at most 4 candidates, with exercise names shown so same-group days can be told apart.",
+                "Picking a candidate marks the day as trained, reflected in the calendar dot, month totals, and the chart.",
+                "\"From recent records\" always copies actual sets, so it always counts as trained.",
+                "Expanding a saved routine differs: exercises with no history get only an empty card.",
+                "If none of the routine's exercises have history, the day isn't marked as trained at all.",
+                "Use \"Remove from this day\" on a card to take back out an exercise you didn't actually do.",
+            ],
+            fig_alt: "The candidate list on an empty day",
+            fig: Some((762, 734)),
+        },
+        ChapterText {
+            title: "Collapsing by muscle group",
+            body: &[
+                "There are three places with a fold-by-muscle-group list, and each allows a different number open at once.",
+                "The \"Exercises\" section in Settings and the \"Add exercise\" sheet on the Record tab both allow only one group open at a time.",
+                "The routine-editing sheet's \"Selected\" list is the exception — it allows several groups open at once (for jumping between, say, chest and legs).",
+                "There are two entry points for creating a routine.",
+                "\"+ Save this day as a routine\" only appears once the day has logged sets — an empty card alone isn't enough.",
+            ],
+            fig_alt: "The Add exercise sheet, one group open",
+            fig: Some((786, 994)),
+        },
+        ChapterText {
+            title: "Reordering",
+            body: &[
+                "The three places you can drag to reorder differ in where you grab and how long you wait.",
+                "An exercise card's header row and a row in the routine-editing sheet start reordering after you hold for 250 milliseconds.",
+                "Set rows are the exception — grabbing the set number at the left edge starts moving it instantly, with no wait.",
+                "Header and routine rows wait because moving instantly would be indistinguishable from a vertical scroll flick.",
+                "From a keyboard, reorder with Alt+↑/↓ — plain arrow keys are reserved for moving the cursor inside the input.",
+            ],
+            fig_alt: "A set row lifted by its number",
+            fig: Some((710, 332)),
+        },
+        ChapterText {
+            title: "Export and import",
+            body: &[
+                "\"Export / Import\" in the Settings tab writes out a TSV file.",
+                "The TSV file opens directly in a spreadsheet app.",
+                "On iOS, choose \"Save to Files\" from the share sheet.",
+                "Importing only ever adds.",
+                "When the same day and exercise have sets that disagree, they're compared in order — set count, then volume, then each set's contents — and the larger one wins.",
+                "If the file has more, it replaces what you have; the confirmation screen shows \"Some records will be replaced.\"",
+                "If what you have is larger, nothing happens and it shows \"There is nothing new to import.\"",
+                "In that case, the file's version is discarded.",
+                "Right after an import, \"Undo\" can reverse it.",
+                "The first press only arms a confirmation, and a second press undoes it.",
+                "Closing the sheet gives up that chance to undo.",
+                "A TSV file doesn't include an exercise's ID, colour, sort order, or archived state.",
+                "The time-of-day column is written on export but not read back on import.",
+            ],
+            fig_alt: "The export and import sheet",
+            fig: Some((786, 540)),
+        },
+        ChapterText {
+            title: "What's new",
+            body: &[
+                "When a new feature ships, a thin banner appears at the top of the screen.",
+                "It appears in the same place on the Record, Progress, or Settings tab.",
+                "Tapping it lets you read everything unread as one sheet.",
+                "Even if several releases have piled up, you can read them all in one go.",
+                "Closing the banner's ✕ or the sheet it opens marks it read — that release's announcement never shows again.",
+                "There's no place inside the app to read it back later; the content stays in the README and on GitHub.",
+                "Leaving it open and walking away keeps it unread, and it shows again next time.",
+                "On a device you just started using, or one from before this feature existed, past announcements don't appear.",
+                "They only start showing from the next new announcement onward.",
+            ],
+            fig_alt: "The banner at the top",
+            fig: Some((786, 202)),
+        },
+    ],
 };
 
 // ── views/backup.rs ─────────────────────────────────────────────────────────
@@ -1054,6 +1590,42 @@ impl ReleaseNote {
 /// （clippy::redundant_static_lifetimes。`presets::PRESETS` と同じ書き方）。
 pub const RELEASES: &[ReleaseNote] = &[
     ReleaseNote {
+        id: 5,
+        date: "2026-09-21",
+        ja: &[
+            "推移タブの体重の線を、3M・6M・1Y のそれぞれで日ごとに描くか週平均にするか選べるようにしました（設定タブ → 体重の線）。これまでは点が多いと自動で週平均になっていましたが、3M・6M は既定で日ごと、1Y は計量の回数に関係なく既定で週平均です。",
+        ],
+        en: &[
+            "The Progress tab's body-weight line can now be drawn daily or as a weekly average, chosen separately for 3M, 6M and 1Y (Settings › Weight line). It used to switch to a weekly average on its own once a period held many weigh-ins; 3M and 6M now default to daily, and 1Y defaults to weekly however often you weigh in.",
+        ],
+    },
+    ReleaseNote {
+        id: 4,
+        date: "2026-09-11",
+        ja: &[
+            "種目ごとにラベルを作れるようにしました。記録タブでラベルを選ぶと、そのラベルの前回だけが出て、「前回をコピー」もそのラベルの前回から入ります。",
+            "ドロップセットを記録できるようにしました。セット行の回数欄の右にあるアイコンから段を足せます。推移タブは既定で段を含めません。",
+            "設定タブに「活用方法」を足しました。気づきにくい操作を図つきでまとめてあります。",
+        ],
+        en: &[
+            "Exercises can now have labels. Pick one on the Record tab and you see only that label's last session, and \"Copy last time\" takes its sets from there too.",
+            "Drop sets can now be recorded. Add a stage from the icon to the right of a set row's reps field. The Progress tab leaves them out by default.",
+            "Added \"Making the most of it\" to the Settings tab — a rundown of the parts that are easy to miss, with screenshots.",
+        ],
+    },
+    ReleaseNote {
+        id: 3,
+        date: "2026-09-10",
+        ja: &[
+            "ラベルごとに色を選べるようにしました。設定タブ → 種目 のラベルの行に色見本が出ます。新しいラベルには互いに重ならない色が自動で付きます。",
+            "推移タブでラベルを絞り込めるようにしました。種目を選ぶとラベルのチップが並び、押すとグラフの点も記録の表もそのラベルだけになります。「すべて」ではラベルの付いた日がその色の点で出ます。",
+        ],
+        en: &[
+            "Labels can have a colour. A swatch now sits on each label row under Settings › Exercises, and new labels get colours that never repeat each other.",
+            "The Progress tab can be filtered by label. Pick an exercise and its labels appear as chips; tapping one narrows both the graph and the records table to that label. Under \"All labels\", labelled days are drawn in their label's colour.",
+        ],
+    },
+    ReleaseNote {
         id: 2,
         date: "2026-09-09",
         ja: &[
@@ -1186,6 +1758,44 @@ impl Lang {
         }
     }
 
+    /// ラベルで絞っているときの履歴ブロックの `aria-label`。
+    ///
+    /// ★ `Day::past_records` と別に持つのは、`format!` がリテラルな書式文字列しか
+    /// 取れないので `&'static str` では組み立てられないため。
+    pub fn past_records_of(self, label: &str) -> String {
+        match self {
+            Lang::Ja => format!("{label} の前回までの記録"),
+            Lang::En => format!("Past {label} sessions"),
+        }
+    }
+
+    /// ラベルの ✕ ボタンの `aria-label`。
+    ///
+    /// ★ 名前を `delete_label` にする（`remove_label` にすると
+    /// `core::remove_label` と読み分けられない）。
+    pub fn delete_label(self, name: &str) -> String {
+        match self {
+            Lang::Ja => format!("{name} を削除"),
+            Lang::En => format!("Delete {name}"),
+        }
+    }
+
+    /// ラベルの色ピッカーの `aria-label`。
+    ///
+    /// ★ **空名なら `settings.field_color`（「色」/ "Colour"）へ落とす。** `＋` で
+    /// 足した直後の行は名前がまだ無く、そのまま埋め込むと「 の色」/"Colour of "
+    /// という尻切れの読み上げになる。部位編集の色ピッカーと同じ語に落ちるだけなので
+    /// 意味も失われない。
+    pub fn color_of(self, name: &str) -> String {
+        if name.trim().is_empty() {
+            return self.strings().settings.field_color.to_string();
+        }
+        match self {
+            Lang::Ja => format!("{name} の色"),
+            Lang::En => format!("Colour of {name}"),
+        }
+    }
+
     /// 増えるものの名詞句の部品。**語尾を付けない** — 確認では「を追加します」、
     /// 実行後は「を追加」と付け替えるので、ここで文にすると両方に使えない。
     pub fn added_days(self, n: usize) -> String {
@@ -1228,6 +1838,37 @@ impl Lang {
         match self {
             Lang::Ja => format!("{n} 件のメニュー"),
             Lang::En => format!("{n} {}", plural(n, "routine", "routines")),
+        }
+    }
+
+    /// ラベルの定義の追加とログへの付与を**合算した** 1 本のカウンタ
+    /// （`added_notes` が既に異種混合の先例）。
+    pub fn added_labels(self, n: usize) -> String {
+        match self {
+            Lang::Ja => format!("{n} 件のラベル"),
+            Lang::En => format!("{n} {}", plural(n, "label", "labels")),
+        }
+    }
+
+    /// 上限に達していて取り込めなかったラベル定義の警告。
+    ///
+    /// ★ **`Conflict` としては出さない。** あちらは「記録の食い違い」の型で、
+    /// 確認画面が `conflicts.is_empty()` で「入れ替わる記録があります」に分岐するので、
+    /// 記録が 1 件も入れ替わらないこの事象を積むと確認画面が嘘をつく。
+    ///
+    /// ★ **責めずに「何が起きたか」と「何をすれば直るか」を書く**
+    /// （`Day::weight_missing` の「回数を入れると保存されます」と同じ作法）。
+    /// 落ちた定義を指す記録は消えていない — 「指定なし」で見られる。
+    pub fn dropped_labels(self, n: usize) -> String {
+        match self {
+            Lang::Ja => format!(
+                "{n} 件のラベルは、その種目のラベルが上限に達していたため取り込みませんでした。記録は消えていないので「指定なし」で見られます。使わないラベルを設定タブで消してから取り込み直すと入ります"
+            ),
+            Lang::En => format!(
+                "{n} label {} {} not imported — that exercise is already at its label limit. No records were lost; they are still visible under Any. Delete a label you no longer use under Settings, then import again.",
+                plural(n, "definition", "definitions"),
+                plural(n, "was", "were"),
+            ),
         }
     }
 
@@ -1384,6 +2025,38 @@ impl Lang {
         match self {
             Lang::Ja => format!("{n} 回分"),
             Lang::En => format!("{n} {}", plural(n, "session", "sessions")),
+        }
+    }
+
+    /// 設定行の右端に出す、体重の線が週平均になっている期間のまとめ。
+    /// 週平均の期間を 3M → 6M → 1Y の順に集める。無ければ「日ごと」/"Daily"、
+    /// あれば「週平均 6M・1Y」（`・` 区切り）/ "Weekly 6M, 1Y"（`, ` 区切り）。
+    pub fn weight_line_summary(self, w: crate::core::WeightLines) -> String {
+        use crate::core::WeightLine;
+        let periods: Vec<&str> = [("3M", w.m3), ("6M", w.m6), ("1Y", w.y1)]
+            .into_iter()
+            .filter(|(_, l)| *l == WeightLine::Weekly)
+            .map(|(label, _)| label)
+            .collect();
+        if periods.is_empty() {
+            match self {
+                Lang::Ja => "日ごと".to_string(),
+                Lang::En => "Daily".to_string(),
+            }
+        } else {
+            match self {
+                Lang::Ja => format!("週平均 {}", periods.join("・")),
+                Lang::En => format!("Weekly {}", periods.join(", ")),
+            }
+        }
+    }
+
+    /// 体重の線の設定サブページ、期間ごとの `.segmented` の `aria-label`。
+    /// 「3M の体重の線」/ "Weight line for 3M"
+    pub fn weight_line_for(self, period: &str) -> String {
+        match self {
+            Lang::Ja => format!("{period} の体重の線"),
+            Lang::En => format!("Weight line for {period}"),
         }
     }
 
@@ -1574,6 +2247,9 @@ mod tests {
         for (lang, label) in Lang::CHOICES {
             assert_eq!(label, lang.endonym());
         }
+        // `endonym()` 同士の比較だけだと綴りを誰も見ていないので、リテラルで固定する
+        assert_eq!(Lang::Ja.endonym(), "日本語");
+        assert_eq!(Lang::En.endonym(), "English");
     }
 
     #[test]
@@ -1611,6 +2287,103 @@ mod tests {
         }
     }
 
+    /// 先頭のチップは `LabelFilter::Any`（絞らない）で、利用者が定義した
+    /// どのラベルとも別の状態。名詞句が「ラベル」自体と同語だと、押したときに
+    /// 何が起きるのか読めない。
+    #[test]
+    fn the_any_label_chip_reads_apart_from_the_label_row_itself() {
+        for (lang, _) in Lang::CHOICES {
+            let d = &lang.strings().day;
+            assert_ne!(d.label_any, d.labels, "{lang:?} のチップと行が同語");
+            assert!(!d.label_any.is_empty(), "{lang:?} に空の文言がある");
+            assert!(!d.labels.is_empty(), "{lang:?} に空の文言がある");
+        }
+    }
+
+    /// ラベル名を埋め込む文言は `&'static str` では作れないので `impl Lang` 側に
+    /// ある。**名前が本文に必ず出ること**を見る（消えると「何を削除するのか」が
+    /// 読めないボタンになる）。削除の確認は「作り直しても戻らない」まで言う。
+    #[test]
+    fn the_label_texts_carry_the_name_and_warn_that_deleting_is_final() {
+        for (lang, _) in Lang::CHOICES {
+            assert!(lang.past_records_of("Power").contains("Power"), "{lang:?}");
+            assert!(lang.delete_label("Power").contains("Power"), "{lang:?}");
+            assert!(lang.added_labels(2).contains('2'), "{lang:?}");
+            assert!(lang.color_of("Power").contains("Power"), "{lang:?}");
+            // ★ 空名は「 の色」/"Colour of " と尻切れにせず、部位の色と同じ語へ落とす
+            assert_eq!(
+                lang.color_of("  "),
+                lang.strings().settings.field_color,
+                "{lang:?}: 名前の無い行の色ピッカーが尻切れの読み上げになる"
+            );
+
+            let confirm = lang.strings().settings.delete_label_confirm;
+            assert!(!confirm.is_empty(), "{lang:?} に空の文言がある");
+            // 同じ名前で作り直しても ID が変わるので過去の記録は戻らない
+            let again = match lang {
+                Lang::Ja => "同じ名前",
+                Lang::En => "same name",
+            };
+            assert!(confirm.contains(again), "{lang:?}: {confirm}");
+        }
+    }
+
+    #[test]
+    fn weight_line_summary_lists_weekly_periods_in_order() {
+        use crate::core::{WeightLine, WeightLines};
+        assert_eq!(
+            Lang::Ja.weight_line_summary(WeightLines::default()),
+            "週平均 1Y"
+        );
+        assert_eq!(
+            Lang::En.weight_line_summary(WeightLines::default()),
+            "Weekly 1Y"
+        );
+
+        let all_daily = WeightLines {
+            m3: WeightLine::Daily,
+            m6: WeightLine::Daily,
+            y1: WeightLine::Daily,
+        };
+        assert_eq!(Lang::Ja.weight_line_summary(all_daily), "日ごと");
+        assert_eq!(Lang::En.weight_line_summary(all_daily), "Daily");
+
+        let m3_and_y1 = WeightLines {
+            m3: WeightLine::Weekly,
+            m6: WeightLine::Daily,
+            y1: WeightLine::Weekly,
+        };
+        assert_eq!(Lang::Ja.weight_line_summary(m3_and_y1), "週平均 3M・1Y");
+        assert_eq!(Lang::En.weight_line_summary(m3_and_y1), "Weekly 3M, 1Y");
+    }
+
+    /// ★ **推移タブのラベルのチップは、隣の 2 つのセレクタとも期間とも別語。**
+    /// `.selectors` の中に「すべての部位」「すべての種目」「全期間」「すべて」が
+    /// 同時に並ぶので、どれか 2 つが同語だとどれの「すべて」か取り違える
+    /// （`all_groups` の ★ と同じ理由を、面が 1 つ増えたぶんまで広げたもの）。
+    #[test]
+    fn the_progress_label_chip_reads_apart_from_the_selectors_and_the_period() {
+        for (lang, _) in Lang::CHOICES {
+            let p = &lang.strings().progress;
+            let words = [
+                p.all_labels,
+                p.all_groups,
+                p.all_exercises,
+                p.period_all,
+                p.pick_label,
+                p.empty_period_label,
+            ];
+            for w in words {
+                assert!(!w.is_empty(), "{lang:?} に空の文言がある");
+            }
+            let uniq: std::collections::HashSet<&str> = words.into_iter().collect();
+            assert_eq!(uniq.len(), words.len(), "{lang:?}: {words:?} に同語がある");
+            // 絞って 0 件の文言は、種目の 0 件とも別（「すべて」に戻せることが読めない）
+            assert_ne!(p.empty_period_label, p.empty_period_exercise, "{lang:?}");
+            assert_ne!(p.empty_period_label, p.empty_period, "{lang:?}");
+        }
+    }
+
     // ── お知らせ（新機能バナー） ────────────────────────────────────────────
 
     /// 各エントリで `ja.len() == en.len()`、空文字を含まない。
@@ -1628,6 +2401,80 @@ mod tests {
             );
             for s in r.ja.iter().chain(r.en.iter()) {
                 assert!(!s.is_empty(), "id={} に空の項目がある", r.id);
+            }
+        }
+    }
+
+    /// マニュアルの章数・見出し・本文が日英とも `MANUAL_CHAPTERS` と揃っていること、
+    /// および `has_fig` / `fig` / `fig_alt` の 3 者が食い違っていないことを見る。
+    #[test]
+    fn every_language_has_the_same_manual_chapters() {
+        let want = crate::manual::MANUAL_CHAPTERS.len();
+        assert_eq!(
+            JA_MANUAL.chapters.len(),
+            want,
+            "日本語の章数が MANUAL_CHAPTERS と食い違う"
+        );
+        assert_eq!(
+            EN_MANUAL.chapters.len(),
+            want,
+            "英語の章数が MANUAL_CHAPTERS と食い違う"
+        );
+
+        for (lang, _) in Lang::CHOICES {
+            let m = &lang.strings().manual;
+            for (skeleton, text) in crate::manual::MANUAL_CHAPTERS.iter().zip(m.chapters) {
+                assert!(
+                    !text.title.is_empty(),
+                    "{lang:?} の {} に空の見出し",
+                    skeleton.id
+                );
+                assert!(
+                    !text.body.is_empty(),
+                    "{lang:?} の {} に本文が無い",
+                    skeleton.id
+                );
+                for p in text.body {
+                    assert!(
+                        !p.is_empty(),
+                        "{lang:?} の {} に空の段落がある",
+                        skeleton.id
+                    );
+                }
+                assert_eq!(
+                    skeleton.has_fig,
+                    text.fig.is_some(),
+                    "{lang:?} の {} で has_fig と fig の有無が食い違う",
+                    skeleton.id
+                );
+                assert_eq!(
+                    text.fig.is_some(),
+                    !text.fig_alt.is_empty(),
+                    "{lang:?} の {} で fig と fig_alt の有無が食い違う",
+                    skeleton.id
+                );
+                // ★ **上限は px 幅で決まるので言語別。** WebKit は alt を折り返さず、
+                //   1 行に収まらなければ何も描かない（`ChapterText::fig_alt` の doc 参照）。
+                //   `.man-fig img` は 12px で、幅は `.man-fig` の max-width 365px が上限だが、
+                //   狭い端末では `.screen` の左右 padding 14px を引いた値になる。320px 幅なら
+                //   365px には届かず 292px、`missingImageBorderWidth` の 2px を引いて 290px。
+                //   全角は 12px/字なので ja ≈ 24 字、ラテン文字は 6px/字前後なので en ≈ 48 字。
+                //   実機の WebKit が同じ計算とは限らないので、そこから 2 割ほど余らせる。
+                // ★ **`chars().count()` で測る。** `len()` はバイト数なので、全角では
+                //   3 倍に数えて上限が実質 1/3 になる。
+                let limit = match lang {
+                    Lang::Ja => 20,
+                    Lang::En => 45,
+                };
+                let n = text.fig_alt.chars().count();
+                assert!(
+                    n <= limit,
+                    "{lang:?} の {} の fig_alt が長すぎる（{n} 字 > {limit} 字）。\
+                     iOS Safari は 1 行に収まらない alt を**描かない**ので、\
+                     説明は body へ移して名詞句にすること: {}",
+                    skeleton.id,
+                    text.fig_alt
+                );
             }
         }
     }
@@ -1671,5 +2518,21 @@ mod tests {
             Lang::Ja.whatsnew_banner(2).replace('2', "N"),
             "日本語で数字以外が変わっている"
         );
+    }
+    /// 段落数の日英ずれを検出する（片方だけ 1 段落増えるのがドリフトの典型）。
+    #[test]
+    fn the_manual_paragraph_counts_match_across_languages() {
+        for ((skeleton, ja), en) in crate::manual::MANUAL_CHAPTERS
+            .iter()
+            .zip(JA_MANUAL.chapters)
+            .zip(EN_MANUAL.chapters)
+        {
+            assert_eq!(
+                ja.body.len(),
+                en.body.len(),
+                "{} の段落数が日英で食い違う",
+                skeleton.id
+            );
+        }
     }
 }

@@ -40,14 +40,17 @@ iPhone のホーム画面から起動して完全オフラインで動く、個�
 12 章すべてが実際の画面のスクリーンショットを日英両方で持つ — `public/manual/{ja,en}/` の下に計 24 枚の `.webp`。撮影は常に**ライトテーマ固定**（[使い方マニュアルの図を手描きの模式図ではなくアプリ自身のスクリーンショットにする](adr/architecture/manual-figures-as-served-screenshots.md)）。撮り直しはいつ行っても安全 — 時計とタイムゾーンを `scripts/shots.mjs` の中で固定してあるので、何か月後に撮り直しても「今日」が動かず、中身が変わっていなければバイト単位で同じ画像になる:
 
 ```sh
-node scripts/shots.mjs                     # 全部：README の 3 枚 + マニュアルの 24 枚
-node scripts/shots.mjs --only=manual       # マニュアルの 24 枚だけ（pre-commit が呼ぶのはこれ）
-node scripts/shots.mjs --only=readme       # README の 3 枚だけ（UI が落ち着いたら手で叩く）
-node scripts/shots.mjs --only=manual:<id>  # 1 章だけ日英両方、例: --only=manual:copy-last
-node scripts/shots.mjs --check             # 一時ディレクトリに撮ってバイト比較。差があれば exit 1
+node scripts/shots.mjs                        # 全部：README の 3 枚 + マニュアルの 24 枚 + お知らせの図
+node scripts/shots.mjs --only=manual,whatsnew # pre-commit が呼ぶのはこれ（README は含まない）
+node scripts/shots.mjs --only=manual          # マニュアルの 24 枚だけ
+node scripts/shots.mjs --only=whatsnew        # お知らせの図だけ
+node scripts/shots.mjs --only=readme          # README の 3 枚だけ（UI が落ち着いたら手で叩く）
+node scripts/shots.mjs --only=manual:<id>     # 1 章だけ日英両方、例: --only=manual:copy-last
+node scripts/shots.mjs --only=whatsnew:<id>   # お知らせの図 1 枚だけ日英両方
+node scripts/shots.mjs --check                # 一時ディレクトリに撮ってバイト比較。差があれば exit 1
 ```
 
-`.githooks/pre-commit` が呼ぶのは常に `--only=manual` で、しかも UI に関わるパスを触ったコミットのときだけ。README の 3 枚は意図的に手動・不定期の作業にしてあり、撮り忘れは `scripts/release.sh` の `--check` がリリース前に捕まえる想定（[マニュアルの図は pre-commit で撮り直すが、UI に関わるパスを触ったコミットに限る](adr/deploy/screenshots-in-pre-commit-on-ui-paths.md)）。図は合計で約 350KiB になるが、Service Worker のオフラインシェルには一度も入れていない — オフラインでは図が欠けることをマニュアル自身が本文で伝える設計なので、開かない人にまで毎回のインストールで背負わせる理由が無い。
+`.githooks/pre-commit` が呼ぶのは常に `--only=manual,whatsnew` で、しかも UI に関わるパスを触ったコミットのときだけ。README の 3 枚は意図的に手動・不定期の作業にしてあり、撮り忘れ（や rebase・GitHub 上のマージ後のドリフト。どちらも `pre-commit` は走らない）は `scripts/release.sh` が重い E2E の直前に走らせる `shots.mjs --check` が実際に捕まえる（[マニュアルの図は pre-commit で撮り直すが、UI に関わるパスを触ったコミットに限る](adr/deploy/screenshots-in-pre-commit-on-ui-paths.md)）。図は合計で約 350KiB になるが、Service Worker のオフラインシェルには一度も入れていない — オフラインでは図が欠けることをマニュアルとお知らせシート自身が本文で伝える設計なので、開かない人にまで毎回のインストールで背負わせる理由が無い。
 
 ## アイコンと共有画像
 
@@ -86,7 +89,7 @@ sh scripts/gen-og.sh      # public/og.png (1200x630) + assets/social-preview.png
 - **種目メモとセットメモ** — 種目カードのフッタの「＋ メモ」で、その日のその種目のメモと各セット行のメモが一斉に開く。閉じていても入力済みのメモは薄字で読めるので、開くのは書くときだけでいい（[メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](adr/ux/exercise-and-set-notes-behind-one-toggle.md)）。
 - **ドロップセット** — メインセットの下に、重量を落として続けた段を 1〜4 段まで記録できる。**推移タブに含めるかは設定で選べて、既定は含めない** — 落とした段をボリュームに混ぜると「前回と同じかそれ以上」の基準値が日によって膨らむため。含めないときはメインセットだけで推移が出る（記録タブの当日合計は設定にかかわらず段も数える）。**落とし幅（%）を設定しておくと、段を足した瞬間に 1 段目の重量が計算されて入る**（既定 20%、小数点以下 1 桁まで自由入力）。2 段目以降は前の段の重量をそのままコピーするので、下げるときだけ打ち直せばよい。**メモを開かずに、セット行の `↓` を押せばその場で足せる**（[ドロップセットの段はメインセットの下の箱に出し、推移では既定で外す](adr/ux/drop-sets-as-a-box-under-the-main-set.md)）。
 - **日本語 / 英語** — ブラウザの言語で自動判定し、設定タブの「言語」から切り替えられる（[言語はブラウザに従い、選んだらそれを優先する](adr/ux/language-follows-the-browser-then-the-setting.md)）。
-- **新機能のお知らせ** — リリースのたびに、全タブの最上段に細いバナーで新機能を知らせる。押すと未読のリリースをまとめて 1 枚のシートに新しい順で読める。閉じる（✕ でも同じ）とそのお知らせは二度と出ない — 読み返す常設のメニューは無い（[新機能のお知らせバナーを画面最上段に置く](adr/ux/whats-new-banner-above-the-screen.md)）。
+- **新機能のお知らせ** — リリースのたびに、全タブの最上段に細いバナーで新機能を知らせる。押すと未読のリリースをまとめて 1 枚のシートに新しい順で読める。閉じる（✕ でも同じ）とそのお知らせは二度と出ない — 読み返す常設のメニューは無い（[新機能のお知らせバナーを画面最上段に置く](adr/ux/whats-new-banner-above-the-screen.md)）。書くのは**利用者が新しくできるようになったこと**だけで、並び替えや文言修正は書かない。画面に現れる機能にはスクリーンショットを 1 枚添える（[新機能のお知らせは「利用者の便益になる機能」だけを書き、画面に現れるものには図を付ける](adr/ux/whats-new-notes-are-user-facing-features-with-figures.md)）。
 
 **指標は種目の属性ではなくグラフの表示設定**にしている。種目ごとに単位が違うと同じ軸で比べられず、後から種目の性質が変わると過去のグラフが遡って壊れるため（[指標を種目の属性ではなくグラフの表示設定にする](adr/data-model/metric-is-a-view-setting.md)）。重量欄は全種目に出し、**空欄は重量 1 として数える**ので、自重種目も時間種目も「入れなければよい」で成立する。
 
@@ -142,7 +145,7 @@ npx playwright test --project=chromium  # 軽い E2E
 npx playwright test                     # 全 project（Chromium / iPhone 15 Pro (WebKit) / Pixel 7）
 ```
 
-`.githooks/pre-commit` は `main` への `docs/` 混入をガードしたうえで、`cargo fmt --all -- --check` → `cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings` → `cargo test` → `trunk build` →（UI に関わるパスを触ったコミットのときだけ）`node scripts/shots.mjs --only=manual` → `npx playwright test --project=chromium --project=harness` を順に実行する。緊急時は `SKIP_HOOKS=1 git commit` でフック全体を飛ばせる。`SHOTS=0 git commit` はそれより狭く、**撮り直しだけ**を飛ばして fmt / clippy / test / build / E2E はそのまま走らせる — 撮影そのものが壊れているときや、コードと図のコミットを分けたいときに使う。
+`.githooks/pre-commit` は `main` への `docs/` 混入をガードしたうえで、`cargo fmt --all -- --check` → `cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings` → `cargo test` → `trunk build` →（UI に関わるパスを触ったコミットのときだけ）`node scripts/shots.mjs --only=manual,whatsnew` → `npx playwright test --project=chromium --project=harness` を順に実行する。緊急時は `SKIP_HOOKS=1 git commit` でフック全体を飛ばせる。`SHOTS=0 git commit` はそれより狭く、**撮り直しだけ**を飛ばして fmt / clippy / test / build / E2E はそのまま走らせる — 撮影そのものが壊れているときや、コードと図のコミットを分けたいときに使う。
 
 マニュアルの図を 1 章だけ直しているときは、`node scripts/shots.mjs --only=manual:<id>`（例: `--only=manual:copy-last`）でその章だけを日英両方撮り直せる。12 枚全部は回らない。
 

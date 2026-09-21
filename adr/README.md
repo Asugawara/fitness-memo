@@ -121,6 +121,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [チップでラベルを選ぶと履歴とコピーが切り替わる](ux/label-chips-switch-the-history-and-the-copy.md) | 採用（データ側は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)。決定 13「推移タブはスコープ外」と却下案「ラベルに色を持たせる」は [ラベルに色を持たせ、推移タブのデータ点をその色で描く](ux/label-colour-on-the-progress-dots.md) で改訂） |
 | [ラベルに色を持たせ、推移タブのデータ点をその色で描く](ux/label-colour-on-the-progress-dots.md) | 採用（2 つのラベル ADR の「推移タブはラベルを見ない」を改訂） |
 | [使い方マニュアルを設定タブの節にし、章は 1 つだけ開く](ux/manual-as-a-settings-section-with-one-open-chapter.md) | 採用 |
+| [記録タブ: 種目を外す / メモを開閉 / 外す確認 で視界が飛ばないようにする](ux/viewport-after-card-height-changes.md) | 採用（[メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](ux/exercise-and-set-notes-behind-one-toggle.md) 決定 4 の「開いた瞬間フッタが下がる」に対処） |
 
 ### deploy — 配信とブランチ運用
 

@@ -324,15 +324,25 @@ const FIGS = [
  * 既存 id 1〜4 は図の基準（`adr/ux/whats-new-notes-are-user-facing-features-with-figures.md`）
  * より前なので図を付けない。id 5（体重の線）にだけ 1 枚。
  */
-const WN_FIGS = [{ id: 'weight-line', pad: 4, setup: setupWeightLine, teardown: teardownWeightLine }];
+const WN_FIGS = [
+  { id: 'weight-line', pad: { top: 4, right: 4, bottom: 0, left: 4 }, setup: setupWeightLine, teardown: teardownWeightLine },
+];
 
 /**
  * 章「体重の線」。被写体は**設定の「体重の線」節（見出し + 3 本の行）**。
  *
- * ★ **`pad` は 4（8 ではない）。** `.settings-head` は `margin-left: -10px`
+ * ★ **`pad` は上・右・左 4、下だけ 0。** 上下左右 4 だった版は `weight-line-note`
+ *   （`.settings > .settings-note` が `margin: 0 0 12px` で margin-top を 0 に潰す。
+ *   `.settings-note` 単体の `margin: 6px 0` はここでは効かない）の 1 行目が数 px
+ *   写り込んでいた。実測（ja、iPhone 15 Pro 相当 393 幅、dsf 2、CSS px）:
+ *   最終行 `rows.last()` の下端 y=220（`.segmented` も同じ y=220 で行の箱と一致）、
+ *   `weight-line-note` の上端 y=220 —— **隙間 0px。** `bottom = min(4, floor(0) - 1)`
+ *   は負になるので 0 未満にはせず 0 とする。bottom 0 なら clip は行の下端で
+ *   ぴったり止まり、note の文字は 1px も入らない。
+ * ★ **上・左は 4 のまま。** `.settings-head` は `margin-left: -10px`
  *   （`styles.css:2098-2104`。`:first-child` のトップだけ 0）で `.screen` の左 padding
- *   14px（`:182`）に食い込み x ≈ 4px。pad 8 だと `left = -4 < 0` で `clipOf` が
- *   「viewport をはみ出す」で throw する。pad 4 なら left = 0、right ≈ 383 < 393。
+ *   14px（`:182`）に食い込み x ≈ 4px。left 8 だと `left = -4 < 0` で `clipOf` が
+ *   「viewport をはみ出す」で throw する。left 4 なら left = 0、right ≈ 383 < 393。
  * ★ 見出し（h1「体重の線」/「Weight line」）を入れて図を自己完結させる。
  * ★ **セグメントは押さない。** `storage::save_weight_lines` が走って db を汚す
  *   （既定値 3M/6M 日ごと・1Y 週平均が被写体）。
@@ -614,18 +624,26 @@ async function selectDay(page, date) {
  * ★ **viewport をはみ出したら落とす。** `trimClipToSize` は黙って切るので、
  *   欠けた図が静かにできる。左右も切られるので x も見る
  *   （既存の standalone 検証と同じ「撮ってから気づかない」ための作法）。
+ *
+ * ★ **`pad` は数値か `{ top, right, bottom, left }` を受ける。** 数値のときは
+ *   4 辺とも同じ値になり、以前の挙動（マニュアル 24 枚・README 3 枚）から
+ *   1px も変わらない（`{ top: pad, right: pad, bottom: pad, left: pad }` と等価）。
+ *   辺ごとに変えたいのは、被写体のすぐ下にある別要素の一部が数px だけ写り込む
+ *   場合（`weight-line` の bottom）のように、4 辺を揃えると削れないケースがあるため。
  */
 async function clipOf(page, targets, pad, viewport) {
+  const { top: padTop, right: padRight, bottom: padBottom, left: padLeft } =
+    typeof pad === 'number' ? { top: pad, right: pad, bottom: pad, left: pad } : pad;
   const boxes = [];
   for (const t of targets) {
     const b = await t.boundingBox();
     if (!b) throw new Error('クリップの対象が画面に無い');
     boxes.push(b);
   }
-  const left = Math.min(...boxes.map((b) => b.x)) - pad;
-  const top = Math.min(...boxes.map((b) => b.y)) - pad;
-  const right = Math.max(...boxes.map((b) => b.x + b.width)) + pad;
-  const bottom = Math.max(...boxes.map((b) => b.y + b.height)) + pad;
+  const left = Math.min(...boxes.map((b) => b.x)) - padLeft;
+  const top = Math.min(...boxes.map((b) => b.y)) - padTop;
+  const right = Math.max(...boxes.map((b) => b.x + b.width)) + padRight;
+  const bottom = Math.max(...boxes.map((b) => b.y + b.height)) + padBottom;
   const x = Math.floor(left);
   const y = Math.floor(top);
   const clip = { x, y, width: Math.ceil(right) - x, height: Math.ceil(bottom) - y };
@@ -1114,7 +1132,13 @@ async function shootFigs(page, cx, figs, outFn, repoFn, labelFn) {
   for (const fig of figs) {
     const targets = await fig.setup(page, cx);
     if (fig.scroll !== false) {
-      await scrollUnion(page, targets, { align: fig.align, margin: fig.pad + 4 });
+      // `fig.pad` は数値か辺ごとのオブジェクト。margin は align: 'top' のときだけ
+      // 使われる値なので、辺ごとの最大値を取っておけば数値のときと同じ意味になる
+      const padMargin =
+        typeof fig.pad === 'number'
+          ? fig.pad
+          : Math.max(fig.pad.top, fig.pad.right, fig.pad.bottom, fig.pad.left);
+      await scrollUnion(page, targets, { align: fig.align, margin: padMargin + 4 });
     }
     if (cx.lang === 'en') await assertEnglish(targets, fig.id);
     const clip = await clipOf(page, targets, fig.pad, cx.viewport);

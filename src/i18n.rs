@@ -1077,6 +1077,7 @@ const JA_MANUAL: Manual = Manual {
                 "種目メモは今日の欄が空のときだけ入ります。書いてあれば上書きしません。",
                 "セットメモは今日その行に書いた内容が優先。空の行にだけ前回のメモが入ります。",
                 "体重とその日の体調メモは持ち込みません。",
+                "コピーで入ったセットには時刻が付きません。重量か回数を打ち直した行にだけ、その時刻が入ります。",
             ],
             fig_alt: "空のカードと「前回をコピー」",
             fig: Some((762, 618)),
@@ -1129,6 +1130,7 @@ const JA_MANUAL: Manual = Manual {
                 "ピンとインターバルは種目そのものに貼り付く設定で、日をまたいで残ります（マシンの設定値の打ち直しを防ぎます）。",
                 "閉じているあいだも、入力済みの内容は薄い字で読めます。確認のためだけに開き直す必要はありません。",
                 "インターバルは参考の秒数の表示で、カウントダウンはありません。",
+                "開いているあいだ、その日に打ったセットの右端に時刻が出ます（コピーのまま触っていない行は空）。日付の横の開始–終了はいつでも見えます。",
             ],
             fig_alt: "一斉に開いた4つの入力欄",
             fig: Some((718, 1024)),
@@ -1280,6 +1282,7 @@ const EN_MANUAL: Manual = Manual {
                 "The exercise note fills in only when today's is empty; it never overwrites what you typed.",
                 "A set's note keeps what you typed today; the previous note fills only empty rows.",
                 "Body weight and the day's condition note are never copied.",
+                "Copied sets carry no time. Only a row whose weight or reps you retype gets the time you typed it.",
             ],
             fig_alt: "An empty card with Copy last time",
             fig: Some((762, 618)),
@@ -1332,6 +1335,7 @@ const EN_MANUAL: Manual = Manual {
                 "Pins and interval attach to the exercise itself and carry over across days (so you don't retype a machine's settings each time).",
                 "Anything already filled in stays visible in dim text while closed — no need to reopen just to check it.",
                 "The interval is only a reference number of seconds; there's no countdown.",
+                "While open, each set you typed today shows its time at the right edge (rows left as copied stay blank). The day's start–end next to the date is always visible.",
             ],
             fig_alt: "The four fields opened at once",
             fig: Some((718, 1024)),
@@ -1589,6 +1593,16 @@ impl ReleaseNote {
 /// 直前の最新から 1 つ進める。`&'static [ReleaseNote]` ではなく `&[ReleaseNote]` と書く
 /// （clippy::redundant_static_lifetimes。`presets::PRESETS` と同じ書き方）。
 pub const RELEASES: &[ReleaseNote] = &[
+    ReleaseNote {
+        id: 6,
+        date: "2026-09-22",
+        ja: &[
+            "記録タブで、その日に打ったセットに時刻が自動で残るようになりました。日付の横にその日の開始–終了が薄く出て、「＋ メモ」を開くとセットごとの時刻が見えます。「前回をコピー」して触らなかったセットには付きません。",
+        ],
+        en: &[
+            "Sets you type in the Record tab now keep the time you logged them. The day's start–end shows next to the date in dim text, and opening \"+ Note\" shows each set's time. Sets copied from last time and left untouched get no time.",
+        ],
+    },
     ReleaseNote {
         id: 5,
         date: "2026-09-21",

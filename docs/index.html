@@ -132,16 +132,20 @@
      SOFTWARE.
      ──────────────────────────────────────────────────────────────────── -->
 
-<link rel="stylesheet" href="/fitness-memo/styles-1a885113b1dca402.css" integrity="sha384-RH5XuLufT25w6AqZ6ZW3L1OY1QftIlWIdjJ0GN1YVDnTiw86IOdu8snwYmiChdtM"/>
+<link rel="stylesheet" href="/fitness-memo/styles-692f5992a85cb41c.css" integrity="sha384-535nC9kjnZ8XPqzU0Wb6ztoEG/ehQygLrSlut7fIgh1kaKwNON4lHMCkdGtP2Ifg"/>
 
 
 <!-- og:image の実体。クローラ専用なので stamp-sw.sh が SW のシェルから除外している -->
 
 
+<!-- 使い方マニュアルの図。ja / en の 2 変種（テーマはライト固定）。
+     ★ stamp-sw.sh が SHELL と BUILD_ID の両方から外している。
+       オフラインでは図が欠け、本文（wasm 内の i18n 文字列）だけが出る -->
+
 
 <script type="module">
-import init, * as bindings from '/fitness-memo/fitness-memo-be31fcd04f17ed03.js';
-const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-be31fcd04f17ed03_bg.wasm' });
+import init, * as bindings from '/fitness-memo/fitness-memo-a42b6227880d20e9.js';
+const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-a42b6227880d20e9_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -150,7 +154,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-<link rel="modulepreload" href="/fitness-memo/fitness-memo-be31fcd04f17ed03.js" crossorigin="anonymous" integrity="sha384-BkdA+n5/K+TAT0KJK1+reLP64fD+yZROv9g8RJRpbq9y9xTvRJdhVrU05ZlezPn1"><link rel="preload" href="/fitness-memo/fitness-memo-be31fcd04f17ed03_bg.wasm" crossorigin="anonymous" integrity="sha384-Zqz0nAOoAQDM2AhEriWhLjj3eEJHhO96v7d30tZGDoqXH0q2J1hubHckWduD0nw/" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/fitness-memo/fitness-memo-a42b6227880d20e9.js" crossorigin="anonymous" integrity="sha384-hKmNkedBCa2IQpWu1ncdf8xLQa7SvQUjF1zGcxpzGsMR25YUVkxXoK84aDKBTT1P"><link rel="preload" href="/fitness-memo/fitness-memo-a42b6227880d20e9_bg.wasm" crossorigin="anonymous" integrity="sha384-j1xEp0i+Hf5olWPYY0F873yNO56DJ+y0KrNnSUmNoYmFQ9S0rDluVpfl5K8d4yLG" as="fetch" type="application/wasm"></head>
 <body>
 <!-- CSR なので配信される HTML の body にはテキストが 1 文字も無い。Googlebot は JS を
      実行するので通常は問題にならないが、**JS を実行しないクローラ（LLM 系の多くを含む）

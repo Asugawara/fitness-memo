@@ -350,7 +350,12 @@ test.describe('iOS 再現（overflow-anchor: none を注入）', () => {
   });
 
   test('V4. 確認箱が帯の裏に来るとき隠れたぶんだけ見せる', async ({ page }) => {
-    await seedPastLogs(page, [{ daysAgo: 0, exerciseName: 'ベンチプレス', sets: sets(2) }]);
+    // 2 枚目（スクワット）は本題ではなく、確認箱を消してもページ末尾に
+    // max-scroll クランプされない高さを作る「のりしろ」（V3d と同じ理由）
+    await seedPastLogs(page, [
+      { daysAgo: 0, exerciseName: 'ベンチプレス', sets: sets(2) },
+      { daysAgo: 0, exerciseName: 'スクワット', sets: sets(6) },
+    ]);
     await blurActive(page);
 
     const card = page.getByTestId('exercise-card').first();
@@ -374,17 +379,20 @@ test.describe('iOS 再現（overflow-anchor: none を注入）', () => {
       }, { message: '確認箱が帯の裏 / 画面外のまま' })
       .toBe(true);
 
-    // 「はい」の代わりに「いいえ」を選ぶとフッタは動かないので、この時点の scrollY が
-    // 「確認箱が見えている」状態の基準になる（見せるための補正が既に済んでいる）
-    const scrollWithWarnVisible = await page.evaluate(() => window.scrollY);
+    // 「いいえ」を選び確認箱が消えたあとの scrollY を基準にする。確認箱が見える
+    // 状態からの遷移で取らないと、消えた直後の max-scroll クランプを基準に
+    // 取り込んでしまい、環境ごとのクランプ量の差でテストが不安定になる
     await card.getByTestId('close-card-no').click();
     await expect(warnBox).toBeHidden();
+    await settle(page);
+    const scrollBefore = await page.evaluate(() => window.scrollY);
 
-    // 確認箱が見える位置で再度外す → 既に見えているので scrollY は動かない
+    // 既に見える位置なので、再度外して確認箱が出ても scrollY は動かない
     await card.getByTestId('close-card').click();
     await expect.poll(async () => warnBox.isVisible()).toBe(true);
+    await settle(page);
     const scrollAfter = await page.evaluate(() => window.scrollY);
-    expect(Math.abs(scrollAfter - scrollWithWarnVisible)).toBeLessThanOrEqual(1);
+    expect(Math.abs(scrollAfter - scrollBefore)).toBeLessThanOrEqual(1);
   });
 
   test('V5. --reveal-bottom と .add-wrap の実測高さ', async ({ page }) => {

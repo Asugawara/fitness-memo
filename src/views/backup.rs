@@ -114,6 +114,11 @@ fn added_text(r: &MergeReport) -> Option<String> {
     if r.drops_added > 0 {
         parts.push(cur_lang().added_drops(r.drops_added));
     }
+    // ★ 時刻だけが増えることもある。`conflicts` に出ないのに日ヘッダの開始–終了が
+    //   動くので、`is_noop` に数えたものは必ずここにも出す
+    if r.times_added > 0 {
+        parts.push(cur_lang().added_times(r.times_added));
+    }
     if r.exercises_added > 0 {
         parts.push(cur_lang().n_exercises(r.exercises_added));
     }

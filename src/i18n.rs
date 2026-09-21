@@ -1827,6 +1827,13 @@ impl Lang {
         }
     }
 
+    pub fn added_times(self, n: usize) -> String {
+        match self {
+            Lang::Ja => format!("{n} 件の時刻"),
+            Lang::En => format!("{n} {}", plural(n, "set time", "set times")),
+        }
+    }
+
     pub fn added_groups(self, n: usize) -> String {
         match self {
             Lang::Ja => format!("{n} 部位"),

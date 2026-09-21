@@ -59,6 +59,9 @@ struct Row {
     ///
     /// `Row` と同じ理由で文字列で持つ（空欄と `"6."` が `f32` / `u32` で表せない）。
     drops: Vec<DropRow>,
+    /// このセットの `SetEntry::at`。素通しするだけで、ここでは打鍵・表示しない
+    /// （adr/data-model/set-at-typed-today-only.md）。
+    at: Option<i64>,
 }
 
 /// 編集中のドロップセットの 1 段。
@@ -93,6 +96,7 @@ impl Row {
             reps: String::new(),
             note: String::new(),
             drops: Vec::new(),
+            at: None,
         }
     }
 }
@@ -1059,6 +1063,7 @@ fn ExerciseCard(
                         reps: s.reps.to_string(),
                         note: s.note.clone(),
                         drops: drop_rows(s),
+                        at: s.at,
                     })
                     .collect();
                 (rows, l.note.clone())
@@ -1198,6 +1203,7 @@ fn ExerciseCard(
                                 })
                             })
                             .collect(),
+                        at: r.at,
                     })
                 })
                 .collect()
@@ -1284,6 +1290,7 @@ fn ExerciseCard(
                 //   推移から外れる**ので、勝手に入ると利用者が気づかないまま
                 //   その重量がグラフから消える
                 drops: Vec::new(),
+                at: None,
             })
         });
         focus_key.set(Some(key));
@@ -1366,6 +1373,9 @@ fn ExerciseCard(
                 //   （このボタンが出るのは保存済みのセットが空のときなので、画面上の
                 //   段は数値と一緒に置き換わってよい）
                 drops: drop_rows(s),
+                // ★ 時刻は運ばない（adr/data-model/set-at-typed-today-only.md）。
+                //   打ち直した行だけが `stamp_set_at` で新しく時刻を得る
+                at: None,
             })
             .collect();
         next_key.set(base + filled.len() as u32 + 1);

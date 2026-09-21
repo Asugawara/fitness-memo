@@ -46,6 +46,16 @@ struct Pending {
     added: Option<String>,
     /// 判断が要った箇所（`conflict_text` 済み）
     conflicts: Vec<String>,
+    /// 記録の食い違いではないが黙って進めてはいけないこと（`warn_lines` 済み）。
+    ///
+    /// ★ **`conflicts` と分けて持つ。** `change_text` は `conflicts.is_empty()` で
+    /// 「入れ替わる記録があります」に分岐するので、記録が 1 件も入れ替わらない
+    /// 事象をあちらに混ぜると確認画面が嘘をつく（`change_text` の doc）。
+    ///
+    /// ★ 出す位置は `change_text` の結果と**独立**。「上限で落ちただけ」のマージは
+    /// `change_text` が「新しく取り込むものはありません」を出す（取り込むものが
+    /// 無いのは事実）ので、そこに混ぜると落としたことが画面から消える。
+    warnings: Vec<String>,
 }
 
 fn summary_text(s: &DbSummary) -> String {
@@ -114,7 +124,26 @@ fn added_text(r: &MergeReport) -> Option<String> {
     if r.routines_added > 0 {
         parts.push(cur_lang().added_routines(r.routines_added));
     }
+    // ★ ラベルだけが増えることもある。出さないと `is_noop` が偽なのに parts が
+    //   空になり「 を追加します」だけが出る（`MergeReport::is_noop` の doc）
+    if r.labels_added > 0 {
+        parts.push(cur_lang().added_labels(r.labels_added));
+    }
     Some(parts.join(t().backup.join))
+}
+
+/// 増えたものではないが黙って進めてはいけないこと。
+///
+/// ★ `MergeReport::labels_dropped` は `is_noop()` に**入っていない**（何も増えて
+/// いないので、`is_noop` の意味としてはそれが正しい）。だから `added_text` では
+/// 拾えず、この出口が無いと**上限で落ちたことが画面から完全に消える**。落ちた定義を
+/// 指すログは取り込み直しても二度と生き返らない dangling になる。
+fn warn_lines(r: &MergeReport) -> Vec<String> {
+    let mut lines = Vec::new();
+    if r.labels_dropped > 0 {
+        lines.push(cur_lang().dropped_labels(r.labels_dropped));
+    }
+    lines
 }
 
 /// 確認画面の 1 行目。**「何も起きません」と言ってよい条件を 1 箇所に閉じる。**
@@ -259,6 +288,7 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                     after,
                     added: added_text(&report),
                     conflicts: report.conflicts.iter().map(conflict_text).collect(),
+                    warnings: warn_lines(&report),
                 }));
                 note.set(None);
                 copy_rescue.set(false);
@@ -309,6 +339,13 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
         if !p.conflicts.is_empty() {
             message.push('\n');
             message.push_str(&p.conflicts.join("\n"));
+        }
+        // ★ `change_text` / `imported_*` の分岐とは独立に併記する。「上限で落ちただけ」の
+        //   マージは上の match が「増えたものはありません」に落ちるので、ここで足さないと
+        //   落としたことが実行後の報告からも消える
+        if !p.warnings.is_empty() {
+            message.push('\n');
+            message.push_str(&p.warnings.join("\n"));
         }
         if snapshot.is_none() {
             message.push_str(t().backup.no_undo_available);
@@ -455,11 +492,28 @@ pub fn BackupSheet(open: RwSignal<bool>) -> impl IntoView {
                     </p>
                     // ★ 判断が要った箇所は**押す前**に出す。実行後にだけ見せていると、
                     //   「取り込んだ側のセットを採りました」を読むのが手遅れになる
-                    <Show when=move || pending.with(|p| p.as_ref().is_some_and(|p| !p.conflicts.is_empty()))>
+                    // ★ `warnings` も同じ場所に出す。`change_text` の結果と独立に
+                    //   併記されるので、「上限で落ちただけ」のマージでも消えない
+                    <Show when=move || {
+                        pending.with(|p| {
+                            p.as_ref()
+                                .is_some_and(|p| !p.conflicts.is_empty() || !p.warnings.is_empty())
+                        })
+                    }>
                         <p class="backup-note">
                             {move || {
                                 pending
-                                    .with(|p| p.as_ref().map(|p| p.conflicts.join("\n")))
+                                    .with(|p| {
+                                        p.as_ref()
+                                            .map(|p| {
+                                                p.conflicts
+                                                    .iter()
+                                                    .chain(&p.warnings)
+                                                    .cloned()
+                                                    .collect::<Vec<_>>()
+                                                    .join("\n")
+                                            })
+                                    })
                                     .unwrap_or_default()
                             }}
                         </p>

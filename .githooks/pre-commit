@@ -11,4 +11,99 @@ cargo fmt --all -- --check
 cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings
 cargo test                                    # core.rs の純ロジック（ホスト）
 trunk build                                   # debug / 差分ビルド
+
+# ── 使い方マニュアルの図を撮り直して stage する ──────────────────────────────
+#
+# 図（public/manual/{ja,en}/*.webp）は UI そのもののスクリーンショットなので、
+# UI を変えたコミットでだけ撮り直す。scripts/shots.mjs は時計と TZ を固定して
+# いるので、UI が変わっていなければ**同じバイト列**が出て git add は no-op になる。
+# 差分が出ないことが設計の中心で、ここが壊れると毎コミット blob が積まれる。
+# adr/deploy/screenshots-in-pre-commit-on-ui-paths.md
+#
+# ★ **SHOTS=0 は SKIP_HOOKS=1 とは別の脱出口。** SKIP_HOOKS=1 は fmt / clippy /
+#   test / playwright まで全部飛ぶので、「今は撮り直したくないが検証は通したい」
+#   （撮影が壊れている / 図を別コミットに分けたい）には使えない。SHOTS=0 は
+#   撮影だけを飛ばす。飛ばした分だけ図が UI から遅れるので、その受け皿は
+#   scripts/release.sh の `shots.mjs --check`。
+# ★ 判定を `= "1"` ではなく **`!= "0"`** にしてある。`= "1"` だと SHOTS=yes /
+#   SHOTS=2 / SHOTS=true と書いた人の撮影が**黙って**飛ぶ。止めたい人だけが
+#   "0" を書く形にして、綴りを間違えたら撮影が走る側へ倒す。
+#
+# ★ **UI_PATHS に何を入れるか。** 基準は「利用者が見るものが変わりうるか」。
+#     src/           … views だけではない。chart_layout（折れ線の座標）、
+#                      core（図に写る指標値）、presets（種目名）も図に出る
+#     index.html     … 配信物の構成（copy-dir / SRI）が変わる
+#     public/styles.css … 寸法と色そのもの
+#     public/manual/ … 図を手で消した / 差し替えたときも整合を取り直す
+#     assets/icons/  … lucide のグリフはシェブロンや鉛筆として図に写る
+#     scripts/shots.mjs … 撮り方（クリップ・品質・シード）を変えたら撮り直す
+#     package*.json  … playwright を上げると Chromium が変わり全枚数 churn する
+#                      （exact pin してあるが、上げる日は来る）
+#   逆に adr/ Cargo.* Trunk.toml e2e/ 他の scripts/ は**入れない**。
+#   利用者の体験が変わらないので、撮っても差分が出ないぶんの時間が無駄になる。
+#
+# ★ **`--only=manual` である理由。** README の 3 枚（assets/*.png）は 1 回の
+#   撮り直しで 383KB あり、merge コミット方針（squash しない）では履歴から
+#   消えない。UI を触りながら 5 コミット積む PR ではその 5 世代が残る。
+#   マニュアルの図は lossy WebP で 10 枚 190KB 程度なので桁が違う。
+#   README は UI が落ち着いたときに `shots.mjs --only=readme` を手で叩き、
+#   ドリフトは release.sh の `--check`（README も対象）が捕まえる。
+#
+# ★ **`-z | tr` を通す理由。** `git diff --name-only` は core.quotePath（既定
+#   true）が効くので、非 ASCII を含むパスを `"src/…"` と**引用符で囲んで**出す。
+#   そのままだと `^src/` が当たらず、日本語ファイル名を含む UI 変更で撮影が
+#   黙って走らない。`-z` は引用しないので、NUL を改行へ直して grep へ渡す。
+#
+# ★ **寸法ドリフトのループ（最初に踏んだ人へ）。** 検証の順序は
+#     cargo test → trunk build → 撮影 + git add → playwright
+#   で、`cargo test`（src/manual.rs の「宣言寸法 = 実ファイル」）は**撮影前の
+#   古い図**に対して通る。クリップ寸法が変わる UI 変更をすると、そのあと撮った
+#   新しい図が stage され、**playwright（<img> の width/height と実ファイルの
+#   突き合わせ）で落ちる**。直し方は src/i18n.rs の `fig` を新しい寸法に書き換えて
+#   コミットし直すこと。**これは寸法が動くたびに要る**（自動生成にすると
+#   ビルド成果物が src/ に入る、width/height を捨てるとレイアウトシフト防止と
+#   ドリフト検出の両方を失う、という理由で手作業を選んでいる）。
+#   ここで SKIP_HOOKS=1 に逃げると図と宣言寸法がずれたまま main に入る。
+#
+# ★ **git add でインデックスを触ることについて。** pre-commit の後に
+#   インデックスが読まれるので、通常の `git add` → `git commit` と `git commit -a`
+#   では撮り直した図がそのままコミットに入る。**例外は `git commit <paths>` の
+#   partial commit** で、このとき hook は一時的な false index の上で走るため、
+#   ここでの `git add` は実インデックスへ反映されない。図はコミットには入るが、
+#   直後の `git status` で public/manual/* が staged と unstaged の両方に出る。
+#   （`git add -A` は使わない — CLAUDE.md。ディレクトリ指定なので削除も拾う）
+#
+# ★ **rebase とマージでは走らない。** `git help rebase` は pre-rebase 以外の
+#   hook を約束しておらず、`git rebase --continue` の競合解消後は sequencer が
+#   `-n` を付けるので pre-commit は走らない。マージのコミットに掛かるのは
+#   `pre-merge-commit` で、それは .githooks/ に置いていない（GitHub 上の
+#   マージはそもそもローカル hook を通らない）。したがって rebase / マージ後の
+#   図のドリフトを捕まえるのは **release.sh の `shots.mjs --check` だけ**。
+UI_PATHS='^src/|^index\.html$|^public/styles\.css$|^public/manual/|^assets/icons/|^scripts/shots\.mjs$|^package(-lock)?\.json$'
+
+if [ "${SHOTS:-1}" != "0" ] && git diff --cached --name-only -z | tr '\0' '\n' | grep -Eq "$UI_PATHS"; then
+  # ★ stage していない UI 変更があると、図は**ワークツリーの状態**で撮られる。
+  #   trunk build も playwright も同じ性質なので止めはしないが、生成物を
+  #   コミットに焼く分だけ残るので黙ってはいけない（誤検知で止めるガードは
+  #   SKIP_HOOKS=1 の常用を招く）
+  if git diff --name-only -z | tr '\0' '\n' | grep -Eq "$UI_PATHS"; then
+    echo "警告: stage していない UI 変更があります。図はワークツリーの状態で撮られます" >&2
+  fi
+  node scripts/shots.mjs --only=manual
+  git add -- public/manual
+  git diff --cached --name-only -- public/manual | sed 's/^/  撮り直した: /'
+  # 図が変わったときだけ dist に載せ直す（E2E が dist/manual を読む）。
+  # ★ `--cached` を付けて**インデックス vs HEAD**を見る。付けないとワークツリーと
+  #   HEAD の比較になり、上の git add の後は同じ結果になるとはいえ意図とずれる。
+  # ★ **2 回目の trunk build ではなく cp -R で足りる。** index.html の
+  #   `copy-dir public/manual` はファイル名にハッシュを付けない素のコピーで、
+  #   manual は SW のシェルから外してあるので sw.js の再スタンプも要らない。
+  #   trunk build は cargo が no-op でも wasm-bindgen を 43MB の debug wasm に
+  #   走らせるので、ここだけで数秒〜十数秒違う（60 秒制約: adr/deploy/ci-in-pre-commit.md）。
+  if ! git diff --quiet --cached HEAD -- public/manual; then
+    rm -rf dist/manual
+    cp -R public/manual dist/manual
+  fi
+fi
+
 npx playwright test --project=chromium --project=harness

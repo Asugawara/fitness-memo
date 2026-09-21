@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-09
 - **カテゴリ**: data-model
-- **関連**: [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](../ux/exercise-and-set-notes-behind-one-toggle.md)（画面側）, [「1日1種目1ログ」を不変条件にする](one-log-per-exercise-per-day.md), [`at` を `Option<i64>` にし当日入力時のみ埋める](at-optional-same-day-only.md), [保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す](../storage/storage-key-per-schema-generation.md), [localStorage の単一キーに JSON 全体を持つ](../storage/localstorage-single-key-json.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](../ux/copy-carries-the-notes.md)（決定 7 を改訂）
+- **関連**: [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](../ux/exercise-and-set-notes-behind-one-toggle.md)（画面側）, [「1日1種目1ログ」を不変条件にする](one-log-per-exercise-per-day.md), [`at` を `Option<i64>` にし当日入力時のみ埋める](at-optional-same-day-only.md), [保存キーを schema 世代ごとに切り、旧キーを読み取り専用で残す](../storage/storage-key-per-schema-generation.md), [localStorage の単一キーに JSON 全体を持つ](../storage/localstorage-single-key-json.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](../ux/copy-carries-the-notes.md)（決定 7 を改訂）, [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](labels-on-the-exercise-and-a-mark-on-the-log.md)（粒度の 3 つ目の軸）
 
 > **改訂**: 決定 7（`copy_day` / `copy_last` / `+ セット` はメモを複製しない）のうち、
 > **コピーの 3 経路は [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](../ux/copy-carries-the-notes.md) で反転した。**
@@ -24,6 +24,10 @@
 **種目マスタ（`Exercise`）には置かない。** 種目側に置くと毎日同じ注記が出て「今日そこがどうだったか」が書けない。`Session.note` が日単位である理由と同型。
 
 `Option<String>` にしない。「`None`」と「`Some("")`」の 2 通りの空が生まれ、判定が全経路に散る。`Session.note` が `String` である先例に合わせる。
+
+★ **粒度の 3 つ目の軸が増えた。** 本 ADR が「その日のこと」（`ExerciseLog.note`）と「そのセットのこと」（`SetEntry.note`）を分けたのに対し、種目ごとのラベル（[ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](labels-on-the-exercise-and-a-mark-on-the-log.md)）は「**その日の狙い**」を `ExerciseLog` の側だけに足す。`SetEntry` には持たせない — 狙いはセッション全体の性質で、1 セットごとに変わるものではない。
+
+★ ラベルは `Option<LabelId>` で持つ。ここで `Option` を却下したのは**空の表現が 2 通り生まれる**からだが、ラベルは「無い」と「ある」に中間が無い（`Id(0)` 番兵を使うと `label_name` が引けなかったときと区別できず、`skip_serializing_if` も書けない）。判定は `Option` の 1 通りに閉じている。
 
 ### 2. `SCHEMA` は 3 のまま。`storage::KEY` も切らない
 
@@ -85,9 +89,15 @@ KEY を切る積極的な害もある。v4 に切ると全利用者が「v3 か�
 
 `log_rank` は**変えない**。メモの有無で「どちらのセットを採るか」が変わってはいけない（2 セットのログがメモ 1 個で 5 セットのログに勝つ形は論外）。
 
+★ **ラベルも同じ扱いにした**（[ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](labels-on-the-exercise-and-a-mark-on-the-log.md)）。`same_sets` / `same_sets_unordered` / `log_rank` のどれにも `label` を入れない。入れるとラベルの差だけで食い違いの枝に落ち、`log_rank` は同点なので差し替えの分岐にも入らず、**取り込む側のセットメモが `Conflict` も出さずに黙って捨てられる** — 上の ★ が警告している経路そのもの。ログの `label` は `append_note` の**隣**で「空のときだけ埋める」（あとに回すと `*existing = log` が消す）、`log_rank` の勝ち枝では `note` / `at` と同じく**明示的に持ち越す**（`..log` に任せると勝った側で上書きされる）。
+
 ### 9. `MergeReport` に `notes_added` を足す。`DbSummary` は変えない
 
 `MergeReport::is_noop()` が「新しく取り込むものはありませんでした」を出す。メモだけが追記されたケースでこの文言が嘘になるので数える。**追記は `conflicts` に出ない**ので、メモの冪等性を数で見る唯一の口でもある。
+
+★ **`labels_added` も同じ理由で足した**（[ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](labels-on-the-exercise-and-a-mark-on-the-log.md)）。ラベルだけが増えたマージは `conflicts` に出ないのに**チップが増えて履歴の見え方が変わる**。定義の追加とログへの付与を合算した 1 本のカウンタで、`notes_added` が異種混合の先例になっている。
+
+★ ただし `labels_dropped`（`MAX_LABELS` 超過で取り込めなかった定義の数）は **`is_noop()` に入れない** — 何も増えていないので `is_noop` の意味としては真が正しい。代わりに `views::backup::Pending` に `conflicts` とは別の `warnings` を持たせて併記する（`conflicts` に積むと確認画面が「入れ替わる記録があります」と嘘をつく）。
 
 `DbSummary` にはメモ件数を足さない。あれは「取り込み事故を止める唯一の道具」で、守っているのは記録の規模（種目数 / 実施日数 / セット数 / 期間）。4 番目の数を足すと、事故を実際に止めている 3 つの数が 1 行の中で薄まる。メモだけの DB は `0 日・0 セット` と表示されるので、本物を置き換えようとした利用者には**明らかに異常に見える** = 確認が機能する側に倒れる。
 

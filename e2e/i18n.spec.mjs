@@ -206,7 +206,7 @@ test('種目に貼り付く設定（ピン・インターバル）のラベル�
   await expect(card.locator('.pin-label')).toHaveText('Pins');
   await expect(card.locator('.interval-label')).toHaveText('Interval');
   await expect(card.locator('.interval-unit')).toHaveText('s');
-  await expect(card.getByTestId('pin-value').first()).toHaveCount(0);
+  await expect(card.getByTestId('pin-value')).toHaveCount(0);
 
   await card.getByTestId('pin-add').click();
   await card.getByTestId('pin-value').fill('3');
@@ -247,7 +247,7 @@ test('英語で書き出した TSV は英語の見出しで、日本語の見出
     return await f.text();
   });
   expect(tsv.split('\n')[0]).toBe(
-    'Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tDrop set\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec',
+    'Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tDrop set\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec\tLabel',
   );
 
   // ★ 過去に日本語で書き出したファイルが、英語に切り替えた端末でも読める。

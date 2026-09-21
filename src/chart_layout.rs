@@ -38,14 +38,6 @@ pub const Y1: f64 = VIEW_H - 22.0;
 /// 1 年分 100 点超を幅 320 に r=3 で置くと全て重なって判読不能になる。
 pub const DENSE_POINTS: usize = 40;
 
-/// ★ 体重をこれ以上の点数で描くと破線が潰れる。超えたら**描画だけ**週平均に落とす。
-///
-/// 1Y × 毎日計量 = 365 点をプロット幅 ~250px に置くと 0.68px/点。日々の体重は ±0.8kg
-/// 揺れるうえ第2軸は min/max にぴったり合わせてあるので、破線（周期 10px）が完全に潰れて
-/// **灰色の帯**になる。「そんなに目立たないように」の真逆なので、線だけ滑らかにする。
-/// 読み取り欄（[`Band::weight`]）は集約前の実測値のままにする。
-pub const WEIGHT_DENSE_POINTS: usize = 45;
-
 /// 横のグリッド線の y 座標（上端 / 中間 / 0）。**左右の軸で共用する。**
 ///
 /// 主軸の `y_of` に `[y_max, y_max/2, 0]` を通した結果と厳密に一致する定数。
@@ -145,7 +137,13 @@ pub fn n(v: f64) -> String {
 }
 
 /// `series` はメイン指標、`weight` は体重。どちらも日付昇順であること。
-pub fn layout(series: &[(NaiveDate, f64)], weight: &[(NaiveDate, f64)]) -> Layout {
+/// `weight_line` は呼び側（`views::progress`）が期間ごとの設定から渡す
+/// 「日ごと / 週平均」の選択（[`core::WeightLine`]）。
+pub fn layout(
+    series: &[(NaiveDate, f64)],
+    weight: &[(NaiveDate, f64)],
+    weight_line: core::WeightLine,
+) -> Layout {
     if series.is_empty() && weight.is_empty() {
         return Layout::default();
     }
@@ -156,10 +154,18 @@ pub fn layout(series: &[(NaiveDate, f64)], weight: &[(NaiveDate, f64)]) -> Layou
     //   丸まるので、先頭が生データの初日より最大 6 日前に出る。ドメインを生データから
     //   作ってしまうと、その先頭が `X0` の左（実測で x=7.2 まで）へはみ出し、
     //   左の軸ラベルの上を破線が横切る。しかも左端の X ラベルは実測初日を指したままになる
-    let drawn: Vec<(NaiveDate, f64)> = if weight.len() > WEIGHT_DENSE_POINTS {
-        core::aggregate_weekly_avg(weight)
-    } else {
-        weight.to_vec()
+    let drawn: Vec<(NaiveDate, f64)> = match weight_line {
+        core::WeightLine::Daily => weight.to_vec(),
+        core::WeightLine::Weekly => {
+            let weekly = core::aggregate_weekly_avg(weight);
+            // ★ 2 点以上ある週が 1 つも無ければ平均は実測と同じ数字。落とすと点が週開始日（日曜）へ
+            //   動き、読み取りの丸（`Band::w_y`）が消えるだけなので、そのときは日ごとのまま描く
+            if weekly.len() == weight.len() {
+                weight.to_vec()
+            } else {
+                weekly
+            }
+        }
     };
 
     // ── X は両系列の合併ドメイン ──
@@ -390,11 +396,12 @@ mod tests {
             assert!(!w.polyline.contains("inf"), "polyline: {}", w.polyline);
         }
         assert!(!l.polyline.contains("NaN"), "polyline: {}", l.polyline);
+        assert!(!l.polyline.contains("inf"), "polyline: {}", l.polyline);
     }
 
     #[test]
     fn empty_input_draws_nothing() {
-        let l = layout(&[], &[]);
+        let l = layout(&[], &[], core::WeightLine::Daily);
         assert!(l.is_empty());
         assert!(l.weight.is_none());
         assert_eq!(l.x1, X1);
@@ -404,7 +411,7 @@ mod tests {
     /// 右軸のぶん右端を縮めるのは体重があるときだけ。
     #[test]
     fn geometry_is_unchanged_when_there_is_no_weight() {
-        let l = layout(&metric(), &[]);
+        let l = layout(&metric(), &[], core::WeightLine::Daily);
         assert_eq!(l.x1, X1);
         assert!(l.weight.is_none());
         // 最初の点は X0、最後の点は X1 に載る
@@ -415,7 +422,11 @@ mod tests {
 
     #[test]
     fn geometry_reserves_the_right_margin_when_weight_is_present() {
-        let l = layout(&metric(), &daily(d(2026, 8, 1), &[70.0, 70.2, 70.1]));
+        let l = layout(
+            &metric(),
+            &daily(d(2026, 8, 1), &[70.0, 70.2, 70.1]),
+            core::WeightLine::Daily,
+        );
         assert_eq!(l.x1, X1_DUAL);
         assert_eq!(l.x_labels.last().expect("3個ある").0, X1_DUAL);
         let w = l.weight.expect("体重レイヤがある");
@@ -428,7 +439,7 @@ mod tests {
     fn x_domain_is_the_union_of_both_series() {
         // メインは 8/1〜8/6、体重は 7/30〜8/9
         let weight = daily(d(2026, 7, 30), &[70.0; 11]);
-        let l = layout(&metric(), &weight);
+        let l = layout(&metric(), &weight, core::WeightLine::Daily);
 
         assert_eq!(l.x_labels[0].1, d(2026, 7, 30), "左端は体重の初日");
         assert_eq!(l.x_labels[2].1, d(2026, 8, 9), "右端は体重の最終日");
@@ -443,7 +454,11 @@ mod tests {
     fn a_single_metric_point_is_not_centered_when_weight_spans_days() {
         // 8/3 は 8/1〜8/9 の中央（8/5）ではないので、中央寄せなら座標が合わない
         let one = vec![(d(2026, 8, 3), 600.0)];
-        let l = layout(&one, &daily(d(2026, 8, 1), &[70.0; 9]));
+        let l = layout(
+            &one,
+            &daily(d(2026, 8, 1), &[70.0; 9]),
+            core::WeightLine::Daily,
+        );
         assert_ne!(l.pts[0].x, (X0 + l.x1) / 2.0);
         assert_eq!(l.pts[0].x, X0 + (2.0 / 8.0) * (l.x1 - X0));
         assert_eq!(l.x_labels.len(), 3);
@@ -452,11 +467,15 @@ mod tests {
     /// メイン多数 × 体重 1 点。頂点 1 個の `polyline` は何も描かれないので丸を出す。
     #[test]
     fn a_single_weight_point_falls_back_to_a_dot() {
-        let l = layout(&metric(), &[(d(2026, 8, 4), 70.0)]);
+        let l = layout(&metric(), &[(d(2026, 8, 4), 70.0)], core::WeightLine::Daily);
         let w = l.weight.expect("体重レイヤがある");
         assert!(w.dot.is_some(), "1 点なら丸を描く");
 
-        let many = layout(&metric(), &daily(d(2026, 8, 1), &[70.0, 70.2, 70.1]));
+        let many = layout(
+            &metric(),
+            &daily(d(2026, 8, 1), &[70.0, 70.2, 70.1]),
+            core::WeightLine::Daily,
+        );
         assert!(
             many.weight.expect("ある").dot.is_none(),
             "2 点以上なら丸は不要"
@@ -466,25 +485,28 @@ mod tests {
     /// `dense` はメイン系列だけで決まる。体重が何点あっても主のドット表示に影響しない。
     #[test]
     fn dense_depends_only_on_the_metric_series() {
-        let l = layout(&metric(), &daily(d(2026, 1, 1), &[70.0; 300]));
+        let l = layout(
+            &metric(),
+            &daily(d(2026, 1, 1), &[70.0; 300]),
+            core::WeightLine::Daily,
+        );
         assert!(!l.dense, "メインは 3 点なので密ではない");
 
         let many_metric = daily(d(2026, 1, 1), &[600.0; DENSE_POINTS + 1]);
-        assert!(layout(&many_metric, &[]).dense);
+        assert!(layout(&many_metric, &[], core::WeightLine::Daily).dense);
     }
 
-    /// ★ 密なときは**描画だけ**週平均に落とし、読み取り欄は実測のまま。
+    /// ★ Weekly のときは**描画だけ**週平均に落とし、読み取り欄は実測のまま。
     #[test]
-    fn a_dense_weight_series_is_smoothed_for_drawing_but_not_for_the_readout() {
+    fn a_weekly_weight_line_is_smoothed_for_drawing_but_not_for_the_readout() {
         // 8/2(日) から 70 日ぶん。1 日ごとに 0.1kg ずつ増える
         let start = d(2026, 8, 2);
         let values: Vec<f64> = (0..70).map(|i| 70.0 + f64::from(i) * 0.1).collect();
         let weight = daily(start, &values);
-        assert!(weight.len() > WEIGHT_DENSE_POINTS);
 
         // メインの点は体重の 3 日目に 1 つだけ置く
         let m = vec![(start + TimeDelta::days(2), 600.0)];
-        let l = layout(&m, &weight);
+        let l = layout(&m, &weight, core::WeightLine::Weekly);
         let w = l.weight.as_ref().expect("体重レイヤがある");
         assert!(w.aggregated);
         assert_eq!(w.points, 10, "70 日 = 10 週");
@@ -508,8 +530,7 @@ mod tests {
         for offset in 0..7 {
             let start = d(2026, 5, 10) + TimeDelta::days(offset); // 5/10 は日曜
             let weight = daily(start, &values);
-            assert!(weight.len() > WEIGHT_DENSE_POINTS, "集約経路に入ること");
-            let l = layout(&metric(), &weight);
+            let l = layout(&metric(), &weight, core::WeightLine::Weekly);
             let w = l.weight.as_ref().expect("体重レイヤがある");
             assert!(w.aggregated);
 
@@ -541,7 +562,7 @@ mod tests {
             .map(|w| (start + TimeDelta::days(w * 7), 600.0))
             .collect();
 
-        let l = layout(&m, &weight);
+        let l = layout(&m, &weight, core::WeightLine::Weekly);
         assert!(l.weight.as_ref().expect("ある").aggregated);
         assert_eq!(l.bands.len(), 10);
         for b in &l.bands {
@@ -565,7 +586,7 @@ mod tests {
             .map(|i| (start + TimeDelta::days(i * 3), 600.0))
             .collect();
 
-        let l = layout(&m, &weight);
+        let l = layout(&m, &weight, core::WeightLine::Weekly);
         let w = l.weight.as_ref().expect("体重レイヤがある");
         assert!(w.aggregated);
         let (hi, lo) = (w.values[0], w.values[2]);
@@ -580,7 +601,7 @@ mod tests {
     #[test]
     fn the_cursor_marks_the_weight_line_when_the_day_is_actually_drawn() {
         let weight = daily(d(2026, 8, 1), &[70.0, 70.2, 70.1, 70.4, 70.3, 70.5]);
-        let l = layout(&metric(), &weight);
+        let l = layout(&metric(), &weight, core::WeightLine::Daily);
         let b = l
             .bands
             .iter()
@@ -599,7 +620,7 @@ mod tests {
             (metric(), Vec::new()),
             (Vec::new(), daily(d(2026, 8, 1), &[70.0, 70.2, 70.1])),
         ] {
-            let l = layout(&m, &w);
+            let l = layout(&m, &w, core::WeightLine::Daily);
             assert!(!l.bands.is_empty());
             assert_eq!(l.bands[0].band_x, X0);
             let mut cursor = X0;
@@ -620,7 +641,7 @@ mod tests {
     #[test]
     fn weight_alone_still_draws_but_without_the_left_axis() {
         let weight = daily(d(2026, 8, 1), &[70.0, 70.2, 70.1]);
-        let l = layout(&[], &weight);
+        let l = layout(&[], &weight, core::WeightLine::Daily);
 
         assert!(!l.is_empty());
         assert!(l.pts.is_empty());
@@ -636,7 +657,11 @@ mod tests {
 
     #[test]
     fn the_left_axis_is_present_whenever_the_metric_has_points() {
-        let l = layout(&metric(), &daily(d(2026, 8, 1), &[70.0, 70.2]));
+        let l = layout(
+            &metric(),
+            &daily(d(2026, 8, 1), &[70.0, 70.2]),
+            core::WeightLine::Daily,
+        );
         let y = l.y_values.expect("左軸ラベルがある");
         assert_eq!(y[2], 0.0, "下端は 0 起点");
         assert!(y[0] > l.max, "上端は max より上（1.1 倍）");
@@ -645,7 +670,11 @@ mod tests {
     /// 右軸ラベルは上から下へ降順で、グリッド線と同じ 3 段に載る。
     #[test]
     fn the_right_axis_labels_run_from_high_to_low() {
-        let l = layout(&metric(), &daily(d(2026, 8, 1), &[61.8, 63.1, 62.4]));
+        let l = layout(
+            &metric(),
+            &daily(d(2026, 8, 1), &[61.8, 63.1, 62.4]),
+            core::WeightLine::Daily,
+        );
         let w = l.weight.expect("体重レイヤがある");
         assert_eq!(w.values, [63.5, 62.5, 61.5]);
         assert_eq!(GRID_Y, [Y0, 75.0, Y1]);
@@ -666,9 +695,86 @@ mod tests {
                 vec![(d(2026, 8, 1), f64::MAX)],
             ),
             (Vec::new(), vec![(d(2026, 8, 1), 70.0)]),
+            // 8/2 は日曜なので同じ週。Weekly では sum が inf → 平均 inf → clamp(0,1) で有限に戻る経路
+            (
+                metric(),
+                vec![(d(2026, 8, 3), f64::MAX), (d(2026, 8, 4), f64::MAX)],
+            ),
         ];
-        for (m, w) in cases {
-            assert_all_coords_finite(&layout(&m, &w));
+        for line in [core::WeightLine::Daily, core::WeightLine::Weekly] {
+            for (m, w) in &cases {
+                assert_all_coords_finite(&layout(m, w, line));
+            }
         }
+    }
+
+    #[test]
+    fn a_daily_weight_line_is_never_smoothed_however_many_points() {
+        let weight = daily(d(2026, 1, 1), &[70.0; 365]);
+        let l = layout(&[], &weight, core::WeightLine::Daily);
+        assert_all_coords_finite(&l);
+        let w = l.weight.expect("体重レイヤがある");
+        assert_eq!(w.points, 365);
+        assert!(!w.aggregated);
+    }
+
+    /// 各週 1 点しかないとき、Weekly でも週平均は実測と同じ数字なので日ごとのまま描く。
+    #[test]
+    fn a_weekly_weight_line_stays_daily_when_no_week_has_two_points() {
+        let start = d(2026, 5, 13); // 水曜
+        let weight: Vec<(NaiveDate, f64)> = (0..10i64)
+            .map(|w| (start + TimeDelta::days(w * 7), 70.0 + w as f64 * 0.1))
+            .collect();
+        let m = weight.clone();
+
+        let l = layout(&m, &weight, core::WeightLine::Weekly);
+        let w = l.weight.expect("体重レイヤがある");
+        assert!(!w.aggregated);
+        assert_eq!(w.points, 10);
+
+        let daily_l = layout(&m, &weight, core::WeightLine::Daily);
+        assert_eq!(w.polyline, daily_l.weight.expect("ある").polyline);
+
+        for b in &l.bands {
+            assert!(b.w_y.is_some(), "{}: 点が日曜へ動いていない", b.date);
+        }
+    }
+
+    /// 1 週だけ 2 点あれば、その週から集約経路に入る（週開始日へスナップ）。
+    #[test]
+    fn a_weekly_weight_line_snaps_to_week_starts_once_any_week_has_two_points() {
+        let start = d(2026, 5, 13); // 水曜
+        let mut weight: Vec<(NaiveDate, f64)> = (0..10i64)
+            .map(|w| (start + TimeDelta::days(w * 7), 70.0 + w as f64 * 0.1))
+            .collect();
+        weight.push((d(2026, 5, 14), 70.5)); // 木曜、1 週目に 2 点目
+        weight.sort_by_key(|(date, _)| *date);
+        let m = weight.clone();
+
+        let l = layout(&m, &weight, core::WeightLine::Weekly);
+        let w = l.weight.expect("体重レイヤがある");
+        assert!(w.aggregated);
+        assert_eq!(w.points, 10);
+        let x0: f64 = w
+            .polyline
+            .split(' ')
+            .next()
+            .expect("先頭点")
+            .split(',')
+            .next()
+            .expect("x")
+            .parse()
+            .expect("数値");
+        assert!(x0 >= X0 - 1e-9);
+
+        use chrono::Datelike as _;
+        for b in &l.bands {
+            if b.date.weekday() != chrono::Weekday::Sun {
+                assert_eq!(b.w_y, None, "{}: 日曜以外の帯には丸を打たない", b.date);
+            }
+        }
+
+        let daily_l = layout(&m, &weight, core::WeightLine::Daily);
+        assert!(!daily_l.weight.expect("ある").aggregated);
     }
 }

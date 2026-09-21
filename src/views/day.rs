@@ -15,8 +15,8 @@ use web_sys::PointerEvent;
 use crate::core;
 use crate::core::{Drops, Metric};
 use crate::model::{
-    Db, DropStage, ExerciseId, ExerciseLog, GroupId, MAX_DROPS, MAX_INTERVAL_LEN, MAX_PIN_LEN,
-    MAX_PINS, RoutineId, SetEntry,
+    Db, DropStage, ExerciseId, ExerciseLog, GroupId, Label, LabelId, MAX_DROPS, MAX_INTERVAL_LEN,
+    MAX_PIN_LEN, MAX_PINS, RoutineId, SetEntry,
 };
 use crate::reorder;
 
@@ -239,7 +239,15 @@ fn confirm_dom_id(ex: ExerciseId) -> String {
     format!("confirm-{ex}")
 }
 
-/// その日・その種目のセットと種目メモを丸ごと差し替える。
+/// その日・その種目のセット・種目メモ・ラベルを丸ごと差し替える。
+///
+/// ★ **刈り取りの条件にラベルを足さない。** つまり**ラベルだけのカードは `Db` に
+/// 何も作らない**（セットもメモも空なら `remove`）。足すと `dedupe_logs` の
+/// `!l.is_empty()` が次回起動で消して「保存と表示が食い違う最悪の形」になり、それを
+/// 避けて `ExerciseLog::is_empty` にラベルを入れると逆にゴーストログが永続して
+/// **その日が候補リストから永久に外れる**。トレードオフとして、セットを 1 本も
+/// 打っていない状態ではリロード・タブ往復・日付移動で「指定なし」に戻る
+/// （既存の空カードと同じ階級。adr/ux/label-chips-switch-the-history-and-the-copy.md）。
 ///
 /// ★ **刈り取りの規則は「セットもメモも無ければ落とす」の 1 本。** セットだけで
 /// 判定していた形は使えない — 種目メモを打った直後のセット commit（行の ✕、`+ セット`、
@@ -252,6 +260,7 @@ fn write_log(
     ex: ExerciseId,
     sets: Vec<SetEntry>,
     note: String,
+    label: Option<LabelId>,
     is_today: bool,
 ) {
     let key = core::date_key(date);
@@ -265,6 +274,11 @@ fn write_log(
             Some(log) => {
                 log.sets = sets;
                 log.note = note;
+                // ★ **無条件代入。** `merge_db` の「空のときだけ埋める」とは規則が
+                //   違う — あちらは他人のファイルとの合流で、こちらは目の前の利用者の
+                //   選択。`if label.is_some()` にすると `[P]` → `[指定なし]` が `Db` に
+                //   届かず、リロードで `[P]` に戻る
+                log.label = label;
                 // ★ at は当日入力時のみ埋める。過去日バックフィルは None のまま。
                 //   ここで now を入れると「最後のトレーニングから」が「たった今」になり
                 //   明示要件の出力が嘘になる
@@ -294,6 +308,7 @@ fn write_log(
                     sets,
                     at,
                     note,
+                    label,
                 });
             }
         }
@@ -958,11 +973,50 @@ fn ExerciseCard(
     //   コピーの中身と「重量未入力」の出方まで変えてしまう** — 加重懸垂を 3 週間前に
     //   1 度だけやった人が、件数を 3 にした途端に自重懸垂の全行へ警告が出る。
     //   件数が 0 にならないこと（`core::history_count` の不変条件）がこの式の前提
+    // ── ラベル（adr/ux/label-chips-switch-the-history-and-the-copy.md）───────
+    //
+    // ★ **`labels` Memo を 1 本にして、行の中で `db` を読まない。** チップ行・履歴行の
+    //   ラベル名解決・`has_labels` の 3 つが全部これから引く。行の中で
+    //   `db.with(|d| d.exercise(ex)…)` と書くと**そのクロージャが `db` を購読**し、
+    //   どのカードの 1 打鍵でも全カードの履歴行が作り直される（`pins` / `interval` の
+    //   Memo と同じ理由）。
+    let labels = Memo::new(move |_| {
+        db.with(|d| d.exercise(ex).map(|e| e.labels.clone()).unwrap_or_default())
+    });
+    // ★ `data-labels` 属性の有無と `<span class="label">` の描画は**必ずこの 1 本から
+    //   出す**。subgrid 軸には implicit track が無いので、3 トラックの親に 4 セル入れると
+    //   4 個目が次の行へ落ち、4 トラックに 3 セルだと `.metric` が `1fr` 列に座る。
+    let has_labels = Memo::new(move |_| labels.with(|ls| !ls.is_empty()));
+
+    // 選択中のラベル。**真実源は `ExerciseLog.label`**（ログが存在するときは常に）で、
+    // ここはその写し。`initial` / `note0` / `pins0` / `interval0` と同じパターンで
+    // 今日のログから初期化する。
+    let label_sel: RwSignal<Option<LabelId>> = RwSignal::new(db.with_untracked(|d| {
+        d.sessions
+            .get(&core::date_key(dates.selected.get_untracked()))
+            .and_then(|s| s.log_of(ex))
+            .and_then(|l| l.label)
+    }));
+
+    // 履歴を引くときの絞り込み。
+    //
+    // ★ **削除済みラベルの門番。** 今日 `[P]` で記録 → 設定で `P` を削除 → 記録タブへ
+    //   戻ると `label_sel = Some(削除済み)` になり、セットがあるのに「記録なし」で
+    //   どのチップも点灯しない。`labels` に無ければ `Any` として引き、「指定なし」を
+    //   点灯させる。**`Db` の値は触らない**（「dangling は残す」方針と両立）。
+    let filter = Memo::new(move |_| match label_sel.get() {
+        Some(id) if labels.with(|ls| ls.iter().any(|l| l.id == id)) => core::LabelFilter::Only(id),
+        _ => core::LabelFilter::Any,
+    });
+
     let history = Memo::new(move |_| {
         let before = dates.selected.get();
         let n = history_count.get();
+        // ★ `label_sel` を**追跡させる**（`get_untracked` にするとチップを押しても
+        //   切り替わらない）。`filter` Memo 経由で購読している
+        let f = filter.get();
         db.with(|d| {
-            core::last_logs_before(d, ex, before, n)
+            core::last_logs_before_with(d, ex, before, n, f)
                 .into_iter()
                 .map(|(date, l)| (date, l.clone()))
                 .collect::<Vec<_>>()
@@ -1090,13 +1144,24 @@ fn ExerciseCard(
     // 「重量未入力」が出て邪魔になる。
     //
     // 前回ログか、この日の他の行に重量が入っていれば「重量を使う種目」とみなす。
-    let uses_weight = Memo::new(move |_| {
-        // ★ `first()`（= 前回）だけを見る。`iter().any(..)` にすると表示件数を
-        //   増やしたとたんに、もう何週間も自重でやっている種目へ警告が戻ってくる
-        history.with(|h| {
-            h.first()
+    //
+    // ★ **ラベルで絞らない。** 「この種目は重量を使うか」は**種目の性質**で
+    //   モードの性質ではないので、`history`（絞り込み後）ではなく無絞りの
+    //   `core::last_log_before` を専用に引く。絞ると `[S]` に切り替えたとたんに
+    //   「重量未入力」の警告が出入りする
+    //   （adr/ux/past-records-by-date-with-a-count-setting.md
+    //   「表示設定は表示だけを変える」を、ラベルにも降ろしたもの）。
+    //   ★ `first()` だけを見る規則もそのまま（`last_log_before` が「前回 1 件」）
+    let last_unfiltered_uses_weight = Memo::new(move |_| {
+        let before = dates.selected.get();
+        db.with(|d| {
+            core::last_log_before(d, ex, before)
                 .is_some_and(|(_, log)| log.sets.iter().any(|s| s.weight > 0.0))
-        }) || rows.with(|rs| rs.iter().any(|r| parse_weight(&r.weight) > 0.0))
+        })
+    });
+    let uses_weight = Memo::new(move |_| {
+        last_unfiltered_uses_weight.get()
+            || rows.with(|rs| rs.iter().any(|r| parse_weight(&r.weight) > 0.0))
     });
 
     let commit = move || {
@@ -1131,6 +1196,9 @@ fn ExerciseCard(
                 .collect()
         });
         let note = ex_note.get_untracked();
+        // ★ `commit` の中は必ず `get_untracked`（追跡すると commit 自体が
+        //   リアクティブな依存になる）
+        let label = label_sel.get_untracked();
         let date = dates.selected.get_untracked();
         let is_today = date == dates.today.get_untracked();
         // ★ 画面の並びを唯一の真実にする。`write_log` の新規枝は `logs.push` なので、
@@ -1141,7 +1209,7 @@ fn ExerciseCard(
         //   前日のままでも別の日の ID が混ざらないようにするため
         let order = card_order(cards, date);
         db.update(|d| {
-            write_log(d, date, ex, sets, note, is_today);
+            write_log(d, date, ex, sets, note, label, is_today);
             core::reorder_logs(d, date, &order);
         });
     };
@@ -1244,6 +1312,16 @@ fn ExerciseCard(
         commit();
     };
 
+    // チップのタップ。**同値ガードが要る** — 無いと二度押しで `save_debounced` が
+    // 再武装される（`commit` は必ず保存を予約する）。
+    let pick_label = move |v: Option<LabelId>| {
+        if label_sel.get_untracked() == v {
+            return;
+        }
+        label_sel.set(v);
+        commit();
+    };
+
     let copy_last = move |_| {
         // ★ 表示件数がいくつでも**先頭 1 件（= 前回）だけ**を流し込む。
         //   「どれがコピーされたか」が件数で変わってはいけない
@@ -1302,7 +1380,20 @@ fn ExerciseCard(
             }
         }
 
-        // ★ `ex_note.set` の**後**に呼ぶ。commit は `ex_note.get_untracked()` を読む
+        // ★ ラベルは**今日が「指定なし」のときだけ**引き継ぐ。`[P]` を選んでコピーする
+        //   通常経路では元も先も P なので何も起きない。種目メモと同じ規則
+        //   （adr/ux/copy-carries-the-notes.md 決定 4「既に何か書いてある場所には
+        //   書かない」の 4 つ目の適用先）。
+        //   ★ `ex_note` と違って DOM の直接更新は不要 — `class:on` が `label_sel` を
+        //     追跡しているので自動で追いつく
+        if label_sel.with_untracked(Option::is_none)
+            && let Some(id) = log.label
+        {
+            label_sel.set(Some(id));
+        }
+
+        // ★ `ex_note.set` / `label_sel.set` の**後**に呼ぶ。commit は
+        //   `get_untracked` で読む
         commit();
     };
 
@@ -1328,8 +1419,10 @@ fn ExerciseCard(
     let close_card = move || {
         let date = dates.selected.get_untracked();
         // ★ メモも空で渡す。セットだけ空にしても、メモが残っているとログが残って
-        //   「この日から外す」が効かない（write_log の刈り取りは両方を見る）
-        db.update(|d| write_log(d, date, ex, Vec::new(), String::new(), false));
+        //   「この日から外す」が効かない（write_log の刈り取りは両方を見る）。
+        //   ★ ラベルも `None` で渡す。刈り取りはラベルを見ないので残しても消えるが、
+        //     「カードを閉じる = その日のその種目を無かったことにする」なので明示する
+        db.update(|d| write_log(d, date, ex, Vec::new(), String::new(), None, false));
         cards.update(|cs| cs.retain(|c| c.ex != ex));
     };
 
@@ -1531,12 +1624,100 @@ fn ExerciseCard(
             //   経過日数はヒーロー（`elapsed`）と部位チップに残っている。
             // ★ `role="group"` + `aria-label` は 1px も使わずに「これは過去の記録だ」を
             //   補うため。表記が日付になると、その語が画面から消える
-            <div class="last-rows" role="group" aria-label=t().day.past_records>
+            // ★ **ラベルのチップ行。`.card-head` の直後・`.last-rows` の直前。**
+            //   読み順が「種目名 → ラベル → そのラベルの前回 → セット → 合計」で
+            //   因果順になる。`.card-head` の中には置けない（`.card-head button` を
+            //   0 件で固定した e2e が 4 箇所あり、あそこはドラッグの掴み口でもある）。
+            // ★ **定義が 0 本の種目ではブロックごと描かない。** プリセット 28 種目は
+            //   全部ラベル 0 なので、既存利用者の画面は 1px も動かない。
+            // ★ `note_open` に相乗りさせない。マシンの前で「今日は Power」を選ぶのが
+            //   最短距離の一部で、これは**触ることが目的**（ピン / インターバルが
+            //   向こう側なのは「閉じていても薄字で読めて、値を直すときだけ開く」もの
+            //   だから）。adr/ux/label-chips-switch-the-history-and-the-copy.md
+            {move || {
+                has_labels
+                    .get()
+                    .then(|| {
+                        view! {
+                            <div class="lbl-row" role="group" aria-label=t().day.labels>
+                                // ★ 先頭は「指定なし」（`LabelFilter::Any`）。
+                                //   履歴の無いラベルからの回復手段なので**常に可視**
+                                <button
+                                    class="lbl"
+                                    // ★ 点灯は `label_sel` ではなく**門番後の `filter`**
+                                    //   から出す。削除済みラベルを選んだ状態では
+                                    //   `label_sel = Some(消えた ID)` のまま `Any` で引く
+                                    //   ので、`label_sel` を見るとどのチップも点かず
+                                    //   「セットがあるのに宛先が読めない」状態になる
+                                    class:on=move || filter.get() == core::LabelFilter::Any
+                                    // ★ `aria-pressed` に bool を渡さない（列挙属性なので
+                                    //   `false` で属性ごと消える）。settings.rs と同じ形
+                                    aria-pressed=move || {
+                                        (filter.get() == core::LabelFilter::Any).to_string()
+                                    }
+                                    data-testid="label-chip"
+                                    data-label-any="true"
+                                    on:click=move |_| pick_label(None)
+                                >
+                                    {move || t().day.label_any}
+                                </button>
+                                <For
+                                    each=move || labels.get()
+                                    key=|l: &Label| l.id
+                                    children=move |l| {
+                                        let id = l.id;
+                                        view! {
+                                            <button
+                                                class="lbl"
+                                                class:on=move || {
+                                                    filter.get() == core::LabelFilter::Only(id)
+                                                }
+                                                aria-pressed=move || {
+                                                    (filter.get() == core::LabelFilter::Only(id))
+                                                        .to_string()
+                                                }
+                                                data-testid="label-chip"
+                                                on:click=move |_| pick_label(Some(id))
+                                            >
+                                                {l.name.clone()}
+                                            </button>
+                                        }
+                                    }
+                                />
+                            </div>
+                        }
+                    })
+            }}
+
+            // ★ `data-labels` は `has_labels` と**同じ 1 本の Memo**から出す
+            //   （subgrid 軸に implicit track は無いので、列数とセル数がずれると
+            //   行が崩れる）。無いあいだは gutter が 2 本のままで、定義 0 の種目は
+            //   1px も動かない
+            <div
+                class="last-rows"
+                role="group"
+                aria-label=move || {
+                    // ★ 絞っているときは「Power の前回までの記録」に切り替える。
+                    //   表記が日付になると「これは過去の記録だ」の語が画面から消える
+                    match filter.get() {
+                        core::LabelFilter::Only(id) => labels
+                            .with(|ls| ls.iter().find(|l| l.id == id).map(|l| l.name.clone()))
+                            .map_or_else(
+                                || t().day.past_records.to_string(),
+                                |name| cur_lang().past_records_of(&name),
+                            ),
+                        core::LabelFilter::Any => t().day.past_records.to_string(),
+                    }
+                }
+                data-labels=move || has_labels.get().then_some("true")
+            >
                 {move || {
                     let rows = history.get();
+                    let with_label = has_labels.get();
                     // ★ **空でも .last-row を 1 個描く。** ここを「あるときだけ」に
                     //   すると、e2e/smoke.spec.mjs の薄字テストが引く
-                    //   `querySelector('.last-row')` が null になって落ちる
+                    //   `querySelector('.last-row')` が null になって落ちる。
+                    //   ★ この 1 span 行はその行しか無いので、4 列化の影響を受けない
                     if rows.is_empty() {
                         return view! {
                             <div class="last-row">
@@ -1556,12 +1737,38 @@ fn ExerciseCard(
                                 .collect::<Vec<_>>()
                                 .join("  ");
                             let metric = fmt_metric(core::log_value(Metric::Volume, &log));
+                            // ★ ラベル名は `labels` Memo から引く（行の中で `db` を
+                            //   読むと 1 打鍵で全カードの履歴行が作り直される）
+                            let label_name = log
+                                .label
+                                .and_then(|id| {
+                                    labels.with(|ls| {
+                                        ls.iter().find(|l| l.id == id).map(|l| l.name.clone())
+                                    })
+                                })
+                                .unwrap_or_default();
                             // ★ **メモは出さない。** 数値を縦に読んで「伸びているか停滞か」を
                             //   見るための場所なので、自由文が挟まると列が崩れて桁が揃わなくなる。
                             //   その日のメモはコピーで今日のカードへ運ばれてくる
                             //   （adr/ux/copy-carries-the-notes.md）
                             view! {
                                 <div class="last-row" data-testid="last-row">
+                                    // ★ **独立した 4 列目。** `.when` と同じ span に
+                                    //   入れると日付列の `max-content` がラベル名で
+                                    //   決まってセット列の開始位置がずれ、
+                                    //   past-records ADR 決定 6（subgrid で桁を縦に
+                                    //   揃える）が無効になる。
+                                    // ★ `label: None` の行でも**空の span を描く**
+                                    //   （省くと subgrid のセル数が足りず `.metric` が
+                                    //   `1fr` 列に座る）
+                                    {with_label
+                                        .then(|| {
+                                            view! {
+                                                <span class="label" data-testid="last-label">
+                                                    {label_name}
+                                                </span>
+                                            }
+                                        })}
                                     <span class="when" data-testid="last-log">
                                         {fmt_date(date, cur_lang())}
                                     </span>

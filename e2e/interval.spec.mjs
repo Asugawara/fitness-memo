@@ -223,6 +223,7 @@ test('薄字はピンの下に出る（DOM 順が「準備 → 観測」）', as
   await card.getByTestId('pin-add').click();
   await card.getByTestId('pin-value').fill('3');
   await setInterval_(card, '90');
+  await card.getByTestId('exercise-note').fill('調子は普通');
   await blurActive(page);
   await card.getByTestId('note-toggle').click();
 
@@ -231,9 +232,9 @@ test('薄字はピンの下に出る（DOM 順が「準備 → 観測」）', as
   const order = await card.evaluate((el) =>
     [...el.querySelectorAll('[data-testid]')]
       .map((n) => n.dataset.testid)
-      .filter((t) => ['pin-read', 'interval-read'].includes(t)),
+      .filter((t) => ['pin-read', 'interval-read', 'exercise-note-read'].includes(t)),
   );
-  expect(order).toEqual(['pin-read', 'interval-read']);
+  expect(order).toEqual(['pin-read', 'interval-read', 'exercise-note-read']);
 });
 
 // ── 入力 ────────────────────────────────────────────────────────────────────

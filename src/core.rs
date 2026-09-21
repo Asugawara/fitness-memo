@@ -9,8 +9,9 @@ use chrono::{Datelike, NaiveDate, TimeDelta};
 
 use crate::i18n::{Lang, ReleaseNote};
 use crate::model::{
-    Db, DropStage, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, MAX_DROPS,
-    MAX_INTERVAL_SEC, MAX_PIN_LEN, MAX_PINS, Routine, RoutineId, SCHEMA, Session, SetEntry,
+    Db, DropStage, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, Label, LabelId,
+    MAX_DROPS, MAX_INTERVAL_SEC, MAX_LABEL_LEN, MAX_LABELS, MAX_PIN_LEN, MAX_PINS, Routine,
+    RoutineId, SCHEMA, Session, SetEntry,
 };
 
 /// `Db::sessions` のキー書式。ゼロ埋め ISO なので辞書順 = 時系列順になる。
@@ -86,6 +87,44 @@ pub enum Drops {
     #[default]
     Exclude,
     Include,
+}
+
+/// 推移タブの体重の破線を日ごとに描くか、週平均に落とすか。
+/// `bool` にしないのは [`Drops`] と同じ理由（`layout(.., true)` では真が何か読めない）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WeightLine {
+    Daily,
+    Weekly,
+}
+
+/// 期間ごとの選択。1M は常に Daily、「全期間」は常に週集約なので持たない。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WeightLines {
+    pub m3: WeightLine,
+    pub m6: WeightLine,
+    pub y1: WeightLine,
+}
+
+impl Default for WeightLines {
+    /// 既定は 3M・6M 日ごと、1Y 週平均（365 点を ~246px に描くと破線が帯に潰れるのは 1Y だけ）
+    fn default() -> Self {
+        Self {
+            m3: WeightLine::Daily,
+            m6: WeightLine::Daily,
+            y1: WeightLine::Weekly,
+        }
+    }
+}
+
+/// 保存値 → 選択。`Some(1)` = Weekly / `Some(0)` = Daily / それ以外（`None`・知らない値）= `default`。
+/// 既定が期間ごとに違うので `default` を引数で受ける。知らない値を clamp せず既定へ倒すのは
+/// [`drops_setting`] と同じ理由（2 択で clamp は意味を持たない）。
+pub fn weight_line_setting(saved: Option<i64>, default: WeightLine) -> WeightLine {
+    match saved {
+        Some(0) => WeightLine::Daily,
+        Some(1) => WeightLine::Weekly,
+        _ => default,
+    }
 }
 
 /// 1 セットのボリューム。**重量が入っていないセットは重量 1 として数える。**
@@ -408,6 +447,39 @@ fn blank_notes_to_empty(s: &mut Session) {
 
 // ── 参照 ────────────────────────────────────────────────────────────────────
 
+/// 「前回」をどのラベルの中から引くか
+/// （adr/data-model/labels-on-the-exercise-and-a-mark-on-the-log.md）。
+///
+/// ★ **`Option<LabelId>` を引数に足さない。** `None` が「絞らない」なのか
+/// 「ラベルなしのログだけ」なのか、呼び出し側のコードから読めない。
+///
+/// ★ **`Unlabeled`（ラベルなしのログだけ）バリアントを作らない。** 6 か月ラベル
+/// なしで記録 → 今日 H/P/S を定義 → 以後全部付ける、という利用で「指定なし」が
+/// `Unlabeled` の意味だと**半年前の記録が出る**。`Any` なら昨日が出る。既存利用者の
+/// 体験を変えないという要件はこちらでしか満たせない。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum LabelFilter {
+    /// 絞らない。**従来の挙動そのもの。**
+    #[default]
+    Any,
+    /// そのラベルが付いたログだけ。
+    Only(LabelId),
+}
+
+impl LabelFilter {
+    /// そのログを通すか。
+    ///
+    /// ★ `pub(crate)` にしてあるのは推移タブの**記録テーブル**が呼ぶため。あちらは
+    /// [`pick_points`] を通らず `db.sessions` を直接走るので、グラフと同じ絞りを
+    /// 掛けるには同じ述語が要る（規則を 2 本に割らない）。
+    pub(crate) fn passes(self, log: &ExerciseLog) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Only(id) => log.label == Some(id),
+        }
+    }
+}
+
 /// 指定日より**厳密に前**の、その種目の記録を**新しい順**に走査する。
 ///
 /// 1 日につき高々 1 件なのは「1 日 1 種目 1 ログ」の不変条件（`Vec` になるのは
@@ -415,10 +487,15 @@ fn blank_notes_to_empty(s: &mut Session) {
 ///
 /// ★ セットが空のログは飛ばす。メモだけ書いた日は実施日ではない
 ///   （[`crate::model::Session::is_trained`] と同じ式）。
+///
+/// ★ ラベルで絞っても**フォールバックしない**（0 件なら 0 件）。落とすと
+///   コピーボタンが「表示と違うものを流し込む」ことになり、
+///   adr/ux/copy-button-only-when-empty.md が消した 3 問題が別の入口から戻る。
 fn logs_before(
     db: &Db,
     ex: ExerciseId,
     before: NaiveDate,
+    filter: LabelFilter,
 ) -> impl Iterator<Item = (NaiveDate, &ExerciseLog)> {
     db.sessions
         .range(..date_key(before))
@@ -427,7 +504,7 @@ fn logs_before(
             let log = session
                 .logs
                 .iter()
-                .find(|l| l.exercise_id == ex && !l.sets.is_empty())?;
+                .find(|l| l.exercise_id == ex && !l.sets.is_empty() && filter.passes(l))?;
             Some((parse_date_key(key)?, log))
         })
 }
@@ -435,12 +512,26 @@ fn logs_before(
 /// 指定日より**厳密に前**で最も新しい、その種目の記録。
 ///
 /// 単一の `ExerciseLog` を返せるのは「1 日 1 種目 1 ログ」の不変条件に依存する。
+///
+/// ★ **ラベルで絞らない。** 「旧名は旧挙動、新名がパラメータ付き」なので、この名前で
+/// 呼んだ側の挙動は今までと 1 バイトも変わらない（絞りたいときは
+/// [`last_log_before_with`]）。
 pub fn last_log_before(
     db: &Db,
     ex: ExerciseId,
     before: NaiveDate,
 ) -> Option<(NaiveDate, &ExerciseLog)> {
-    logs_before(db, ex, before).next()
+    last_log_before_with(db, ex, before, LabelFilter::Any)
+}
+
+/// [`last_log_before`] のラベル指定版。
+pub fn last_log_before_with(
+    db: &Db,
+    ex: ExerciseId,
+    before: NaiveDate,
+    filter: LabelFilter,
+) -> Option<(NaiveDate, &ExerciseLog)> {
+    logs_before(db, ex, before, filter).next()
 }
 
 /// 指定日より**厳密に前**の、その種目の記録を**新しい順に最大 `limit` 件**。
@@ -456,7 +547,23 @@ pub fn last_logs_before(
     before: NaiveDate,
     limit: usize,
 ) -> Vec<(NaiveDate, &ExerciseLog)> {
-    logs_before(db, ex, before).take(limit).collect()
+    last_logs_before_with(db, ex, before, limit, LabelFilter::Any)
+}
+
+/// [`last_logs_before`] のラベル指定版。**種目カードの `history` Memo だけが呼ぶ。**
+///
+/// ★ 「重量を使う種目か」の判定（`views::day` の `uses_weight`）はここを通さない。
+/// あれは種目の性質でモードの性質ではないので、無絞りの [`last_log_before`] を
+/// 専用に引く（adr/ux/past-records-by-date-with-a-count-setting.md
+/// 「表示設定は表示だけを変える」）。
+pub fn last_logs_before_with(
+    db: &Db,
+    ex: ExerciseId,
+    before: NaiveDate,
+    limit: usize,
+    filter: LabelFilter,
+) -> Vec<(NaiveDate, &ExerciseLog)> {
+    logs_before(db, ex, before, filter).take(limit).collect()
 }
 
 /// 種目カードに出す過去の記録の件数の既定値。**現状と同じ「前回 1 件だけ」。**
@@ -714,6 +821,7 @@ struct Seed {
     exercise_id: ExerciseId,
     sets: Vec<SetEntry>,
     note: String,
+    label: Option<LabelId>,
 }
 
 impl Seed {
@@ -733,6 +841,11 @@ impl Seed {
             sets,
             at: _, // 運ばない。呼び出し側が渡す（この型に `at` が無いのがその保証）
             note,
+            // ★ 運ぶ。`copy_day` は候補リストで日付を名指しして 1 日丸ごと写す操作で、
+            //   ソースが可視なのでラベルはその日に実在した真実
+            //   （adr/ux/label-chips-switch-the-history-and-the-copy.md）。
+            //   `apply_routine` だけは [`Seed::without_label`] で落とす
+            label,
         } = src;
         Self {
             exercise_id: *exercise_id,
@@ -761,7 +874,23 @@ impl Seed {
                 })
                 .collect(),
             note: note.clone(),
+            label: *label,
         }
+    }
+
+    /// ラベルを落とす。**[`apply_routine`] 専用。**
+    ///
+    /// ★ メニューの展開は種目ごとに**別々の不可視の日**から引くので、たまたま最後が
+    /// Power だった種目は今日が黙って Power になり、**来週の Power 履歴を汚染する** —
+    /// この機能が直そうとしているバグそのものの再導入になる。[`copy_day`] は候補
+    /// リストで日付を名指しする操作なのでソースが可視で、そちらは運ぶ側
+    /// （adr/ux/label-chips-switch-the-history-and-the-copy.md）。
+    ///
+    /// ★ **名前で逸脱を可視化する。** `Seed::carry` の中で分岐すると、どちらの
+    /// 呼び出しがどの規則で動いているのかが呼び出し側から読めない。
+    fn without_label(mut self) -> Self {
+        self.label = None;
+        self
     }
 }
 
@@ -792,6 +921,7 @@ fn seed_day(db: &mut Db, to: NaiveDate, picked: Vec<Seed>, at: Option<i64>) -> V
         exercise_id,
         sets,
         note,
+        label,
     } in picked
     {
         copied.push(exercise_id);
@@ -808,6 +938,7 @@ fn seed_day(db: &mut Db, to: NaiveDate, picked: Vec<Seed>, at: Option<i64>) -> V
             sets,
             at,
             note,
+            label,
         });
     }
     copied
@@ -946,7 +1077,11 @@ pub fn apply_routine(
     let picked: Vec<Seed> = opened
         .iter()
         // `last_log_before` はその種目のログしか返さないので `log.exercise_id == *ex`
-        .filter_map(|ex| last_log_before(db, *ex, to).map(|(_, log)| Seed::carry(log)))
+        // ★ **読みは `Any`**（絞ると「カードに前回が出ているのにメニューからは何も
+        //   入らない」食い違いが生まれる）。**書きは落とす**（[`Seed::without_label`]）
+        .filter_map(|ex| {
+            last_log_before(db, *ex, to).map(|(_, log)| Seed::carry(log).without_label())
+        })
         .collect();
 
     // 履歴が 1 種目も無ければ `picked` は空。`seed_day` はセッションを作らずに返るので、
@@ -978,7 +1113,58 @@ fn sessions_in(
         .filter(move |(date, _)| *date >= from && *date <= to)
 }
 
+/// 推移の 1 点。**ラベルを載せた `(date, value)`。**
+/// adr/ux/label-colour-on-the-progress-dots.md
+///
+/// ★ `(NaiveDate, f64, Option<LabelId>)` の組にしない。推移タブは点の色と記録
+/// テーブルの絞りで同じ列を 2 度使うので、添字ではなく名前で読めるほうが安全。
+///
+/// ★ **ラベル名も色も持たない。** 名前と色は種目の `labels` にあり、そこが
+/// 唯一の真実源（[`label_name`] の「解決は必ずその種目の `labels` の中」）。
+/// 点に写すと改名・色替えのたびに系列が古くなる。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeriesPoint {
+    pub date: NaiveDate,
+    pub value: f64,
+    /// その日のログに付いていたラベル。無ければ `None`。
+    pub label: Option<LabelId>,
+}
+
+/// 種目別の推移（ラベル付き・絞り込みあり）。
+///
+/// ★ **絞りは `find` の述語に入れる**（[`logs_before`] と同じ形）。後ろで
+/// `filter` すると「その日にその種目のログはあるがラベルが違う」場合に
+/// `find` が先に当たって**日が丸ごと落ちる**のは同じだが、1 日 1 種目 1 ログの
+/// 不変条件があるので結果は変わらない。述語に入れておくほうが規則が 1 本。
+pub fn exercise_points(
+    db: &Db,
+    ex: ExerciseId,
+    m: Metric,
+    from: NaiveDate,
+    to: NaiveDate,
+    d: Drops,
+    filter: LabelFilter,
+) -> Vec<SeriesPoint> {
+    sessions_in(db, from, to)
+        .filter_map(|(date, session)| {
+            let log = session
+                .logs
+                .iter()
+                .find(|l| l.exercise_id == ex && !l.sets.is_empty() && filter.passes(l))?;
+            Some(SeriesPoint {
+                date,
+                value: log_value_of(m, log, d),
+                label: log.label,
+            })
+        })
+        .collect()
+}
+
 /// 種目別の推移。
+///
+/// ★ **ラベルで絞らない。** 「旧名は旧挙動、新名がパラメータ付き」という
+/// [`last_log_before`] / [`last_log_before_with`] と同じ作法で、この名前で呼んだ
+/// 側の挙動は今までと 1 バイトも変わらない。
 pub fn exercise_series(
     db: &Db,
     ex: ExerciseId,
@@ -987,14 +1173,9 @@ pub fn exercise_series(
     to: NaiveDate,
     d: Drops,
 ) -> Vec<(NaiveDate, f64)> {
-    sessions_in(db, from, to)
-        .filter_map(|(date, session)| {
-            let log = session
-                .logs
-                .iter()
-                .find(|l| l.exercise_id == ex && !l.sets.is_empty())?;
-            Some((date, log_value_of(m, log, d)))
-        })
+    exercise_points(db, ex, m, from, to, d, LabelFilter::Any)
+        .into_iter()
+        .map(|p| (p.date, p.value))
         .collect()
 }
 
@@ -1011,6 +1192,27 @@ pub fn group_series(
     to: NaiveDate,
     d: Drops,
 ) -> Vec<(NaiveDate, f64)> {
+    group_points(db, g, m, from, to, d)
+        .into_iter()
+        .map(|p| (p.date, p.value))
+        .collect()
+}
+
+/// [`group_series`] の [`SeriesPoint`] 版。
+///
+/// ★ **ラベルを見ない（`label` は常に `None`）。** ラベルは**種目ごとに独立**した
+/// 分類体系なので、複数種目を合算した 1 点に載せられる `LabelId` が存在しない
+/// （ベンチの `P` とスクワットの `P` は別 ID）。推移タブのチップ行も
+/// 「種目を選んでいるときだけ」出す（`views::progress` の門番）ので、この枝に
+/// 絞りが届くことはない。引数に `LabelFilter` を取らないのはその型での表明。
+fn group_points(
+    db: &Db,
+    g: GroupId,
+    m: Metric,
+    from: NaiveDate,
+    to: NaiveDate,
+    d: Drops,
+) -> Vec<SeriesPoint> {
     let ids = db.exercise_ids_of_group(g);
     if ids.is_empty() {
         return Vec::new();
@@ -1026,7 +1228,11 @@ pub fn group_series(
                 hit = true;
                 total += log_value_of(m, log, d);
             }
-            hit.then_some((date, total))
+            hit.then_some(SeriesPoint {
+                date,
+                value: total,
+                label: None,
+            })
         })
         .collect()
 }
@@ -1228,9 +1434,30 @@ pub fn pick_series(
     to: NaiveDate,
     d: Drops,
 ) -> Vec<(NaiveDate, f64)> {
+    pick_points(db, p, m, from, to, d, LabelFilter::Any)
+        .into_iter()
+        .map(|p| (p.date, p.value))
+        .collect()
+}
+
+/// [`pick_series`] の [`SeriesPoint`] 版（ラベル絞り込みつき）。
+///
+/// ★ **絞りが効くのは種目の枝だけ。** 部位の枝は [`group_points`] が
+/// ラベルを見ない（合算にラベルは載らない）。呼び側の門番が「種目を選んで
+/// いるときだけ `Only`」に倒しているので、ここで `Only` が部位の枝へ届くことは
+/// 無いが、届いても**黙って無視する**（0 件にして空グラフを見せない）。
+pub fn pick_points(
+    db: &Db,
+    p: Pick,
+    m: Metric,
+    from: NaiveDate,
+    to: NaiveDate,
+    d: Drops,
+    filter: LabelFilter,
+) -> Vec<SeriesPoint> {
     match (p.exercise, p.group) {
-        (Some(ex), _) => exercise_series(db, ex, m, from, to, d),
-        (None, Some(g)) => group_series(db, g, m, from, to, d),
+        (Some(ex), _) => exercise_points(db, ex, m, from, to, d, filter),
+        (None, Some(g)) => group_points(db, g, m, from, to, d),
         (None, None) => Vec::new(),
     }
 }
@@ -1280,6 +1507,38 @@ pub fn aggregate_weekly(series: &[(NaiveDate, f64)]) -> Vec<(NaiveDate, f64)> {
         *weeks.entry(week_start(*date)).or_insert(0.0) += *value;
     }
     weeks.into_iter().collect()
+}
+
+/// [`aggregate_weekly`] の [`SeriesPoint`] 版。値の集約は**まったく同じ（合計）**。
+///
+/// ★ **ラベルは「週内の全点が同じ 1 つのラベル」のときだけ残す。** それ以外は
+/// `None` = 既定色。「すべて」表示で H / P / S が混ざった週に 1 色を選ぶと、
+/// **その週の色が嘘になる**（3 分の 1 だけを指す色が週全体の点に付く）。
+/// 逆に `Only` で絞っていれば週内は全部同じラベルなので、「全期間」でも
+/// ちゃんとそのラベルの色が出る — チップで絞ったときに色が消えない。
+///
+/// ★ 加算の順序は [`aggregate_weekly`] と同じ（呼び側が日付昇順で渡す）。
+/// f64 の加算は非結合なので、順序を変えると同じ入力で 1 ulp ずれる。
+pub fn aggregate_weekly_points(series: &[SeriesPoint]) -> Vec<SeriesPoint> {
+    // (合計, 最初に見たラベル, 週内で食い違ったか)
+    let mut weeks: BTreeMap<NaiveDate, (f64, Option<LabelId>, bool)> = BTreeMap::new();
+    for p in series {
+        let slot = weeks
+            .entry(week_start(p.date))
+            .or_insert((0.0, p.label, false));
+        slot.0 += p.value;
+        if slot.1 != p.label {
+            slot.2 = true;
+        }
+    }
+    weeks
+        .into_iter()
+        .map(|(date, (value, label, mixed))| SeriesPoint {
+            date,
+            value,
+            label: (!mixed).then_some(label).flatten(),
+        })
+        .collect()
 }
 
 // ── 体重（グラフの第2軸）──────────────────────────────────────────────────
@@ -1643,7 +1902,7 @@ pub fn migrate(raw: &str, ids: &mut IdGen) -> Result<Db, RestoreError> {
 /// `ids` はトレーニングメニューの ID 重複を解くためだけに使う（[`normalize_routines`]）。
 fn normalize(db: &mut Db, ids: &mut IdGen) {
     normalize_routines(db, ids);
-    normalize_exercises(db);
+    normalize_exercises(db, ids);
 
     let mut sessions: BTreeMap<String, Session> = BTreeMap::new();
     for (key, session) in std::mem::take(&mut db.sessions) {
@@ -1715,10 +1974,11 @@ fn normalize_routines(db: &mut Db, ids: &mut IdGen) {
 /// 「1 要素 = 空白を含まない 1 個の値」という [`Exercise::pins`] の不変条件。
 /// TSV の `ピン` 列はセル内を空白で区切る（[`export_tsv`]）ので、ここが崩れると
 /// 書き出して読み戻した値が一致しなくなる。
-fn normalize_exercises(db: &mut Db) {
+fn normalize_exercises(db: &mut Db, ids: &mut IdGen) {
     for e in &mut db.exercises {
         e.pins = clean_pins(std::mem::take(&mut e.pins));
         e.interval_sec = clean_interval(e.interval_sec);
+        e.labels = clean_labels(std::mem::take(&mut e.labels), ids);
     }
 }
 
@@ -1793,6 +2053,128 @@ pub fn set_interval(db: &mut Db, id: ExerciseId, sec: Option<u32>) {
     }
 }
 
+/// `#rrggbb` か。**色の妥当性判定はこの 1 本を通す。**
+///
+/// ★ `pub` にしてあるのは `views::progress` が CSS 変数へ載せる直前にもう一度
+/// 通すため。`--dot:` に空文字が載ると `var(--dot, var(--accent))` の
+/// フォールバックが**効かず点が黒くなる**（`var()` は「値が空」を「未定義」と
+/// 見ない）ので、`Db` を信じきらずに描画の直前でも確かめる。
+///
+/// 3 桁（`#abc`）や名前付きの色（`red`）は通さない。`<input type="color">` が
+/// 返すのは常に 6 桁の小文字なので、通す形を狭くしても画面から入る値は落ちない。
+pub fn is_hex_color(s: &str) -> bool {
+    s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// まだ使われていないラベル色。**新しいラベルの既定色はここから採る。**
+/// adr/ux/label-colour-on-the-progress-dots.md
+///
+/// ★ **位置ベース（`used.len() % 6`）にしない。** ✕ で 1 本消してから ＋ で足すと
+/// 残った行と同じ色が生まれ、推移タブで 2 本のラベルが見分けられなくなる。
+/// 「未使用の最初の色」なら、6 本までは必ず全部違う色になる。
+///
+/// ★ 大文字小文字を無視して比べる。手編集の JSON や取り込みで `#E0524A` が
+/// 入っていても「使用済み」と数える（同じ色なのに違う扱いにしない）。
+///
+/// 6 色を使い切ったら重複を許して `n % 6` に落ちる。ただし
+/// [`crate::model::MAX_LABELS`] が 6 でパレットも 6 色なので、**現状この枝には
+/// 到達しない**（[`clean_labels`] も [`merge_labels`] も 6 本で切る）。上限を
+/// 増やしたときに関数が答えを返せなくなるのを避けるための逃げ道として置いてある。
+pub fn next_label_color<'a>(used: impl IntoIterator<Item = &'a str>) -> &'static str {
+    let used: Vec<String> = used.into_iter().map(|c| c.to_ascii_lowercase()).collect();
+    let palette = crate::presets::LABEL_COLOR_CHOICES;
+    palette
+        .iter()
+        .find(|c| !used.iter().any(|u| u == *c))
+        .copied()
+        .unwrap_or(palette[used.len() % palette.len()])
+}
+
+/// [`normalize_exercises`] と [`set_labels`] が共有する 1 種目ぶんの規則。
+///
+/// ★ **2 経路に分けて書かない**（[`clean_pins`] と同じ理由）。食い違うと「画面で
+/// 消えたはずの値が取り込みで生き返る」「取り込みで落ちた値が画面からは入る」が起きる。
+///
+/// - 名前を **trim しない**（[`normalize_routines`] の規則）が、空白だけの要素は落とす
+/// - **`split_whitespace` しない。** ピンが分割するのは TSV の**セル内が空白区切り**
+///   だからで、ラベルは 1 セル = 1 名前。「高重量 低レップ」を許したい
+/// - [`crate::model::MAX_LABEL_LEN`] で **char 単位**に切り詰め、
+///   [`crate::model::MAX_LABELS`] で本数を切る
+/// - **重複 ID だけ**採番し直す。`<For key=id>` の重複キーは wasm で panic =
+///   アプリが死ぬ。捨てずに採り直すのは名前を黙って失わないため。**渡された ID は
+///   それ以外では保持する** — 設定タブの改名で ID が変わらないことの土台で、
+///   ここを緩めると 1 打鍵で過去ログが全部宙に浮く
+/// - **同名は潰さない**（`merge_db` が正当に生む）。**並べ替えない**（`Vec` 順 = 表示順）
+/// - **色が `#rrggbb` でなければ [`next_label_color`] で埋める**（旧版の JSON・TSV 取込・
+///   手編集の入口をここ 1 箇所で塞ぐ）。有効な色は同色でも書き換えない
+///
+/// ★ **色を埋めるのは 2 パス目。** 1 パス目で空名を落として ID を整え、
+/// 2 パス目で埋める。1 パスで前方（`out`）の色だけを見ると、
+/// `[{color: ""}, {color: "#e0524a"}]` のように**無効な色が先・有効な色が後ろ**という
+/// 並びで 1 本目がパレットの先頭を取り、2 本目は有効なので据え置かれて**同色 2 本**が
+/// できる。画面からは作れない（`add_label` が常に色を振る）が、手編集の JSON や
+/// 色欄が一部欠けたファイルの取り込みでは起きうる。「利用者が選んでいないのに重複する」
+/// のは説明できないので、**入力全体の有効な色を先に「使用済み」として集める**。
+fn clean_labels(labels: Vec<Label>, ids: &mut IdGen) -> Vec<Label> {
+    let mut out: Vec<Label> = Vec::with_capacity(labels.len().min(MAX_LABELS));
+    for mut l in labels {
+        if l.name.trim().is_empty() {
+            continue;
+        }
+        if out.len() >= MAX_LABELS {
+            break;
+        }
+        // ★ char で数える。バイトで切ると UTF-8 の途中で割れて panic する
+        l.name = l.name.chars().take(MAX_LABEL_LEN).collect();
+        if out.iter().any(|o| o.id == l.id) {
+            l.id = ids.alloc();
+        }
+        out.push(l);
+    }
+
+    // ★ **有効な色は同色でも触らない。** 利用者が 2 本を同じ色にしたなら、それは
+    //   選択であって壊れた値ではない。埋めるのは「持っていない」ときだけ。
+    //   使用済みの集合は**残す行すべて**（後ろの行も含む）から始め、埋めた色も足していく
+    let mut used: Vec<String> = out
+        .iter()
+        .filter(|l| is_hex_color(&l.color))
+        .map(|l| l.color.clone())
+        .collect();
+    for l in &mut out {
+        if !is_hex_color(&l.color) {
+            l.color = next_label_color(used.iter().map(String::as_str)).into();
+            used.push(l.color.clone());
+        }
+    }
+    out
+}
+
+/// 種目のラベルの定義を差し替える（設定タブの種目編集シートから呼ぶ）。
+///
+/// ★ 正規化を `views` 側に持たせない理由は [`set_pins`] と同じ。
+///
+/// ★ **`Label.id` は呼び側が渡す。** 既存のラベルは既存の ID を、新規だけ
+/// `storage::alloc_id()` を振る。ここで採番し直すと改名の 1 打鍵で
+/// [`crate::model::ExerciseLog::label`] が全部宙に浮く。
+pub fn set_labels(db: &mut Db, id: ExerciseId, labels: Vec<Label>, ids: &mut IdGen) {
+    if let Some(e) = db.exercises.iter_mut().find(|e| e.id == id) {
+        e.labels = clean_labels(labels, ids);
+    }
+}
+
+/// その種目のラベルの中から ID で引く。**参照の解決は必ずこれを通す。**
+///
+/// ★ 「そのログの種目の `labels` の中」でしか解決しないので、種目をまたいだ宙に
+/// 浮いた参照が構造的に起きない（共通プールを作らないという方針が、データの
+/// 置き場所で強制される）。
+pub fn label_name(db: &Db, ex: ExerciseId, id: LabelId) -> Option<&str> {
+    db.exercise(ex)?
+        .labels
+        .iter()
+        .find(|l| l.id == id)
+        .map(|l| l.name.as_str())
+}
+
 /// 既存の種目に取り込み側のピンを**空のときだけ**入れる（[`merge_db`] から呼ぶ）。
 ///
 /// ★ これが無いと、新品端末へ書き出しを戻したときに**ピンだけが黙って落ちる**。
@@ -1824,6 +2206,78 @@ fn fill_interval(existing: &mut Exercise, incoming: &Exercise) {
     if existing.interval_sec.is_none() {
         existing.interval_sec = incoming.interval_sec;
     }
+}
+
+/// 既存の種目に取り込み側のラベル定義を足す。**足すだけ。既存は上書きしない。**
+/// （[`merge_db`] から呼ぶ）
+///
+/// ★ 落とし穴は [`fill_pins`] とまったく同じで、**被害はこちらのほうが大きい。**
+/// プリセットは固定 ID を持つので新品端末への復元は必ず「ID 一致」の枝を通り、その枝は
+/// 取り込み側の `Exercise` を丸ごと捨てる。手当てしないと**記録は全部戻るのにラベル
+/// 定義だけ落ち、ログには宙に浮いた `label` が残る**（履歴が全部「どのラベルにも
+/// 属さない」になる最悪の形）。
+///
+/// 判定は**種目とまったく同じ梯子**: ID 一致（何もしない）→ 同名がちょうど 1 件
+/// （`alias` に積む。これが「2 台で独立に定義した `P` を寄せたい」という名前側の
+/// 利点の回収点。「ちょうど 1 件」なのは [`resolve_exercise`] と同じ理由 — 曖昧なら
+/// 新規に倒す）→ 新規追加（[`crate::model::MAX_LABELS`] まで）。
+///
+/// ★ **写像のキーは `(写像後の ExerciseId, LabelId)`。** `LabelId` 単独にすると、
+/// 同じ `LabelId` が取り込み側の 2 種目に居る場合（手編集 JSON、または
+/// [`clean_labels`] が種目内の重複しか再採番しないので種目をまたぐ重複は生き残る）に
+/// 後の `insert` が前を上書きし、**種目 A のログが種目 B のラベルへ張り替わって
+/// 宙に浮く**。キーを組にすればこの経路が構造的に消える。
+///
+/// ★ `Conflict` は積まない（[`fill_pins`] と同じ粒度）。
+///
+/// ★ **色は新規追加の枝でだけ触る。** 同名寄せの枝は `alias` を張って取り込み側の
+/// 定義を捨てるので、こちらの色が勝つ（自分が選んだ色が古いファイル 1 枚で
+/// 巻き戻らない）。新規の枝は「こちらに既に居る色と衝突するなら塗り替える」。
+///
+/// 返すのは `(追加した数, MAX_LABELS で落とした数)`。落とした数を数えるのは、落ちると
+/// そのログは取り込み直しても二度と生き返らない dangling になるのに、数も `Conflict` も
+/// 出ないと気づけないため。
+fn merge_labels(
+    existing: &mut Exercise,
+    incoming: &Exercise,
+    alias: &mut HashMap<(ExerciseId, LabelId), LabelId>,
+) -> (usize, usize) {
+    let ex_id = existing.id;
+    let mut added = 0;
+    let mut dropped = 0;
+    for l in &incoming.labels {
+        // 1. ID 一致。何もしない（写像も要らない）
+        if existing.labels.iter().any(|x| x.id == l.id) {
+            continue;
+        }
+        // 2. 同名がちょうど 1 件なら寄せる。曖昧（0 件 / 2 件以上）なら新規に倒す
+        if let Some(only) = exactly_one(existing.labels.iter().filter(|x| x.name == l.name)) {
+            alias.insert((ex_id, l.id), only.id);
+            continue;
+        }
+        // 3. 新規追加
+        if existing.labels.len() >= MAX_LABELS {
+            dropped += 1;
+            continue;
+        }
+        // ★ **こちらに同じ色が既に居るなら塗り替える。** `merge_db` は `normalize` を
+        //   呼ばないので [`clean_labels`] の門を通らず、2 台で独立に定義した
+        //   1 本目どうし（どちらもパレットの先頭色）がそのまま並ぶと、推移タブで
+        //   区別できない 2 本になる。不正な色も同じ枝で埋める。
+        //   ★ 衝突していない有効な色は**そのまま採る** — あちらの端末で選んだ色を
+        //     取り込みで黙って捨てない（同名寄せの枝で自分の色が勝つのと対称）
+        let mut l = l.clone();
+        let clash = existing
+            .labels
+            .iter()
+            .any(|x| x.color.eq_ignore_ascii_case(&l.color));
+        if !is_hex_color(&l.color) || clash {
+            l.color = next_label_color(existing.labels.iter().map(|x| x.color.as_str())).into();
+        }
+        existing.labels.push(l);
+        added += 1;
+    }
+    (added, dropped)
 }
 
 /// `f32` で表せない重量を捨てる。**取り込み境界で必ず通すこと。**
@@ -1980,6 +2434,8 @@ fn upgrade_from_sequential(old: legacy::Db, ids: &mut IdGen) -> Db {
                 archived: e.archived,
                 pins: Vec::new(),
                 interval_sec: None,
+                // schema ≤2 にラベルは無い
+                labels: Vec::new(),
             })
             .collect(),
         // schema ≤2 にトレーニングメニューは存在しない（`legacy::Db` にフィールドが無い）
@@ -1998,8 +2454,9 @@ fn upgrade_from_sequential(old: legacy::Db, ids: &mut IdGen) -> Db {
                                 exercise_id: to_exercise(l.exercise_id),
                                 sets: l.sets,
                                 at: l.at,
-                                // schema ≤2 にメモは無い
+                                // schema ≤2 にメモもラベルも無い
                                 note: String::new(),
+                                label: None,
                             })
                             .collect(),
                         body_weight: s.body_weight,
@@ -2083,6 +2540,9 @@ fn dedupe_logs(s: &mut Session) {
                     (None, b) => b,
                 };
                 append_note(&mut existing.note, &log.note);
+                // ★ ここが無いと後発の `label` が黙って落ちる。「空のときだけ埋める」
+                //   なのは merge_db のセッション枝と同じ規則（先に来たものを優先）
+                existing.label = existing.label.or(log.label);
             }
             None => {
                 order.push(log.exercise_id);
@@ -2145,7 +2605,7 @@ pub const TSV_MIME: &str = "text/tab-separated-values";
 
 /// 見出し行（日本語）。**この並びと綴りが外部仕様**なので、テストがバイト一致で
 /// 固定している。**1 文字も変えてはいけない** — 過去に書き出したファイルが読めなくなる。
-const TSV_HEADER_JA: [&str; 15] = [
+const TSV_HEADER_JA: [&str; 16] = [
     "日付",
     "部位",
     "種目",
@@ -2172,6 +2632,17 @@ const TSV_HEADER_JA: [&str; 15] = [
     // ★ 同じく後から足した列。ピンと同じ「その種目が最初に現れた行にだけ書く」規則で、
     //   セルは裸の数字（単位は見出しに入れる — `重量kg` / `体重kg` と同じ流儀）
     "インターバル秒",
+    // ★ 同じく後から足した列。**位置は末尾**（`e2e/backup.spec.mjs` が
+    //   `split('\t')[2] === 'ベンチプレス'` と位置参照しているので既存 15 列の
+    //   インデックスを動かさない）。
+    //
+    // ★ セルは ID ではなく**名前**（TSV の存在意義がスプレッドシートで読めること。
+    //   既に全 ID を落として名前から作り直している）。
+    //
+    // ★ ピン / インターバルと違い**種目粒度ではなく日ごと**なので、
+    //   `ex_meta_written` に相乗りさせない（させると 2 日目以降が全部落ちる）。
+    //   書くのは「そのログの最初の行」だけ（`種目メモ` と同じ「使ったら空にする」）
+    "ラベル",
 ];
 
 /// 見出し行（英語）。位置と意味は [`TSV_HEADER_JA`] と 1:1。
@@ -2179,7 +2650,7 @@ const TSV_HEADER_JA: [&str; 15] = [
 /// ★ TSV は版番号を持てないので、**この綴りも足した時点で永久の外部仕様**になる
 /// （adr/storage/tsv-header-follows-the-ui-language.md）。日本語版と同じ強度で
 /// バイト一致テストが固定している。
-const TSV_HEADER_EN: [&str; 15] = [
+const TSV_HEADER_EN: [&str; 16] = [
     "Date",
     "Muscle group",
     "Exercise",
@@ -2198,6 +2669,7 @@ const TSV_HEADER_EN: [&str; 15] = [
     "Routine",
     "Pins",
     "Interval sec",
+    "Label",
 ];
 
 /// 書き出しに使う見出し。**UI の言語に従う。**
@@ -2206,7 +2678,7 @@ const TSV_HEADER_EN: [&str; 15] = [
 /// （adr/storage/tsv-export-for-spreadsheets.md）で、読めない言語の列名はその意義を
 /// 失わせる。取り込み側は [`is_known_header_cell`] のとおり日英どちらも受けるので、
 /// 言語を切り替えても過去のファイルは読める。
-pub fn tsv_header_row(lang: Lang) -> [&'static str; 15] {
+pub fn tsv_header_row(lang: Lang) -> [&'static str; 16] {
     match lang {
         Lang::Ja => TSV_HEADER_JA,
         Lang::En => TSV_HEADER_EN,
@@ -2234,7 +2706,7 @@ fn flatten_cell(s: &str) -> String {
 }
 
 /// 1 行書く。★ 引数 11 個の関数を作らないための入れ物（`clippy::too_many_arguments`）。
-fn push_row(out: &mut String, cells: [&str; 15]) {
+fn push_row(out: &mut String, cells: [&str; 16]) {
     for (i, cell) in cells.iter().enumerate() {
         if i > 0 {
             out.push('\t');
@@ -2326,6 +2798,14 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
             let ex_name = crate::presets::exercise_name(ex.id, &ex.name, lang);
             let time = tsv_time(log.at, date, tz);
             let mut log_note = log.note.as_str();
+            // ★ **`ex_meta_written` に相乗りさせない。** あれは種目粒度で、ラベルは
+            //   日ごとに変わる。相乗りさせると 2 日目以降が全部落ちる。
+            //   規則は `log_note` と同じ「そのログの最初の行に書いて、使ったら空にする」
+            let ex_label = log
+                .label
+                .and_then(|id| label_name(db, ex.id, id))
+                .unwrap_or_default();
+            let mut label_cell = ex_label;
             // ★ 1 回の `insert` でピンとインターバルの両方を決める（`ex_meta_written` の注記）
             let first_row_of_ex = ex_meta_written.insert(ex.id);
             let ex_pins = if first_row_of_ex {
@@ -2361,6 +2841,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                         "",
                         pins_cell,
                         interval_cell,
+                        label_cell,
                     ],
                 );
                 day_weight = "";
@@ -2397,6 +2878,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                         "",
                         pins_cell,
                         interval_cell,
+                        label_cell,
                     ],
                 );
                 day_weight = "";
@@ -2404,6 +2886,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                 log_note = "";
                 pins_cell = "";
                 interval_cell = "";
+                label_cell = "";
                 wrote_any = true;
             }
         }
@@ -2413,7 +2896,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
             push_row(
                 &mut out,
                 [
-                    key, "", "", "", "", "", "", day_weight, "", "", day_note, "", "", "", "",
+                    key, "", "", "", "", "", "", day_weight, "", "", day_note, "", "", "", "", "",
                 ],
             );
         }
@@ -2458,6 +2941,12 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                 "",
                 &pins,
                 &interval,
+                // ★ **ラベル定義はマスタ行に載らない**（`labels.is_empty()` を上の
+                //   プリセット除外判定に足さないのと同じ理由）。ピン / インターバルは
+                //   マスタ行自身のセルが運ぶが、ラベルは**日ごと**の列なので
+                //   マスタ行が運べない。詳細は
+                //   adr/data-model/labels-on-the-exercise-and-a-mark-on-the-log.md
+                "",
             ],
         );
     }
@@ -2474,6 +2963,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
             [
                 "",
                 crate::presets::group_name(g.id, &g.name, lang),
+                "",
                 "",
                 "",
                 "",
@@ -2508,7 +2998,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
             push_row(
                 &mut out,
                 [
-                    "", "", "", "", "", "", "", "", "", "", "", "", &r.name, "", "",
+                    "", "", "", "", "", "", "", "", "", "", "", "", &r.name, "", "", "",
                 ],
             );
             continue;
@@ -2553,6 +3043,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                     &r.name,
                     &pins,
                     &interval,
+                    "",
                 ],
             );
         }
@@ -2690,6 +3181,7 @@ struct TsvCols {
     routine: Option<usize>,
     pins: Option<usize>,
     interval: Option<usize>,
+    label: Option<usize>,
 }
 
 /// 見出し行 → 列の対応。知らない列は無視する（形式の進化規則 2）。
@@ -2721,6 +3213,7 @@ fn tsv_header(line: &str) -> Option<TsvCols> {
             "体調メモ" | "Day note" => &mut cols.day_note,
             "メニュー" | "Routine" => &mut cols.routine,
             "ピン" | "Pins" => &mut cols.pins,
+            "ラベル" | "Label" => &mut cols.label,
             "インターバル秒" | "インターバル" | "Interval sec" | "Interval" => {
                 &mut cols.interval
             }
@@ -2892,6 +3385,9 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
     // ★ キャッシュは必須。無いと同じ部位・種目に行ごとに採番して `Db` が行数分ふくらむ
     let mut group_ids: HashMap<String, GroupId> = HashMap::new();
     let mut ex_ids: ExerciseCache = HashMap::new();
+    // ★ キャッシュは必須（`LabelCache` の doc）。無いと行ごとに採番して
+    //   1 種目に数百ラベルが生える
+    let mut label_ids: LabelCache = HashMap::new();
     // ログごとのセット。(日付, 種目) → [(セット番号, 行番号, セット)]
     let mut staged: HashMap<(String, ExerciseId), Vec<StagedSet>> = HashMap::new();
     // メニュー名 → 種目の並び（**行の順序**がそのまま並び順）。
@@ -3020,11 +3516,26 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
                     //   読まないのはこの規範に乗るためでもある
                     at: None,
                     note: String::new(),
+                    label: None,
                 });
                 session.logs.last_mut().expect("今 push した")
             }
         };
         append_note(&mut log.note, at(cols.log_note));
+        // ★ ラベルは「その日の最初の非空」を採る（体重・体調メモと同じ規則。書き出しは
+        //   ログの先頭行にだけ書くが、シートで並べ替えられても拾えるように、どの行から
+        //   来ても受ける）。`log` の借用を切ってから引き当てる
+        let label_cell = at(cols.label);
+        let need_label = log.label.is_none() && !label_cell.is_empty();
+        if need_label
+            && let Some(id) = resolve_label(&mut out, mine, &mut label_ids, ids, ex_id, label_cell)
+            && let Some(log) = out
+                .sessions
+                .get_mut(&key)
+                .and_then(|s| s.logs.iter_mut().find(|l| l.exercise_id == ex_id))
+        {
+            log.label = Some(id);
+        }
 
         // 回数が空の行はセットを作らない（メモだけの行）。空でないのに読めないなら数える
         let reps_cell = at(cols.reps);
@@ -3135,6 +3646,15 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
 /// ★ 種目名だけにしてはいけない — 部位違いの同名種目が 1 つに潰れる。
 type ExerciseCache = HashMap<(String, String), ExerciseId>;
 
+/// ラベルの引き当てキャッシュ。**キーは (種目 ID, ラベル名)。**
+///
+/// ★ **必須。** 無いと行ごとに採番して 1 種目に数百ラベルが生える
+/// （`ExerciseCache` と同じ理由）。
+///
+/// ★ 種目 ID を含めるのは、ラベルが**種目ごとに独立**しているから
+/// （ラベル名だけだと種目 A の "P" と種目 B の "P" が 1 つに潰れる）。
+type LabelCache = HashMap<(ExerciseId, String), LabelId>;
+
 /// ちょうど 1 件のときだけ返す。**曖昧なら `None`。**
 ///
 /// ★ 2 件目を見た時点で打ち切る。「ちょうど 1 件」は [`pin_presets`] と共通の規則で、
@@ -3142,6 +3662,66 @@ type ExerciseCache = HashMap<(String, String), ExerciseId>;
 fn exactly_one<T>(mut it: impl Iterator<Item = T>) -> Option<T> {
     let first = it.next()?;
     it.next().is_none().then_some(first)
+}
+
+/// 取り込んだ行の `ラベル` 列を `out` の種目のラベル定義へ引き当てる。
+///
+/// **解決の梯子**（[`resolve_exercise`] の 1 階層下。同じ形にしてある）:
+/// 1. `mine` の**その種目**に同名がちょうど 1 件 → その `LabelId`
+/// 2. `out` に既に作った同名 → キャッシュから
+/// 3. それ以外 → 新規採番して `out` の種目に足す
+///
+/// ★ **1 が要る理由**: 自分のファイルを戻すだけで新しい ID が生えると、`merge_db` は
+/// 「同名がちょうど 1 件」で寄せてくれるものの、ログの `label` が写像を通るぶん
+/// 余計な往復が増える。手元の ID をそのまま使えば ID 一致の枝を素通りする
+/// （`Conflict` も出ない）。
+///
+/// ★ 「ちょうど 1 件」なのは [`resolve_exercise`] / [`pin_presets`] と同じ理由 —
+/// 同名が複数あるときに片方へ寄せると別の狙いの履歴が無警告で合流する。曖昧なら
+/// 新規に倒す。
+///
+/// ★ [`crate::model::MAX_LABELS`] はここでは見ない。`parse_import` 末尾の
+/// [`normalize`] が [`clean_labels`] を通すので、TSV 経路にも自動で効く。
+fn resolve_label(
+    out: &mut Db,
+    mine: &Db,
+    cache: &mut LabelCache,
+    ids: &mut IdGen,
+    ex_id: ExerciseId,
+    name: &str,
+) -> Option<LabelId> {
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let key = (ex_id, name.to_string());
+    if let Some(id) = cache.get(&key) {
+        return Some(*id);
+    }
+    // 1. `mine` の同じ種目に同名がちょうど 1 件
+    let id = mine
+        .exercise(ex_id)
+        .and_then(|e| exactly_one(e.labels.iter().filter(|l| l.name == name)))
+        .map(|l| l.id)
+        // 3. 新規採番
+        .unwrap_or_else(|| ids.alloc());
+    // ★ `out` の側にも定義を足す。足さないとログだけがラベルを指して宙に浮く
+    if let Some(e) = out.exercises.iter_mut().find(|e| e.id == ex_id)
+        && !e.labels.iter().any(|l| l.id == id)
+    {
+        // ★ 色は TSV に無いので**ここで振る**（部位の `resolve_group` と同じ作法）。
+        //   その種目に既に居るラベルの色を避けるので、1 ファイルで H / P / S が
+        //   入ってきても 3 色に散る。`normalize` の [`clean_labels`] でも埋まるが、
+        //   あちらは「出力位置基準」なので取り込み側の既存色を見ない
+        let color = next_label_color(e.labels.iter().map(|l| l.color.as_str())).to_string();
+        e.labels.push(Label {
+            id,
+            name: name.to_string(),
+            color,
+        });
+    }
+    cache.insert(key, id);
+    Some(id)
 }
 
 /// 取り込んだ行の `ピン` 列を `out` の種目へ入れる。**空のときだけ**入れる。
@@ -3262,6 +3842,7 @@ fn resolve_exercise(
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         }
     };
 
@@ -3359,6 +3940,23 @@ pub struct MergeReport {
     pub drops_added: usize,
     /// 追加したトレーニングメニューの本数。
     pub routines_added: usize,
+    /// 増えたラベル（**定義の追加とログへの付与の合算**。`notes_added` が既に
+    /// 異種混合の先例）。
+    ///
+    /// ★ これが無いと、ラベルだけが増えたマージで [`MergeReport::is_noop`] が真になり、
+    /// 画面が「新しく取り込むものはありませんでした」と嘘をつく。ラベルは `conflicts` に
+    /// 出ないのに**チップが増えて履歴の見え方が変わる**ので、数える以外に見る手段が無い。
+    pub labels_added: usize,
+    /// [`crate::model::MAX_LABELS`] を超えて取り込めなかったラベル定義の数。
+    ///
+    /// ★ **[`MergeReport::is_noop`] には入れない**（何も増えていないので）。代わりに
+    /// `views::backup` の警告文に出す — 落ちたラベルを指すログは取り込み直しても
+    /// 二度と生き返らない dangling になるのに、数も `Conflict` も出ないと気づけない。
+    ///
+    /// ★ `conflicts` に積まないのは、確認画面が `conflicts.is_empty()` で
+    /// 「入れ替わる記録があります」に分岐するため。記録は 1 件も入れ替わらないので、
+    /// 積むと確認画面が嘘をつく。
+    pub labels_dropped: usize,
     pub conflicts: Vec<Conflict>,
 }
 
@@ -3376,6 +3974,7 @@ impl MergeReport {
             && self.notes_added == 0
             && self.drops_added == 0
             && self.routines_added == 0
+            && self.labels_added == 0
     }
 }
 
@@ -3468,6 +4067,8 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
 
     // ── 種目 ──
     let mut exercise_alias: HashMap<ExerciseId, ExerciseId> = HashMap::new();
+    // ★ キーは `(写像後の ExerciseId, LabelId)`（[`merge_labels`] の ★）
+    let mut label_alias: HashMap<(ExerciseId, LabelId), LabelId> = HashMap::new();
     for e in theirs.exercises {
         if let Some(existing) = mine.exercises.iter_mut().find(|x| x.id == e.id) {
             if existing.name != e.name {
@@ -3479,6 +4080,9 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             }
             fill_pins(existing, &e);
             fill_interval(existing, &e);
+            let (added, dropped) = merge_labels(existing, &e, &mut label_alias);
+            report.labels_added += added;
+            report.labels_dropped += dropped;
             exercise_alias.insert(e.id, e.id);
             continue;
         }
@@ -3486,6 +4090,12 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             exercise_alias.insert(e.id, existing.id);
             fill_pins(existing, &e);
             fill_interval(existing, &e);
+            // ★ **同名寄せの枝でも呼ぶ。** 忘れると名前で寄せた種目のラベルだけが
+            //   落ちる（一番踏みやすいミス）。3 つ目の新規追加枝は `..e` なので
+            //   `labels` が自動で乗る
+            let (added, dropped) = merge_labels(existing, &e, &mut label_alias);
+            report.labels_added += added;
+            report.labels_dropped += dropped;
             report.conflicts.push(Conflict::NameMatched {
                 name: e.name.clone(),
             });
@@ -3565,12 +4175,20 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
         let mapped: Vec<ExerciseLog> = session
             .logs
             .into_iter()
-            .map(|l| ExerciseLog {
-                exercise_id: exercise_alias
+            .map(|l| {
+                let ex_id = exercise_alias
                     .get(&l.exercise_id)
                     .copied()
-                    .unwrap_or(l.exercise_id),
-                ..l
+                    .unwrap_or(l.exercise_id);
+                ExerciseLog {
+                    exercise_id: ex_id,
+                    // ★ **写像後の種目 ID で引く。** 種目が寄ったのにラベルが元の
+                    //   種目のキーで引かれると張り替えが起きない
+                    label: l
+                        .label
+                        .map(|id| label_alias.get(&(ex_id, id)).copied().unwrap_or(id)),
+                    ..l
+                }
             })
             .collect();
         // ★ 写像は単射とは限らない。取り込み先で改名済みの種目と、取り込む側の
@@ -3608,6 +4226,13 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             //   `*existing = log` が取り込み先のメモを取り込む側のもので上書きして消す
             if append_note(&mut existing.note, &log.note) {
                 report.notes_added += 1;
+            }
+            // ★ ラベルは**空のときだけ埋める**（`mine` 優先。
+            //   adr/storage/import-is-merge-only.md の「足すだけ」）。**あとに回しては
+            //   いけない** — 下の `*existing = log` が上書きして消す
+            if existing.label.is_none() && log.label.is_some() {
+                existing.label = log.label;
+                report.labels_added += 1;
             }
             // ★ `==` ではなく `same_sets`。メモだけの違いを食い違い扱いにすると、
             //   rank が同点なので下の分岐にも入れず、取り込む側のセットメモが
@@ -3664,7 +4289,16 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
                 //   1 セット足したファイルを取り込むだけで**実施時刻が消える**。
                 //   取り込む側が時刻を持っているならそちらを優先する
                 let at = log.at.or(existing.at);
-                *existing = ExerciseLog { note, at, ..log };
+                // ★ ラベルも持ち越す。`..log` に任せると**勝った側で上書きされる** —
+                //   上で `mine` 優先で埋めたはずの値が、セットが負けただけで
+                //   取り込む側のものに入れ替わる（`note` / `at` と同じ理由）
+                let label = existing.label.or(log.label);
+                *existing = ExerciseLog {
+                    note,
+                    at,
+                    label,
+                    ..log
+                };
             }
         }
 
@@ -3703,6 +4337,13 @@ mod tests {
 
     fn e(n: u64) -> ExerciseId {
         ExerciseId::from_bits(0x1_0000 + n)
+    }
+
+    /// ★ 種目 ID と**別の帯**（`0x2_0000`）に置く。同じ帯だと
+    /// 「`(ExerciseId, LabelId)` のキーが要る」ことを見るテストで、
+    /// たまたま一致して通ってしまう
+    fn lb(n: u64) -> LabelId {
+        LabelId::from_bits(0x2_0000 + n)
     }
 
     /// 決定的な採番器。`migrate` に渡す。
@@ -3751,6 +4392,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         }
     }
 
@@ -3771,6 +4413,7 @@ mod tests {
                 .collect(),
             at,
             note: String::new(),
+            label: None,
         }
     }
 
@@ -3794,6 +4437,7 @@ mod tests {
                 .collect(),
             at,
             note: note.to_string(),
+            label: None,
         }
     }
 
@@ -3873,6 +4517,7 @@ mod tests {
         let l = ExerciseLog {
             exercise_id: e(10),
             sets: vec![set(60.0, 10), drop_set(60.0, 6, &[(50.0, 5), (40.0, 4)])],
+            label: None,
             at: None,
             note: String::new(),
         };
@@ -3903,6 +4548,7 @@ mod tests {
         let l = ExerciseLog {
             exercise_id: e(10),
             sets: vec![s],
+            label: None,
             at: None,
             note: String::new(),
         };
@@ -3912,6 +4558,7 @@ mod tests {
         let bodyweight = ExerciseLog {
             exercise_id: e(10),
             sets: vec![drop_set(60.0, 6, &[(0.0, 8)])],
+            label: None,
             at: None,
             note: String::new(),
         };
@@ -3937,6 +4584,34 @@ mod tests {
             );
         }
         assert_eq!(Drops::default(), Drops::Exclude);
+    }
+
+    #[test]
+    fn weight_line_setting_reads_only_zero_and_one() {
+        for default in [WeightLine::Daily, WeightLine::Weekly] {
+            assert_eq!(
+                weight_line_setting(None, default),
+                default,
+                "未設定は default"
+            );
+            assert_eq!(weight_line_setting(Some(0), default), WeightLine::Daily);
+            assert_eq!(weight_line_setting(Some(1), default), WeightLine::Weekly);
+            for weird in [2, 7, -1, i64::MAX, i64::MIN] {
+                assert_eq!(
+                    weight_line_setting(Some(weird), default),
+                    default,
+                    "知らない値 {weird} は default へ倒す"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn weight_lines_default_is_daily_daily_weekly() {
+        let d = WeightLines::default();
+        assert_eq!(d.m3, WeightLine::Daily);
+        assert_eq!(d.m6, WeightLine::Daily);
+        assert_eq!(d.y1, WeightLine::Weekly);
     }
 
     /// ★ 落とし幅は自由入力なので、**丸めと clamp をここで閉じる**。100 を通すと
@@ -3981,15 +4656,18 @@ mod tests {
     /// 上下が負荷の増減を表さなくなるのでグラフの意味が壊れる。
     #[test]
     fn set_volume_is_monotonic_in_weight() {
-        let bodyweight = set_volume(&set(0.0, 10));
-        assert_eq!(bodyweight, 10.0);
-        // 1kg 未満でも自重を下回らない
-        assert_eq!(set_volume(&set(0.5, 10)), 10.0);
-        assert!(set_volume(&set(0.5, 10)) >= bodyweight);
-        assert!(set_volume(&set(2.0, 10)) > bodyweight);
+        // `max(1.0)` の境界 1.0 を跨いでも非減少であること。1.0 未満は全て自重の 10 に
+        // 潰れることまでリテラルで固定する（`max(0.5)` 等に緩めても非減少という
+        // 性質だけなら壊れないため、比較ではなく値そのものを見る）
+        let weights = [0.0, 0.5, 0.999, 1.0, 1.001, 2.0];
+        let got: Vec<f64> = weights.iter().map(|w| set_volume(&set(*w, 10))).collect();
+        // 1.001f32 → f64 の丸め。10.01 ちょうどにはならない
+        assert_eq!(got, vec![10.0, 10.0, 10.0, 10.0, 10.010000467300415, 20.0]);
     }
 
     /// schema 1 からの値の変化を固定する。ここが動いたら ADR とリリースノートも直す。
+    /// `set_volume_treats_missing_weight_as_one`（4462）/ `set_volume_is_monotonic_in_weight`
+    /// （4592）と重なるが、ADR の 3 ケースを名指しで固定する。
     #[test]
     fn set_volume_changes_these_three_cases_from_schema_1() {
         // 1. 自重 + 追加重量（旧 Bodyweight は weight を指標に載せなかった）
@@ -4257,7 +4935,7 @@ mod tests {
             vec![log(10, &[(60.0, 10)], None), log(11, &[(0.0, 20)], None)],
         );
 
-        reorder_logs(&mut db, day, &[e(11), e(20), e(10)]);
+        assert!(reorder_logs(&mut db, day, &[e(11), e(20), e(10)]));
         assert_eq!(log_order(&db, day), vec![e(11), e(10)]);
     }
 
@@ -4277,7 +4955,7 @@ mod tests {
             ],
         );
 
-        reorder_logs(&mut db, day, &[e(20)]);
+        assert!(reorder_logs(&mut db, day, &[e(20)]));
         assert_eq!(
             log_order(&db, day),
             vec![e(20), e(10), e(11)],
@@ -4344,7 +5022,10 @@ mod tests {
             vec![log(10, &[(60.0, 10)], None), log(11, &[(0.0, 20)], None)],
         );
 
-        reorder_logs(&mut db, day, &[e(10), e(10), e(11)]);
+        assert!(
+            !reorder_logs(&mut db, day, &[e(10), e(10), e(11)]),
+            "並びは既に order どおりなので変化なし"
+        );
         assert_eq!(log_order(&db, day), vec![e(10), e(11)]);
     }
 
@@ -4779,6 +5460,7 @@ mod tests {
                 logs: vec![ExerciseLog {
                     exercise_id: e(10),
                     sets: vec![set(60.0, 10), drop_set(60.0, 6, &[(50.0, 5)])],
+                    label: None,
                     at: None,
                     note: String::new(),
                 }],
@@ -5147,7 +5829,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_routine_ignores_history_older_than_the_menu_lookback() {
+    fn apply_routine_uses_history_older_than_the_menu_lookback() {
         // ★ MENU_LOOKBACK_DAYS は**適用しない**。カードの「前回」表示に上限が無いので、
         //   ここだけ打ち切ると「前回 730日前 60×10 と出ているのに何も入らない」になる
         let mut db = routine_db();
@@ -5651,14 +6333,8 @@ mod tests {
                 d(2026, 8, 2),
                 Drops::Include
             ),
-            exercise_series(
-                &db,
-                e(10),
-                Metric::Volume,
-                d(2026, 8, 1),
-                d(2026, 8, 2),
-                Drops::Include
-            ),
+            // 8/1 はベンチプレスの記録が無い日なので出ない。8/2 は 60kg×10 = 600
+            vec![(d(2026, 8, 2), 600.0)],
         );
     }
 
@@ -5674,6 +6350,7 @@ mod tests {
                 logs: vec![ExerciseLog {
                     exercise_id: e(10),
                     sets: vec![drop_set(60.0, 6, &[(50.0, 5)])],
+                    label: None,
                     at: None,
                     note: String::new(),
                 }],
@@ -5723,6 +6400,7 @@ mod tests {
                 logs: vec![ExerciseLog {
                     exercise_id: e(10),
                     sets: vec![set(60.0, 10), drop_set(60.0, 6, &[(50.0, 5)])],
+                    label: None,
                     at: None,
                     note: String::new(),
                 }],
@@ -5964,7 +6642,15 @@ mod tests {
     fn aggregate_weekly_avg_is_idempotent_and_handles_empty_input() {
         assert!(aggregate_weekly_avg(&[]).is_empty());
 
-        let weekly = aggregate_weekly_avg(&[(d(2026, 8, 2), 70.0), (d(2026, 8, 8), 72.0)]);
+        // 2 週にまたがる 4 点（1 週 1 点に潰れて自明にならないよう複数週を使う）
+        let series = vec![
+            (d(2026, 8, 2), 70.0),
+            (d(2026, 8, 8), 72.0),
+            (d(2026, 8, 9), 71.0),
+            (d(2026, 8, 15), 73.0),
+        ];
+        let weekly = aggregate_weekly_avg(&series);
+        assert_eq!(weekly, vec![(d(2026, 8, 2), 71.0), (d(2026, 8, 9), 72.0)]);
         assert_eq!(aggregate_weekly_avg(&weekly), weekly);
     }
 
@@ -6211,17 +6897,13 @@ mod tests {
     #[test]
     fn hero_and_chip_agree_on_the_day_count() {
         // ヒーロー（humanize）とチップ（short_elapsed）が違う日を指してはいけない
-        for e in [
-            Elapsed::with_ms(1, 12 * HOUR_MS),
-            Elapsed::with_ms(2, 36 * HOUR_MS),
-            Elapsed::days_only(3),
+        for (e, want_humanize, want_short) in [
+            (Elapsed::with_ms(1, 12 * HOUR_MS), "昨日", "1d"),
+            (Elapsed::with_ms(2, 36 * HOUR_MS), "2日前", "2d"),
+            (Elapsed::days_only(3), "3日前", "3d"),
         ] {
-            let days = e.days();
-            assert_eq!(
-                humanize(e, crate::i18n::Lang::Ja),
-                humanize_days(days, crate::i18n::Lang::Ja)
-            );
-            assert_eq!(short_elapsed(e, crate::i18n::Lang::Ja), format!("{days}d"));
+            assert_eq!(humanize(e, crate::i18n::Lang::Ja), want_humanize);
+            assert_eq!(short_elapsed(e, crate::i18n::Lang::Ja), want_short);
         }
     }
 
@@ -6285,7 +6967,7 @@ mod tests {
     }
 
     #[test]
-    fn humanize_clamps_negatives_and_sub_minute() {
+    fn humanize_rounds_sub_minute_down_to_just_now() {
         assert_eq!(
             humanize(Elapsed::with_ms(0, 0), crate::i18n::Lang::Ja),
             "たった今"
@@ -6294,19 +6976,22 @@ mod tests {
             humanize(Elapsed::with_ms(0, 30_000), crate::i18n::Lang::Ja),
             "たった今"
         );
-        // 端末時計のズレでも壊れた表示にしない
-        assert_eq!(
-            humanize(Elapsed::with_ms(0, -5000), crate::i18n::Lang::Ja),
-            "たった今"
+    }
+
+    /// 端末時計が記録時刻より巻き戻っていても、`Elapsed` は負の ms/days を持たない
+    /// （`#[cfg(test)]` コンストラクタの `.max(0)` ではなく `Elapsed::since` 本体のクランプを見る）。
+    #[test]
+    fn elapsed_since_last_clamps_when_the_clock_runs_behind_the_record() {
+        let mut db = test_db();
+        let at = 1_800_000_000_000;
+        put(
+            &mut db,
+            d(2026, 8, 8),
+            vec![log(10, &[(60.0, 10)], Some(at))],
         );
-        assert_eq!(
-            humanize(Elapsed::with_ms(-1, 5_000), crate::i18n::Lang::Ja),
-            "たった今"
-        );
-        assert_eq!(
-            humanize(Elapsed::days_only(-1), crate::i18n::Lang::Ja),
-            "今日"
-        );
+
+        let e = elapsed_since_last(&db, at - 5 * HOUR_MS, d(2026, 8, 8));
+        assert_eq!(e, Some(Elapsed::with_ms(0, 0)));
     }
 
     #[test]
@@ -6748,12 +7433,14 @@ mod tests {
         let a = ExerciseLog {
             exercise_id: e(10),
             sets: plain,
+            label: None,
             at: None,
             note: String::new(),
         };
         let b = ExerciseLog {
             exercise_id: e(10),
             sets: marked,
+            label: None,
             at: None,
             note: String::new(),
         };
@@ -6903,6 +7590,7 @@ mod tests {
                 }],
                 at: Some(1_800_000_000_000),
                 note: String::new(),
+                label: None,
             }],
         );
 
@@ -6972,6 +7660,7 @@ mod tests {
                     ],
                     at: None,
                     note: "肩が良い".into(),
+                    label: None,
                 }],
                 body_weight: Some(72.5),
                 note: "よく寝た".into(),
@@ -7008,7 +7697,7 @@ mod tests {
         );
         assert_eq!(
             tsv.lines().next().expect("見出し行"),
-            "日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒"
+            "日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル"
         );
     }
 
@@ -7023,7 +7712,7 @@ mod tests {
         );
         assert_eq!(
             tsv.lines().next().expect("見出し行"),
-            "Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tDrop set\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec"
+            "Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tDrop set\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec\tLabel"
         );
     }
 
@@ -7106,6 +7795,7 @@ mod tests {
                     }],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Default::default()
             },
@@ -7143,6 +7833,7 @@ mod tests {
                     }],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Default::default()
             },
@@ -7189,6 +7880,7 @@ mod tests {
                     }],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Default::default()
             },
@@ -7217,6 +7909,7 @@ mod tests {
                     }],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Default::default()
             },
@@ -7417,6 +8110,7 @@ mod tests {
                     }],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 body_weight: None,
                 note: String::new(),
@@ -7441,6 +8135,7 @@ mod tests {
                     sets: Vec::new(),
                     at: None,
                     note: "肩が痛いのでやめた".into(),
+                    label: None,
                 }],
                 body_weight: None,
                 note: String::new(),
@@ -7485,6 +8180,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
@@ -7511,6 +8207,7 @@ mod tests {
                     }],
                     at: None,
                     note: "1 本目\n2 本目".into(),
+                    label: None,
                 }],
                 body_weight: None,
                 note: String::new(),
@@ -7519,7 +8216,7 @@ mod tests {
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         assert_eq!(tsv.lines().count(), 2, "改行でレコードが割れている: {tsv}");
         let r = rows(&tsv);
-        assert_eq!(r[1].len(), 15, "タブで列がずれている");
+        assert_eq!(r[1].len(), 16, "タブで列がずれている");
         assert_eq!(r[1][col(&r, "セットメモ")], "前半 きつい");
         assert_eq!(r[1][col(&r, "種目メモ")], "1 本目 2 本目");
     }
@@ -7547,6 +8244,7 @@ mod tests {
             }],
             at,
             note: String::new(),
+            label: None,
         };
         db.sessions.insert(
             date_key(d(2026, 8, 1)),
@@ -7621,6 +8319,7 @@ mod tests {
                 logs: vec![ExerciseLog {
                     exercise_id: bench,
                     sets: vec![set(60.0, 10), drop_set(60.0, 6, &[(50.0, 5), (40.0, 4)])],
+                    label: None,
                     at: None,
                     note: String::new(),
                 }],
@@ -7734,6 +8433,7 @@ mod tests {
                 logs: vec![ExerciseLog {
                     exercise_id: e(10),
                     sets: vec![drop_set(60.0, 6, &[(50.0, 0), (40.0, 4)])],
+                    label: None,
                     at: None,
                     note: String::new(),
                 }],
@@ -7765,6 +8465,7 @@ mod tests {
                 logs: vec![ExerciseLog {
                     exercise_id: e(10),
                     sets: vec![drop_set(60.0, 6, &many)],
+                    label: None,
                     at: None,
                     note: String::new(),
                 }],
@@ -7857,6 +8558,8 @@ mod tests {
 
     /// ★ メニューは名前だけでは寄せない規則なので、2 回入れて増えないことを別に見る
     ///   （`merge_db` は「名前と種目が両方一致」で初めて重複と判断する）。
+    ///   routines 無しの TSV も同じ経路（`importing_the_same_tsv_twice_adds_nothing` は
+    ///   このテストの部分集合だったので削除した）。
     #[test]
     fn importing_a_tsv_with_routines_twice_adds_nothing() {
         let mut db = tsv_sample();
@@ -7878,20 +8581,6 @@ mod tests {
         assert_eq!(mine.routines.len(), 1);
     }
 
-    /// ★ 冪等性は**数**で見る（`MergeReport` の注記どおり）。
-    #[test]
-    fn importing_the_same_tsv_twice_adds_nothing() {
-        let tsv = export_tsv(&tsv_sample(), jst(), crate::i18n::Lang::Ja);
-        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
-
-        let first = parse_import(&tsv, &mut ids(), &mine).expect("1 回目");
-        merge_db(&mut mine, first);
-        let second = parse_import(&tsv, &mut ids(), &mine).expect("2 回目");
-        let report = merge_db(&mut mine, second);
-
-        assert!(report.is_noop(), "2 回目で増えている: {report:?}");
-    }
-
     /// ★ 自分のファイルを戻すだけで確認画面が「同じ種目とみなしました」で埋まらない。
     ///   これが `parse_import` に `mine` を渡している理由。
     #[test]
@@ -7907,6 +8596,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
 
         let tsv = export_tsv(&mine, jst(), crate::i18n::Lang::Ja);
@@ -7942,31 +8632,90 @@ mod tests {
         assert_eq!(s.logs[0].exercise_id, bench);
     }
 
-    /// ★ 同名が 2 件あるときにプリセット ID へ寄せると、別種目の履歴が無警告で合流する。
-    ///   曖昧なら新規に倒す（`pin_presets` と同じガード）。
+    /// ★ 部位違いの同名があっても (部位, 名前) が一意なら部位で解決する
+    ///   （`resolve_exercise` 梯子 1）。
     #[test]
-    fn tsv_import_does_not_pin_a_preset_name_that_is_ambiguous() {
+    fn tsv_import_resolves_a_preset_name_by_its_group() {
         let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         let mut g = ids();
-        // プリセットと同名の自作種目（画面から作れてしまう）
+        // プリセットと同名だが部位違いの自作種目（画面から作れてしまう）
+        let shoulder_bench_id = g.alloc();
         mine.exercises.push(Exercise {
-            id: g.alloc(),
+            id: shoulder_bench_id,
             name: "ベンチプレス".into(),
             group_id: crate::presets::preset_group_id("肩").expect("プリセット"),
             order: 9,
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
+        });
+
+        let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\n\
+             2026-08-01\t胸\tベンチプレス\t1\t60\t10\n\
+             2026-08-01\t肩\tベンチプレス\t1\t20\t10\n";
+        let incoming = parse_import(tsv, &mut ids(), &mine).expect("読める");
+
+        // (部位, 名前) が一意に当たるので、胸のプリセットに解決される
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        assert_eq!(
+            incoming.exercises.len(),
+            2,
+            "胸・肩それぞれの解決先が別種目として入る"
+        );
+        assert!(incoming.exercises.iter().any(|e| e.id == bench));
+
+        // 肩の行は (肩, ベンチプレス) がちょうど 1 件当たるので、自作種目（自作の採番 ID）
+        // に解決される。梯子 1 を削ると種目名だけの梯子 2 で胸のプリセットに落ち、ここが崩れる
+        let s = incoming.sessions.get("2026-08-01").expect("その日がある");
+        let shoulder_log = s
+            .logs
+            .iter()
+            .find(|l| l.exercise_id == shoulder_bench_id)
+            .expect("肩のベンチプレスが自作種目に解決されている");
+        assert_eq!(shoulder_log.exercise_id, shoulder_bench_id);
+        assert_ne!(shoulder_log.exercise_id, bench);
+    }
+
+    /// ★ **現状固定**。`pin_presets`（2454, 2465 の `if let [only]`）と違い TSV 経路には
+    ///   ガードが無く、同じ部位に同名 2 件でもプリセット ID に寄る。仕様として
+    ///   「曖昧なら新規に倒す」にするなら `resolve_exercise`（3798）と `merge_db` の
+    ///   同名寄せ（4051）の両方に `exactly_one` が要る（別 PR）。そのときこのテストは
+    ///   意図的に赤くなる。
+    #[test]
+    fn tsv_import_pins_the_preset_id_even_when_the_name_is_ambiguous_in_one_group() {
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let mut g = ids();
+        // プリセットと同名・同部位の自作種目（画面に重複名チェックが無いので作れる）
+        mine.exercises.push(Exercise {
+            id: g.alloc(),
+            name: "ベンチプレス".into(),
+            group_id: crate::presets::preset_group_id("胸").expect("プリセット"),
+            order: 9,
+            archived: false,
+            pins: Vec::new(),
+            interval_sec: None,
+            labels: Vec::new(),
         });
 
         let tsv =
             "日付\t部位\t種目\tセット\t重量kg\t回数\n2026-08-01\t胸\tベンチプレス\t1\t60\t10\n";
         let incoming = parse_import(tsv, &mut ids(), &mine).expect("読める");
 
-        // (部位, 名前) が一意に当たるので、胸のプリセットに解決される
         let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         assert_eq!(incoming.exercises.len(), 1);
-        assert_eq!(incoming.exercises[0].id, bench);
+        assert_eq!(
+            incoming.exercises[0].id, bench,
+            "同部位に同名2件でもプリセットIDに寄る"
+        );
+
+        merge_db(&mut mine, incoming);
+        let s = mine.sessions.get("2026-08-01").expect("その日がある");
+        assert_eq!(s.logs.len(), 1);
+        assert_eq!(
+            s.logs[0].exercise_id, bench,
+            "ログはプリセットのベンチプレスに付く"
+        );
     }
 
     /// ★ 部位違いの同名種目（画面に重複名チェックが無いので作れる）が 1 本に潰れない。
@@ -7985,6 +8734,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         let chest_bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         let set = |weight, reps| SetEntry {
@@ -8001,12 +8751,14 @@ mod tests {
                         sets: vec![set(60.0, 10)],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                     ExerciseLog {
                         exercise_id: shoulder_bench,
                         sets: vec![set(20.0, 12)],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                 ],
                 body_weight: None,
@@ -8137,6 +8889,7 @@ mod tests {
                 sets,
                 at,
                 note: String::new(),
+                label: None,
             }],
             body_weight: None,
             note: String::new(),
@@ -8365,6 +9118,7 @@ mod tests {
                     }],
                     at: Some(1_800_000_000_000),
                     note: String::new(),
+                    label: None,
                 }],
                 body_weight: Some(70.5),
                 note: "調子よい".into(),
@@ -8468,6 +9222,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
 
         let raw = export_json(&db);
@@ -8507,6 +9262,7 @@ mod tests {
                     ],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Session::default()
             },
@@ -8588,12 +9344,6 @@ mod tests {
         let round =
             parse_import(&export_json(&db), &mut ids(), &Db::default()).expect("読み戻せる");
         assert_eq!(round, db);
-        // `body_weight` の null は Option の正常な表現。危険なのは重量側の null
-        // （f32 に戻せず、次の起動で丸ごと Broken になる）
-        assert!(
-            !export_json(&db).contains("\"weight\":null"),
-            "Infinity が weight の null として書き出された"
-        );
     }
 
     // ── merge_db ────────────────────────────────────────────────────────────
@@ -8628,6 +9378,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         db.sessions.insert(
             date_key(d(2026, 8, 1)),
@@ -8642,6 +9393,7 @@ mod tests {
                         }],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                     ExerciseLog {
                         exercise_id: ExerciseId::from_bits(0xAAA1),
@@ -8652,6 +9404,7 @@ mod tests {
                         }],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                 ],
                 body_weight: Some(70.0),
@@ -8684,6 +9437,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         db.sessions.insert(
             date_key(d(2026, 8, 2)),
@@ -8698,6 +9452,7 @@ mod tests {
                         }],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                     ExerciseLog {
                         exercise_id: ExerciseId::from_bits(0xBBB1),
@@ -8708,6 +9463,7 @@ mod tests {
                         }],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                 ],
                 body_weight: None,
@@ -8823,6 +9579,7 @@ mod tests {
                         sets,
                         at: None,
                         note: String::new(),
+                        label: None,
                     }],
                     ..Session::default()
                 },
@@ -8898,6 +9655,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         theirs.sessions.insert(
             date_key(d(2026, 9, 9)),
@@ -8912,6 +9670,7 @@ mod tests {
                         }],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                     ExerciseLog {
                         exercise_id: other,
@@ -8922,6 +9681,7 @@ mod tests {
                         }],
                         at: None,
                         note: String::new(),
+                        label: None,
                     },
                 ],
                 ..Session::default()
@@ -9030,6 +9790,7 @@ mod tests {
                 archived: false,
                 pins: Vec::new(),
                 interval_sec: None,
+                labels: Vec::new(),
             });
         }
         theirs.routines.push(Routine {
@@ -9063,6 +9824,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         theirs.routines.push(Routine {
             id: r(1),
@@ -9209,6 +9971,7 @@ mod tests {
                             .collect(),
                         at: None,
                         note: note.to_string(),
+                        label: None,
                     }],
                     ..Session::default()
                 },
@@ -9252,6 +10015,7 @@ mod tests {
                                     .collect(),
                             })
                             .collect(),
+                        label: None,
                         at: None,
                         note: String::new(),
                     }],
@@ -9609,6 +10373,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
 
         // B は同名の種目を**別の ID** で持ち、A に無い日に記録している
@@ -9621,6 +10386,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         b.sessions.insert(
             date_key(d(2026, 9, 9)),
@@ -9634,6 +10400,7 @@ mod tests {
                     }],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Session::default()
             },
@@ -9724,7 +10491,7 @@ mod tests {
         if let Some(e) = through_import.exercises.iter_mut().find(|e| e.id == bench) {
             e.pins = raw;
         }
-        normalize_exercises(&mut through_import);
+        normalize_exercises(&mut through_import, &mut IdGen::from_seed(1));
 
         assert_eq!(
             through_ui.exercise(bench).expect("種目").pins,
@@ -9791,6 +10558,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         theirs.exercises.push(Exercise {
@@ -9801,6 +10569,7 @@ mod tests {
             archived: false,
             pins: vec!["7".into()],
             interval_sec: None,
+            labels: Vec::new(),
         });
 
         merge_db(&mut mine, theirs);
@@ -9860,6 +10629,7 @@ mod tests {
                     ],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Session::default()
             },
@@ -9939,6 +10709,7 @@ mod tests {
             archived: false,
             pins: vec!["4".into(), "12".into()],
             interval_sec: None,
+            labels: Vec::new(),
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 
@@ -10025,7 +10796,7 @@ mod tests {
         if let Some(e) = through_import.exercises.iter_mut().find(|e| e.id == bench) {
             e.interval_sec = Some(5000);
         }
-        normalize_exercises(&mut through_import);
+        normalize_exercises(&mut through_import, &mut IdGen::from_seed(1));
 
         assert_eq!(
             through_ui.exercise(bench).expect("種目").interval_sec,
@@ -10112,6 +10883,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: None,
+            labels: Vec::new(),
         });
         let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         theirs.exercises.push(Exercise {
@@ -10122,6 +10894,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: Some(120),
+            labels: Vec::new(),
         });
 
         merge_db(&mut mine, theirs);
@@ -10199,6 +10972,7 @@ mod tests {
                     ],
                     at: None,
                     note: String::new(),
+                    label: None,
                 }],
                 ..Session::default()
             },
@@ -10346,6 +11120,7 @@ mod tests {
             archived: false,
             pins: Vec::new(),
             interval_sec: Some(75),
+            labels: Vec::new(),
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 
@@ -10445,5 +11220,1398 @@ mod tests {
         }
 
         assert_eq!(mine.exercise(bench).expect("種目").interval_sec, Some(90));
+    }
+
+    // ── ラベル ──────────────────────────────────────────────────────────────
+    // adr/data-model/labels-on-the-exercise-and-a-mark-on-the-log.md
+    // adr/ux/label-chips-switch-the-history-and-the-copy.md
+
+    /// ラベル定義入りの Db。ベンチプレス(10) に H(1) / P(2) / S(3)。
+    fn label_db() -> Db {
+        let mut db = menu_db();
+        if let Some(x) = db.exercises.iter_mut().find(|x| x.id == e(10)) {
+            x.labels = vec![label(1, "H"), label(2, "P"), label(3, "S")];
+        }
+        db
+    }
+
+    /// 色は空。**`clean_labels` を通す経路のテストでは埋まる**ので、色を見ないテストは
+    /// このまま使い、色そのものを見るテストだけ [`colored`] で明示する。
+    fn label(n: u64, name: &str) -> Label {
+        Label {
+            id: lb(n),
+            name: name.into(),
+            color: String::new(),
+        }
+    }
+
+    /// 色を明示したラベル。
+    fn colored(n: u64, name: &str, color: &str) -> Label {
+        Label {
+            color: color.into(),
+            ..label(n, name)
+        }
+    }
+
+    /// ラベル付きのログ。
+    fn tagged(exercise_id: u64, label: u64, sets: &[(f32, u32)]) -> ExerciseLog {
+        ExerciseLog {
+            label: Some(lb(label)),
+            ..log(exercise_id, sets, None)
+        }
+    }
+
+    /// H(1) が 8/1、P(2) が 8/2 と 8/8、ラベルなしが 8/5。
+    fn hps_db() -> Db {
+        let mut db = label_db();
+        put(&mut db, d(2026, 8, 1), vec![tagged(10, 1, &[(70.0, 10)])]);
+        put(&mut db, d(2026, 8, 2), vec![tagged(10, 2, &[(100.0, 3)])]);
+        put(&mut db, d(2026, 8, 5), vec![log(10, &[(80.0, 8)], None)]);
+        put(&mut db, d(2026, 8, 8), vec![tagged(10, 2, &[(105.0, 3)])]);
+        db
+    }
+
+    // ── フィルタ ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn only_returns_just_that_labels_days_newest_first() {
+        let db = hps_db();
+        let got = last_logs_before_with(&db, e(10), d(2026, 8, 9), 3, LabelFilter::Only(lb(2)));
+        assert_eq!(
+            got.iter().map(|(date, _)| *date).collect::<Vec<_>>(),
+            vec![d(2026, 8, 8), d(2026, 8, 2)],
+            "P の日だけを新しい順に返す"
+        );
+        // 先頭が「前回」であることは無絞りと同じ仕様
+        let (date, _) = last_log_before_with(&db, e(10), d(2026, 8, 9), LabelFilter::Only(lb(2)))
+            .expect("P の記録がある");
+        assert_eq!(date, d(2026, 8, 8));
+    }
+
+    /// 委譲の固定。絶対値は `last_logs_before_returns_the_newest_days_first` 等が見る。
+    #[test]
+    fn last_logs_before_delegates_to_the_any_filter() {
+        let db = hps_db();
+        for limit in 1..=MAX_HISTORY {
+            let plain: Vec<NaiveDate> = last_logs_before(&db, e(10), d(2026, 8, 9), limit)
+                .into_iter()
+                .map(|(date, _)| date)
+                .collect();
+            let any: Vec<NaiveDate> =
+                last_logs_before_with(&db, e(10), d(2026, 8, 9), limit, LabelFilter::Any)
+                    .into_iter()
+                    .map(|(date, _)| date)
+                    .collect();
+            assert_eq!(plain, any, "limit={limit}");
+        }
+        assert_eq!(
+            last_log_before(&db, e(10), d(2026, 8, 9)).map(|(date, _)| date),
+            last_log_before_with(&db, e(10), d(2026, 8, 9), LabelFilter::Any).map(|(date, _)| date),
+        );
+    }
+
+    /// ★ **フォールバックしない**ことの唯一の型上の主張。落とすとコピーボタンが
+    /// 「表示と違うものを流し込む」ことになり、
+    /// adr/ux/copy-button-only-when-empty.md が消した 3 問題が別の入口から戻る。
+    #[test]
+    fn a_label_with_no_history_returns_nothing_instead_of_falling_back() {
+        let db = hps_db();
+        assert!(
+            last_logs_before_with(&db, e(10), d(2026, 8, 9), 3, LabelFilter::Only(lb(3)))
+                .is_empty(),
+            "S は 1 日も使っていないのでラベルなしの前回に落ちてはいけない"
+        );
+        assert_eq!(
+            last_log_before_with(&db, e(10), d(2026, 8, 9), LabelFilter::Only(lb(3))),
+            None
+        );
+        // 定義されていないラベル ID でも同じ（回復手段は「指定なし」チップ）
+        assert_eq!(
+            last_log_before_with(&db, e(10), d(2026, 8, 9), LabelFilter::Only(lb(99))),
+            None
+        );
+    }
+
+    #[test]
+    fn only_still_skips_days_without_sets() {
+        // メモだけ書いた日は実施日ではない。ラベルが付いていても変わらない
+        let mut db = label_db();
+        put(&mut db, d(2026, 8, 1), vec![tagged(10, 2, &[(100.0, 3)])]);
+        let mut memo_only = tagged(10, 2, &[]);
+        memo_only.note = "肩が痛いのでやめた".into();
+        put(&mut db, d(2026, 8, 7), vec![memo_only]);
+
+        let (date, _) = last_log_before_with(&db, e(10), d(2026, 8, 8), LabelFilter::Only(lb(2)))
+            .expect("8/1 まで遡る");
+        assert_eq!(date, d(2026, 8, 1));
+    }
+
+    /// ★ 既存利用者の体験不変。半年ラベルなしで記録してきた人が「指定なし」を
+    /// 押したとき、半年前ではなく**昨日**が出る（`Unlabeled` を作らない理由）。
+    #[test]
+    fn logs_written_before_labels_existed_all_show_up_under_any() {
+        let mut db = label_db();
+        put(&mut db, d(2026, 8, 1), vec![log(10, &[(50.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 4), vec![log(10, &[(55.0, 10)], None)]);
+        put(&mut db, d(2026, 8, 8), vec![tagged(10, 2, &[(100.0, 3)])]);
+
+        let got = last_logs_before_with(&db, e(10), d(2026, 8, 9), 3, LabelFilter::Any);
+        assert_eq!(
+            got.iter().map(|(date, _)| *date).collect::<Vec<_>>(),
+            vec![d(2026, 8, 8), d(2026, 8, 4), d(2026, 8, 1)]
+        );
+    }
+
+    // ── コピー ──────────────────────────────────────────────────────────────
+
+    /// 候補リストで日付を名指しして 1 日丸ごと写す操作。ソースが可視なので、
+    /// ラベルはその日に実在した真実。**両方向で固定する**（片方だけだと将来
+    /// 「揃えよう」で崩される）。
+    #[test]
+    fn copy_day_carries_the_label() {
+        let mut db = label_db();
+        put(&mut db, d(2026, 8, 8), vec![tagged(10, 2, &[(100.0, 3)])]);
+
+        copy_day(&mut db, d(2026, 8, 8), d(2026, 8, 9), None);
+
+        let copied = &db.sessions[&date_key(d(2026, 8, 9))].logs[0];
+        assert_eq!(copied.label, Some(lb(2)), "名指しした日のラベルは運ぶ");
+    }
+
+    /// ★ メニューの展開は種目ごとに**別々の不可視の日**から引くので、たまたま最後が
+    /// Power だった種目は今日が黙って Power になり、来週の Power 履歴を汚染する。
+    #[test]
+    fn apply_routine_does_not_carry_the_label() {
+        let mut db = label_db();
+        db.routines.push(routine(1, "胸の日", &[10, 30]));
+        put(&mut db, d(2026, 8, 8), vec![tagged(10, 2, &[(100.0, 3)])]);
+
+        apply_routine(&mut db, r(1), d(2026, 8, 9), None);
+
+        let opened = &db.sessions[&date_key(d(2026, 8, 9))].logs;
+        let bench = opened
+            .iter()
+            .find(|l| l.exercise_id == e(10))
+            .expect("ベンチプレスが展開されている");
+        assert_eq!(
+            bench.label, None,
+            "メニューは狙いを持たないのでラベルを押し付けてはいけない"
+        );
+        // セットは運ぶ（落とすのはラベルだけ）
+        assert_eq!(bench.sets.len(), 1);
+    }
+
+    /// **読みは `Any`。** 絞ると「カードに前回が出ているのにメニューからは何も
+    /// 入らない」食い違いが生まれる。
+    #[test]
+    fn apply_routine_reads_without_filtering_by_label() {
+        let mut db = label_db();
+        db.routines.push(routine(1, "胸の日", &[10]));
+        // 直近はラベル付き。読みが `Only(なにか)` に寄っていたら 0 件になる
+        put(&mut db, d(2026, 8, 8), vec![tagged(10, 2, &[(100.0, 3)])]);
+
+        let opened = apply_routine(&mut db, r(1), d(2026, 8, 9), None);
+
+        assert_eq!(opened, vec![e(10)]);
+        assert_eq!(
+            db.sessions[&date_key(d(2026, 8, 9))].logs[0].sets.len(),
+            1,
+            "ラベル付きの直近が読めていない"
+        );
+    }
+
+    // ── ID の安定 ───────────────────────────────────────────────────────────
+
+    /// ★ この機能の目的が「数か月にわたる Power の履歴」なので、`P` → `Power` の
+    /// 改名で過去ログが外れる形は採れない。設定タブの実装（`LabelRow` が `LabelId`
+    /// を持つ）が崩れるとここが落ちる。
+    #[test]
+    fn renaming_a_label_keeps_its_id() {
+        let mut db = hps_db();
+        let before = last_logs_before_with(&db, e(10), d(2026, 8, 9), 3, LabelFilter::Only(lb(2)))
+            .into_iter()
+            .map(|(date, _)| date)
+            .collect::<Vec<_>>();
+
+        // 「P」→「Power」。**ID は据え置き**で名前だけ差し替える
+        set_labels(
+            &mut db,
+            e(10),
+            vec![label(1, "H"), label(2, "Power"), label(3, "S")],
+            &mut ids(),
+        );
+
+        assert_eq!(label_name(&db, e(10), lb(2)), Some("Power"));
+        assert_eq!(
+            last_logs_before_with(&db, e(10), d(2026, 8, 9), 3, LabelFilter::Only(lb(2)))
+                .into_iter()
+                .map(|(date, _)| date)
+                .collect::<Vec<_>>(),
+            before,
+            "改名で過去ログが外れてはいけない"
+        );
+    }
+
+    // ── 正規化 ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn clean_labels_drops_blank_names_and_truncates_by_char() {
+        let got = clean_labels(
+            vec![
+                label(1, ""),
+                label(2, "  "),
+                label(3, "　"),
+                // ★ char で切る。バイトで切ると UTF-8 の途中で割れて panic する
+                label(4, "あいうえおかきくけこさしすせそ"),
+                label(5, "Hypertrophy"),
+            ],
+            &mut ids(),
+        );
+        assert_eq!(
+            got.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+            ["あいうえおかきくけこさし", "Hypertrophy"]
+        );
+    }
+
+    /// ★ **`split_whitespace` しない。** ピンが分割するのは TSV のセル内が空白
+    /// 区切りだからで、ラベルは 1 セル = 1 名前。「高重量 低レップ」を許したい。
+    #[test]
+    fn clean_labels_does_not_split_a_name_that_contains_a_space() {
+        let got = clean_labels(vec![label(1, "高重量 低レップ")], &mut ids());
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "高重量 低レップ");
+        // trim もしない（取り込んだデータを書き換えない。`normalize_routines` の規則）
+        let got = clean_labels(vec![label(1, " P ")], &mut ids());
+        assert_eq!(got[0].name, " P ");
+    }
+
+    #[test]
+    fn clean_labels_keeps_duplicate_names_and_their_order() {
+        // 同名は merge が正当に生む。並べ替えない（`Vec` 順 = 表示順）
+        let got = clean_labels(
+            vec![label(3, "S"), label(1, "P"), label(2, "P")],
+            &mut ids(),
+        );
+        assert_eq!(
+            got.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+            ["S", "P", "P"]
+        );
+        assert_eq!(
+            got.iter().map(|l| l.id).collect::<Vec<_>>(),
+            [lb(3), lb(1), lb(2)]
+        );
+    }
+
+    /// ★ 重複 ID は `<For key=id>` の keyed diff を壊す（wasm では panic =
+    /// アプリが死ぬ）ので採り直す。**それ以外の ID は保持する** — ここを緩めると
+    /// 改名の 1 打鍵で `ExerciseLog.label` が全部宙に浮く。
+    #[test]
+    fn clean_labels_only_reallocates_duplicate_ids() {
+        let got = clean_labels(
+            vec![label(1, "H"), label(1, "P"), label(2, "S")],
+            &mut ids(),
+        );
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].id, lb(1), "初出の ID は据え置く");
+        assert_ne!(got[1].id, lb(1), "重複した ID は採り直す");
+        assert_eq!(got[2].id, lb(2), "重複していない ID は据え置く");
+        assert_eq!(got[1].name, "P", "名前は黙って失わない");
+    }
+
+    /// HPS の 3 本 + 余地が要る（`MAX_LABELS >= 3`）。
+    #[test]
+    fn clean_labels_caps_the_number_of_labels() {
+        let many: Vec<Label> = (0..MAX_LABELS as u64 + 5)
+            .map(|i| label(i, &format!("L{i}")))
+            .collect();
+        assert_eq!(clean_labels(many, &mut ids()).len(), MAX_LABELS);
+    }
+
+    /// ★ 画面からの書き込みと取り込みで規則が食い違うと、**画面で消えたはずの値が
+    /// 取り込みで生き返る**（またはその逆）。
+    /// `set_pins_normalizes_the_same_way_as_normalize` の鏡像。
+    #[test]
+    fn set_labels_normalizes_the_same_way_as_normalize() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let raw = vec![
+            label(1, "H"),
+            label(1, "P"),
+            label(2, ""),
+            label(3, "あいうえおかきくけこさしすせそ"),
+        ];
+
+        let mut through_ui = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_labels(&mut through_ui, bench, raw.clone(), &mut ids());
+
+        let mut through_import = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        if let Some(x) = through_import.exercises.iter_mut().find(|x| x.id == bench) {
+            x.labels = raw;
+        }
+        normalize_exercises(&mut through_import, &mut ids());
+
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").labels,
+            through_import.exercise(bench).expect("種目").labels,
+            "画面からの書き込みと取り込みで規則がずれている"
+        );
+        assert_eq!(
+            through_ui
+                .exercise(bench)
+                .expect("種目")
+                .labels
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect::<Vec<_>>(),
+            ["H", "P", "あいうえおかきくけこさし"]
+        );
+    }
+
+    /// ★ 宙に浮いた `label` は**消さない**（`normalize_routines` の「宙に浮いた参照は
+    /// 宙に浮いたまま残す」）。後から相手のファイルを取り込めば生き返る。
+    #[test]
+    fn normalize_leaves_a_dangling_label_on_the_log() {
+        let mut db = label_db();
+        put(&mut db, d(2026, 8, 8), vec![tagged(10, 99, &[(100.0, 3)])]);
+        normalize(&mut db, &mut ids());
+        assert_eq!(
+            db.sessions[&date_key(d(2026, 8, 8))].logs[0].label,
+            Some(lb(99))
+        );
+    }
+
+    /// ★ ここが無いと重複ログを畳むときに後発の `label` が黙って落ちる。
+    #[test]
+    fn dedupe_logs_does_not_drop_a_later_label() {
+        let mut s = Session {
+            logs: vec![log(10, &[(100.0, 3)], None), tagged(10, 2, &[(100.0, 2)])],
+            ..Session::default()
+        };
+        dedupe_logs(&mut s);
+        assert_eq!(s.logs.len(), 1);
+        assert_eq!(s.logs[0].label, Some(lb(2)));
+        assert_eq!(s.logs[0].sets.len(), 2, "セットは連結される");
+    }
+
+    /// 「空のときだけ埋める」なので、先に来たものが勝つ。
+    #[test]
+    fn dedupe_logs_keeps_the_first_label_it_saw() {
+        let mut s = Session {
+            logs: vec![tagged(10, 1, &[(70.0, 10)]), tagged(10, 2, &[(100.0, 3)])],
+            ..Session::default()
+        };
+        dedupe_logs(&mut s);
+        assert_eq!(s.logs[0].label, Some(lb(1)));
+    }
+
+    // ── 色 ──────────────────────────────────────────────────────────────────
+    // adr/ux/label-colour-on-the-progress-dots.md
+
+    /// パレット。テストが `LABEL_COLOR_CHOICES` の綴りを写さないように 1 本で引く。
+    fn palette(i: usize) -> &'static str {
+        crate::presets::LABEL_COLOR_CHOICES[i]
+    }
+
+    /// ★ **色の門番は `clean_labels` の 1 箇所だけ**という主張。旧版の JSON（空）も、
+    /// 手編集の壊れた値も、ここを通れば必ず `#rrggbb` になる。
+    #[test]
+    fn clean_labels_fills_a_missing_colour_from_the_palette() {
+        let got = clean_labels(
+            vec![
+                colored(1, "H", ""),
+                colored(2, "P", "red"),
+                colored(3, "S", "#xyzxyz"),
+                colored(4, "T", "#e0524a12"),
+            ],
+            &mut ids(),
+        );
+        assert_eq!(
+            got.iter().map(|l| l.color.as_str()).collect::<Vec<_>>(),
+            [palette(0), palette(1), palette(2), palette(3)],
+            "名前付きの色・16 進でない値・8 桁は全部「持っていない」扱い"
+        );
+    }
+
+    /// ★ **利用者が設定した有効な色は同色でも触らない。** 2 本を同じ色にしたのは
+    /// 選択であって壊れた値ではない。ここで「重複だから」と塗り替えると、設定
+    /// シートで選んだ色が次の正規化で黙って変わる。
+    #[test]
+    fn clean_labels_keeps_a_valid_colour_even_when_it_repeats() {
+        let got = clean_labels(
+            vec![
+                colored(1, "H", "#123456"),
+                colored(2, "P", "#123456"),
+                // 大文字も有効な `#rrggbb`。小文字へ正規化もしない
+                colored(3, "S", "#ABCDEF"),
+            ],
+            &mut ids(),
+        );
+        assert_eq!(
+            got.iter().map(|l| l.color.as_str()).collect::<Vec<_>>(),
+            ["#123456", "#123456", "#ABCDEF"]
+        );
+    }
+
+    /// ★ **色を埋めるのは 2 パス目**であることの主張。1 パスで前方（`out`）の色だけを
+    /// 見ると、**無効な色が先・有効な色が後ろ**という並びで 1 本目がパレットの先頭を
+    /// 取り、2 本目は有効なので据え置かれて同色 2 本ができる。画面からは作れないが、
+    /// 手編集の JSON や色欄が一部欠けたファイルの取り込みでは起きうる経路。
+    #[test]
+    fn clean_labels_does_not_collide_with_a_valid_colour_that_comes_later() {
+        let got = clean_labels(
+            vec![
+                colored(1, "H", ""),
+                // 2 本目はパレットの先頭色を**有効な値として**持っている
+                colored(2, "P", palette(0)),
+                colored(3, "S", ""),
+                // 大文字違いも「使用済み」として数える
+                colored(4, "T", palette(1).to_uppercase().as_str()),
+            ],
+            &mut ids(),
+        );
+        let colors: Vec<&str> = got.iter().map(|l| l.color.as_str()).collect();
+        assert_eq!(
+            colors,
+            [
+                palette(2),
+                palette(0),
+                palette(3),
+                &palette(1).to_uppercase()
+            ],
+            "後ろの行の有効な色を「使用済み」に数えていない"
+        );
+        // 大文字小文字を無視して見ても 4 色が全部違う
+        let lower: std::collections::HashSet<String> =
+            colors.iter().map(|c| c.to_ascii_lowercase()).collect();
+        assert_eq!(lower.len(), 4, "同じ色のラベルが 2 本並んだ: {colors:?}");
+    }
+
+    #[test]
+    fn next_label_color_skips_colours_already_in_use() {
+        // 先頭が空いていれば先頭
+        assert_eq!(next_label_color(std::iter::empty()), palette(0));
+        // 使用済みを飛ばす（並び順ではなく「未使用の最初」）
+        assert_eq!(next_label_color([palette(0), palette(2)]), palette(1));
+        // 大文字小文字を無視して「使用済み」と数える
+        assert_eq!(
+            next_label_color([palette(0).to_uppercase().as_str()]),
+            palette(1)
+        );
+        // 6 色を使い切ったら重複を許して `n % 6` に落ちる
+        let all: Vec<&str> = crate::presets::LABEL_COLOR_CHOICES.to_vec();
+        assert_eq!(next_label_color(all.clone()), palette(0));
+        let mut seven = all;
+        seven.push(palette(0));
+        assert_eq!(next_label_color(seven), palette(1));
+    }
+
+    /// ★ **位置ベース（`out.len() % 6`）では駄目**という主張。✕ で 1 本消してから
+    /// ＋ で足したときに残った行と同じ色が生まれる形を、ここで固定する。
+    /// 併せて、基準が**入力ではなく出力の並び**であること（空名の行は数に入らない）。
+    #[test]
+    fn a_new_label_never_repeats_a_colour_already_on_the_exercise() {
+        // 空名の行を先頭に混ぜても、残る 2 本の色はパレットの先頭 2 色
+        let got = clean_labels(
+            vec![colored(1, "", ""), colored(2, "H", ""), colored(3, "P", "")],
+            &mut ids(),
+        );
+        assert_eq!(
+            got.iter().map(|l| l.color.as_str()).collect::<Vec<_>>(),
+            [palette(0), palette(1)],
+            "落とした行を数に入れている（出力位置が基準）"
+        );
+
+        // 2 色目を消してから足す → 空いた色が戻ってきて、残った行とは重ならない
+        let got = clean_labels(
+            vec![colored(1, "H", palette(0)), colored(3, "S", palette(2))],
+            &mut ids(),
+        );
+        let mut kept = got;
+        kept.push(colored(4, "新", ""));
+        let got = clean_labels(kept, &mut ids());
+        let colors: Vec<&str> = got.iter().map(|l| l.color.as_str()).collect();
+        assert_eq!(colors, [palette(0), palette(2), palette(1)]);
+        assert_eq!(
+            colors
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            3,
+            "同じ色のラベルが 2 本並んだ"
+        );
+    }
+
+    /// 同名寄せの枝は `alias` を張って取り込み側の定義を捨てる = **自分の色が勝つ**。
+    /// 古いファイル 1 枚で自分が選んだ色が巻き戻らない（ログの `label` と同じ規則）。
+    #[test]
+    fn merge_keeps_my_colour_when_a_label_matches_by_name() {
+        let mut mine = preset_db_with_labels(vec![colored(1, "P", "#123456")]);
+        merge_db(
+            &mut mine,
+            preset_db_with_labels(vec![colored(7, "P", "#abcdef")]),
+        );
+
+        assert_eq!(bench_colors(&mine), ["#123456"], "自分の色が上書きされた");
+    }
+
+    /// 新規追加の枝は**衝突しない有効な色をそのまま採る**。あちらの端末で選んだ色を
+    /// 取り込みで黙って捨てない。
+    #[test]
+    fn merge_carries_the_colour_of_a_newly_added_label() {
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        merge_db(
+            &mut mine,
+            preset_db_with_labels(vec![colored(1, "H", "#123456"), colored(2, "P", "#abcdef")]),
+        );
+
+        assert_eq!(bench_colors(&mine), ["#123456", "#abcdef"]);
+    }
+
+    /// ★ **`merge_db` は `normalize` を呼ばない**ので `clean_labels` の門を通らない。
+    /// 2 台で独立に定義した 1 本目どうしはどちらもパレットの先頭色なので、そのまま
+    /// 足すと推移タブで区別できない 2 本になる。新規追加の枝で塗り替える。
+    #[test]
+    fn merge_recolours_an_incoming_label_that_clashes_with_mine() {
+        let mut mine = preset_db_with_labels(vec![colored(1, "H", palette(0))]);
+        merge_db(
+            &mut mine,
+            // 別名・同色（大文字違いも衝突と見る）+ 壊れた色
+            preset_db_with_labels(vec![
+                colored(2, "P", palette(0).to_uppercase().as_str()),
+                colored(3, "S", "red"),
+            ]),
+        );
+
+        assert_eq!(bench_colors(&mine), [palette(0), palette(1), palette(2)]);
+    }
+
+    /// TSV に色列は無い（部位と同じ）。取り込みで生まれたラベルにも色が付き、
+    /// **同じ種目の中で重ならない**。
+    #[test]
+    fn tsv_import_gives_a_new_label_a_colour() {
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let incoming = parse_import(
+            "日付\t部位\t種目\tセット\t重量kg\t回数\tラベル\n\
+             2026-08-01\t胸\tベンチプレス\t1\t70\t10\tH\n\
+             2026-08-08\t胸\tベンチプレス\t1\t100\t3\tP\n",
+            &mut ids(),
+            &mine,
+        )
+        .expect("読める");
+
+        assert_eq!(bench_colors(&incoming), [palette(0), palette(1)]);
+    }
+
+    /// 画面からの書き込みと取り込みで色の規則が食い違わないこと
+    /// （`set_labels_normalizes_the_same_way_as_normalize` の色版）。
+    #[test]
+    fn set_labels_fills_the_colour_like_normalize_does() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let raw = vec![
+            colored(1, "H", ""),
+            colored(2, "P", "#123456"),
+            colored(3, "S", "壊れた"),
+        ];
+
+        let mut through_ui = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_labels(&mut through_ui, bench, raw.clone(), &mut ids());
+
+        let mut through_import = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        if let Some(x) = through_import.exercises.iter_mut().find(|x| x.id == bench) {
+            x.labels = raw;
+        }
+        normalize_exercises(&mut through_import, &mut ids());
+
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").labels,
+            through_import.exercise(bench).expect("種目").labels,
+            "画面からの書き込みと取り込みで色の規則がずれている"
+        );
+        assert_eq!(
+            bench_colors(&through_ui),
+            [palette(0), "#123456", palette(1)],
+            "有効な色は据え置き、無い色だけ未使用のパレット色で埋める"
+        );
+    }
+
+    // ── 推移タブの絞り込み ──────────────────────────────────────────────────
+    // adr/ux/label-colour-on-the-progress-dots.md
+
+    /// hps_db の日ごとの値（`Metric::Volume`）。
+    const HPS_VALUES: [(u32, f64); 4] = [(1, 700.0), (2, 300.0), (5, 640.0), (8, 315.0)];
+
+    fn hps_points(p: Pick, filter: LabelFilter) -> Vec<SeriesPoint> {
+        pick_points(
+            &hps_db(),
+            p,
+            Metric::Volume,
+            d(2026, 8, 1),
+            d(2026, 8, 31),
+            Drops::Include,
+            filter,
+        )
+    }
+
+    fn bench_pick() -> Pick {
+        Pick::default().with_exercise(&hps_db(), Some(e(10)))
+    }
+
+    #[test]
+    fn pick_points_filters_the_exercise_branch_by_label() {
+        let got = hps_points(bench_pick(), LabelFilter::Only(lb(2)));
+        assert_eq!(
+            got.iter().map(|p| (p.date, p.value)).collect::<Vec<_>>(),
+            vec![(d(2026, 8, 2), 300.0), (d(2026, 8, 8), 315.0)],
+            "P の日だけが残る"
+        );
+        assert!(
+            got.iter().all(|p| p.label == Some(lb(2))),
+            "残った点に P 以外のラベルが載っている"
+        );
+        // ラベルなしの日（8/5）は `Only` では出ない
+        assert!(!got.iter().any(|p| p.date == d(2026, 8, 5)));
+    }
+
+    /// ★ **旧名は旧挙動。** `pick_series` を委譲に変えたことで既存利用者の画面が
+    /// 1 バイトも変わらないことの主張。
+    #[test]
+    fn pick_points_is_identical_to_pick_series_when_unfiltered() {
+        let db = hps_db();
+        for p in [
+            bench_pick(),
+            Pick {
+                group: Some(g(1)),
+                exercise: None,
+            },
+        ] {
+            for m in [Metric::Volume, Metric::Sets, Metric::Reps] {
+                let points = pick_points(
+                    &db,
+                    p,
+                    m,
+                    d(2026, 8, 1),
+                    d(2026, 8, 31),
+                    Drops::Include,
+                    LabelFilter::Any,
+                );
+                assert_eq!(
+                    points.iter().map(|p| (p.date, p.value)).collect::<Vec<_>>(),
+                    pick_series(&db, p, m, d(2026, 8, 1), d(2026, 8, 31), Drops::Include),
+                );
+            }
+        }
+        // ラベルは無絞りでも載る（点の色に使う）
+        let got = hps_points(bench_pick(), LabelFilter::Any);
+        assert_eq!(
+            got.iter().map(|p| p.label).collect::<Vec<_>>(),
+            vec![Some(lb(1)), Some(lb(2)), None, Some(lb(2))]
+        );
+        assert_eq!(
+            got.iter()
+                .map(|p| (p.date.day(), p.value))
+                .collect::<Vec<_>>(),
+            HPS_VALUES.to_vec()
+        );
+    }
+
+    /// ★ **部位の枝はラベルを見ない。** ラベルは種目ごとに独立した体系なので、
+    /// 複数種目の合算に載せられる `LabelId` が無い。`Only` が届いても黙って無視して
+    /// 従来どおりの合算を返す（0 件にして空グラフを見せない）。
+    #[test]
+    fn pick_points_ignores_labels_on_the_group_branch() {
+        let chest = Pick {
+            group: Some(g(1)),
+            exercise: None,
+        };
+        let any = hps_points(chest, LabelFilter::Any);
+        let only = hps_points(chest, LabelFilter::Only(lb(2)));
+
+        assert_eq!(any, only, "部位の枝で絞りが効いてしまっている");
+        assert_eq!(
+            any.iter()
+                .map(|p| (p.date.day(), p.value))
+                .collect::<Vec<_>>(),
+            HPS_VALUES.to_vec()
+        );
+        assert!(
+            any.iter().all(|p| p.label.is_none()),
+            "合算の点にラベルが載っている"
+        );
+    }
+
+    /// ★ **週内の全点が同じラベルのときだけ残す。** 混ざった週に 1 色を選ぶと、
+    /// 3 分の 1 だけを指す色がその週全体の点に付いて**色が嘘になる**。
+    #[test]
+    fn aggregate_weekly_points_keeps_a_label_only_when_the_whole_week_agrees() {
+        let sp = |day: u32, label: Option<u64>| SeriesPoint {
+            date: d(2026, 8, day),
+            value: 1.0,
+            label: label.map(lb),
+        };
+
+        // 同一ラベルの週 → 残る
+        let got = aggregate_weekly_points(&[sp(2, Some(2)), sp(5, Some(2))]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].label, Some(lb(2)));
+
+        // 別 ID が混ざる → 既定色へ落とす
+        let got = aggregate_weekly_points(&[sp(2, Some(1)), sp(5, Some(2))]);
+        assert_eq!(got[0].label, None);
+
+        // `None` が混ざる（どちら向きでも）→ 既定色へ落とす
+        assert_eq!(
+            aggregate_weekly_points(&[sp(2, Some(2)), sp(5, None)])[0].label,
+            None
+        );
+        assert_eq!(
+            aggregate_weekly_points(&[sp(2, None), sp(5, Some(2))])[0].label,
+            None
+        );
+
+        // 全部 `None` の週は `None`（「混ざった」ではないが結果は同じ）
+        assert_eq!(
+            aggregate_weekly_points(&[sp(2, None), sp(5, None)])[0].label,
+            None
+        );
+
+        // ★ `Only` で絞れば週内は必ず同じラベル = 「全期間」でも色が消えない
+        let weekly = aggregate_weekly_points(&hps_points(bench_pick(), LabelFilter::Only(lb(2))));
+        assert_eq!(
+            weekly
+                .iter()
+                .map(|p| (p.date, p.value, p.label))
+                .collect::<Vec<_>>(),
+            vec![(d(2026, 8, 2), 615.0, Some(lb(2)))]
+        );
+    }
+
+    /// 値の集約は [`aggregate_weekly`] と**まったく同じ**（週キーも合計も）。
+    /// ずれると指標と体重（`aggregate_weekly_avg`）の週キーが噛み合わなくなる。
+    #[test]
+    fn aggregate_weekly_points_sums_like_aggregate_weekly() {
+        let points = hps_points(bench_pick(), LabelFilter::Any);
+        let plain: Vec<(NaiveDate, f64)> = points.iter().map(|p| (p.date, p.value)).collect();
+
+        assert_eq!(
+            aggregate_weekly_points(&points)
+                .iter()
+                .map(|p| (p.date, p.value))
+                .collect::<Vec<_>>(),
+            aggregate_weekly(&plain)
+        );
+        // 混ざった週は既定色（8/2 の週に P と ラベルなしが同居する）
+        assert_eq!(
+            aggregate_weekly_points(&points)
+                .iter()
+                .map(|p| p.label)
+                .collect::<Vec<_>>(),
+            vec![Some(lb(1)), None]
+        );
+        assert!(aggregate_weekly_points(&[]).is_empty());
+    }
+
+    // ── ラベルのマージ ──────────────────────────────────────────────────────
+
+    /// ラベル付きのプリセット Db。ベンチプレスに指定の定義を入れる。
+    fn preset_db_with_labels(labels: Vec<Label>) -> Db {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        if let Some(x) = db.exercises.iter_mut().find(|x| x.id == bench) {
+            x.labels = labels;
+        }
+        db
+    }
+
+    /// ベンチプレスのラベルの色（並び順そのまま）。
+    fn bench_colors(db: &Db) -> Vec<String> {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        db.exercise(bench)
+            .expect("種目")
+            .labels
+            .iter()
+            .map(|l| l.color.clone())
+            .collect()
+    }
+
+    fn bench_labels(db: &Db) -> Vec<(LabelId, String)> {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        db.exercise(bench)
+            .expect("種目")
+            .labels
+            .iter()
+            .map(|l| (l.id, l.name.clone()))
+            .collect()
+    }
+
+    /// ★ **プリセットは固定 ID を持つので新品端末への復元は必ず「ID 一致」の枝を
+    /// 通り、その枝は取り込み側の `Exercise` を丸ごと捨てる。** 手当てしないと
+    /// 記録は全部戻るのにラベル定義だけ落ち、ログには宙に浮いた `label` が残る。
+    /// `fill_pins` の ★ と同型で、被害はこちらのほうが大きい。
+    #[test]
+    fn merging_into_a_fresh_device_keeps_the_labels() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut theirs = preset_db_with_labels(vec![label(1, "H"), label(2, "P")]);
+        theirs.sessions.insert(
+            date_key(d(2026, 8, 8)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: bench,
+                    label: Some(lb(2)),
+                    ..log(0, &[(100.0, 3)], None)
+                }],
+                ..Session::default()
+            },
+        );
+
+        let mut fresh = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let report = merge_db(&mut fresh, theirs);
+
+        assert_eq!(
+            bench_labels(&fresh),
+            vec![(lb(1), "H".into()), (lb(2), "P".into())],
+            "ID 一致の枝でラベル定義が落ちた"
+        );
+        assert_eq!(report.labels_added, 2);
+        // 履歴が「どのラベルにも属さない」にならない
+        assert_eq!(
+            last_logs_before_with(&fresh, bench, d(2026, 8, 9), 3, LabelFilter::Only(lb(2))).len(),
+            1
+        );
+    }
+
+    /// ★ **同名寄せの枝でも `merge_labels` を呼んでいる。** 忘れると名前で寄せた
+    /// 種目のラベルだけが落ちる（一番踏みやすいミス）。
+    #[test]
+    fn merge_fills_the_labels_on_the_name_matched_branch_too() {
+        let chest = crate::presets::preset_group_id("胸").expect("プリセット");
+        let make = |id: u64, labels: Vec<Label>| {
+            let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+            db.exercises.push(Exercise {
+                id: ExerciseId::from_bits(id),
+                name: "ペックフライ".into(),
+                group_id: chest,
+                order: 9,
+                archived: false,
+                pins: Vec::new(),
+                interval_sec: None,
+                labels,
+            });
+            db
+        };
+        // ID は違うが同名 → 「同名寄せ」の枝を通る
+        let mut mine = make(0xAAA1, Vec::new());
+        let theirs = make(0xBBB1, vec![label(1, "H")]);
+
+        let report = merge_db(&mut mine, theirs);
+
+        let got = mine
+            .exercises
+            .iter()
+            .find(|e| e.name == "ペックフライ")
+            .expect("同名に寄っている");
+        assert_eq!(
+            got.labels
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect::<Vec<_>>(),
+            ["H"],
+            "同名寄せの枝でラベルが落ちた"
+        );
+        assert_eq!(report.labels_added, 1);
+    }
+
+    /// 同名がちょうど 1 件なら寄せ、**ログの `label` が写像で張り替わる**。
+    /// これが「2 台で独立に定義した `P` を寄せたい」という名前側の利点の回収点。
+    #[test]
+    fn merge_maps_a_log_label_onto_the_locally_named_label() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut mine = preset_db_with_labels(vec![label(1, "P")]);
+        // 別 ID・同名。ログはあちらの ID を指している
+        let mut theirs = preset_db_with_labels(vec![label(7, "P")]);
+        theirs.sessions.insert(
+            date_key(d(2026, 8, 8)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: bench,
+                    label: Some(lb(7)),
+                    ..log(0, &[(100.0, 3)], None)
+                }],
+                ..Session::default()
+            },
+        );
+
+        merge_db(&mut mine, theirs);
+
+        assert_eq!(bench_labels(&mine).len(), 1, "同名は 2 本に増やさない");
+        assert_eq!(
+            mine.sessions[&date_key(d(2026, 8, 8))].logs[0].label,
+            Some(lb(1)),
+            "ログのラベルが写像で張り替わっていない"
+        );
+    }
+
+    /// ★ **写像のキーが `(ExerciseId, LabelId)` の組であることの主張。**
+    /// `LabelId` 単独だと後の `insert` が前を上書きし、**種目 A のログが種目 B の
+    /// ラベルへ張り替わって宙に浮く**。
+    #[test]
+    fn merge_does_not_confuse_the_same_label_id_used_by_two_exercises() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let squat = crate::presets::preset_exercise_id("スクワット").expect("プリセット");
+        // 取り込み先: 2 種目それぞれに別 ID で同名の "P"
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        for (ex, id) in [(bench, 1), (squat, 2)] {
+            if let Some(x) = mine.exercises.iter_mut().find(|x| x.id == ex) {
+                x.labels = vec![label(id, "P")];
+            }
+        }
+        // 取り込む側: **同じ `LabelId`(7)** を 2 種目で使い回している
+        let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        for ex in [bench, squat] {
+            if let Some(x) = theirs.exercises.iter_mut().find(|x| x.id == ex) {
+                x.labels = vec![label(7, "P")];
+            }
+        }
+        theirs.sessions.insert(
+            date_key(d(2026, 8, 8)),
+            Session {
+                logs: vec![
+                    ExerciseLog {
+                        exercise_id: bench,
+                        label: Some(lb(7)),
+                        ..log(0, &[(100.0, 3)], None)
+                    },
+                    ExerciseLog {
+                        exercise_id: squat,
+                        label: Some(lb(7)),
+                        ..log(0, &[(120.0, 5)], None)
+                    },
+                ],
+                ..Session::default()
+            },
+        );
+
+        merge_db(&mut mine, theirs);
+
+        let logs = &mine.sessions[&date_key(d(2026, 8, 8))].logs;
+        let of = |ex| {
+            logs.iter()
+                .find(|l| l.exercise_id == ex)
+                .expect("ログがある")
+                .label
+        };
+        assert_eq!(
+            of(bench),
+            Some(lb(1)),
+            "ベンチのログが別種目のラベルを指した"
+        );
+        assert_eq!(
+            of(squat),
+            Some(lb(2)),
+            "スクワットのログが別種目のラベルを指した"
+        );
+    }
+
+    /// ログの `label` は**空のときだけ**埋める（`mine` 優先）。
+    #[test]
+    fn merge_fills_a_log_label_only_when_it_is_empty() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let build = |label_id: Option<u64>| {
+            let mut db = preset_db_with_labels(vec![label(1, "H"), label(2, "P")]);
+            db.sessions.insert(
+                date_key(d(2026, 8, 8)),
+                Session {
+                    logs: vec![ExerciseLog {
+                        exercise_id: bench,
+                        label: label_id.map(lb),
+                        ..log(0, &[(100.0, 3)], None)
+                    }],
+                    ..Session::default()
+                },
+            );
+            db
+        };
+
+        // 空いている側は埋まる
+        let mut mine = build(None);
+        let report = merge_db(&mut mine, build(Some(2)));
+        assert_eq!(
+            mine.sessions[&date_key(d(2026, 8, 8))].logs[0].label,
+            Some(lb(2))
+        );
+        assert_eq!(report.labels_added, 1);
+
+        // 入っている側は上書きしない
+        let mut mine = build(Some(1));
+        let report = merge_db(&mut mine, build(Some(2)));
+        assert_eq!(
+            mine.sessions[&date_key(d(2026, 8, 8))].logs[0].label,
+            Some(lb(1)),
+            "古いファイル 1 枚で自分の選択を巻き戻してはいけない"
+        );
+        assert_eq!(report.labels_added, 0);
+    }
+
+    /// ★ **ラベルの差だけで「食い違い」の枝に落ちてはいけない。** 落ちると
+    /// `log_rank` が同点なので差し替えの分岐にも入らず、**取り込む側のセットメモが
+    /// `Conflict` も出さずに黙って捨てられる**
+    /// （adr/data-model/notes-on-logs-and-sets.md 決定 8 の ★ そのもの）。
+    #[test]
+    fn a_label_difference_alone_is_not_a_set_conflict() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let build = |label_id: u64, set_note: &str| {
+            let mut db = preset_db_with_labels(vec![label(1, "H"), label(2, "P")]);
+            db.sessions.insert(
+                date_key(d(2026, 8, 8)),
+                Session {
+                    logs: vec![ExerciseLog {
+                        exercise_id: bench,
+                        label: Some(lb(label_id)),
+                        sets: vec![SetEntry {
+                            weight: 100.0,
+                            reps: 3,
+                            note: set_note.to_string(),
+                            drops: Vec::new(),
+                        }],
+                        at: None,
+                        note: String::new(),
+                    }],
+                    ..Session::default()
+                },
+            );
+            db
+        };
+
+        let mut mine = build(1, "");
+        let report = merge_db(&mut mine, build(2, "あちらのメモ"));
+
+        assert!(
+            report.conflicts.is_empty(),
+            "ラベルの差を食い違いにしてはいけない: {:?}",
+            report.conflicts
+        );
+        assert_eq!(
+            mine.sessions[&date_key(d(2026, 8, 8))].logs[0].sets[0].note,
+            "あちらのメモ",
+            "セットメモが黙って捨てられた"
+        );
+    }
+
+    /// ★ セットが負けた枝でもラベルを持ち越す。`..log` に任せると勝った側で
+    /// 上書きされ、`mine` 優先で埋めたはずの値が入れ替わる。
+    #[test]
+    fn merge_keeps_my_label_even_when_my_sets_lose() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let build = |label_id: u64, sets: &[(f32, u32)]| {
+            let mut db = preset_db_with_labels(vec![label(1, "H"), label(2, "P")]);
+            db.sessions.insert(
+                date_key(d(2026, 8, 8)),
+                Session {
+                    logs: vec![ExerciseLog {
+                        exercise_id: bench,
+                        label: Some(lb(label_id)),
+                        ..log(0, sets, None)
+                    }],
+                    ..Session::default()
+                },
+            );
+            db
+        };
+
+        // 取り込む側のほうがセットが多い → `log_rank` の勝ち枝を通る
+        let mut mine = build(1, &[(100.0, 3)]);
+        merge_db(&mut mine, build(2, &[(100.0, 3), (100.0, 3), (100.0, 3)]));
+
+        let got = &mine.sessions[&date_key(d(2026, 8, 8))].logs[0];
+        assert_eq!(got.sets.len(), 3, "強いほうのセットを採る");
+        assert_eq!(got.label, Some(lb(1)), "自分のラベルが上書きされた");
+    }
+
+    #[test]
+    fn merging_the_same_labels_twice_adds_nothing_the_second_time() {
+        let theirs = || preset_db_with_labels(vec![label(1, "H"), label(2, "P")]);
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+
+        let first = merge_db(&mut mine, theirs());
+        let second = merge_db(&mut mine, theirs());
+
+        assert_eq!(first.labels_added, 2);
+        assert_eq!(second.labels_added, 0, "カウンタが冪等でない");
+        assert_eq!(bench_labels(&mine).len(), 2, "同じラベルが 2 本に増えた");
+    }
+
+    /// ★ ラベルだけが増えたマージは `conflicts` に出ないのに**チップが増えて履歴の
+    /// 見え方が変わる**。数えないと画面が「新しく取り込むものはありませんでした」と
+    /// 嘘をつく。
+    #[test]
+    fn a_merge_that_only_adds_labels_is_not_a_noop() {
+        let mut mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let report = merge_db(&mut mine, preset_db_with_labels(vec![label(1, "H")]));
+
+        assert_eq!(report.labels_added, 1);
+        assert!(!report.is_noop(), "ラベルだけ増えたときも noop ではない");
+    }
+
+    /// ラベルの列位置を見出しから引く（テストが列順に依存しないように）。
+    fn label_col(r: &[Vec<&str>]) -> usize {
+        r[0].iter()
+            .position(|c| *c == "ラベル")
+            .expect("ラベル列がある")
+    }
+
+    /// ★ **`ex_meta_written` に相乗りしていないことの証明。** あれは種目粒度で、
+    /// ラベルは日ごとに変わる。相乗りさせると 2 日目以降が全部落ちる。
+    #[test]
+    fn export_tsv_writes_the_label_once_per_log_not_once_per_exercise() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = preset_db_with_labels(vec![label(1, "H"), label(2, "P")]);
+        for (date, label_id, sets) in [
+            (d(2026, 8, 1), 1, &[(70.0, 10), (70.0, 10)][..]),
+            (d(2026, 8, 8), 2, &[(100.0, 3), (100.0, 3)][..]),
+        ] {
+            db.sessions.insert(
+                date_key(date),
+                Session {
+                    logs: vec![ExerciseLog {
+                        exercise_id: bench,
+                        label: Some(lb(label_id)),
+                        ..log(0, sets, None)
+                    }],
+                    ..Session::default()
+                },
+            );
+        }
+
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+        let r = rows(&tsv);
+        let col = label_col(&r);
+        let cells: Vec<(&str, &str)> = r[1..]
+            .iter()
+            .filter(|row| row[2] == "ベンチプレス")
+            .map(|row| (row[0], row[col]))
+            .collect();
+
+        assert_eq!(
+            cells,
+            vec![
+                ("2026-08-01", "H"),
+                ("2026-08-01", ""),
+                ("2026-08-08", "P"),
+                ("2026-08-08", ""),
+            ],
+            "日ごとに 1 回だけ書く（2 日目が落ちていない）"
+        );
+    }
+
+    /// セットが 1 本も無いログ（「肩が痛いのでやめた」）の行にも書く。
+    #[test]
+    fn export_tsv_writes_the_label_on_a_log_without_sets() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = preset_db_with_labels(vec![label(2, "P")]);
+        db.sessions.insert(
+            date_key(d(2026, 8, 8)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: bench,
+                    sets: Vec::new(),
+                    at: None,
+                    note: "肩が痛いのでやめた".into(),
+                    label: Some(lb(2)),
+                }],
+                ..Session::default()
+            },
+        );
+
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+        let r = rows(&tsv);
+        let col = label_col(&r);
+        assert_eq!(r[1][col], "P");
+    }
+
+    /// 体重だけの行 / 種目マスタ行 / メニュー行は空。
+    ///
+    /// ★ **未使用のラベル定義は TSV に載らない**（明示的トレードオフ）。
+    /// adr/storage/tsv-export-for-spreadsheets.md の基準「落ちてよいのは名前から
+    /// 作り直せるもの」を満たす — 未使用ラベルは打ち直せば完全に戻り、**ぶら下がる
+    /// 記録が 0 件**。使ったラベルは各ログ行が名前を運ぶので必ず復元される。
+    #[test]
+    fn export_tsv_leaves_the_label_empty_where_it_has_no_meaning() {
+        let squat = crate::presets::preset_exercise_id("スクワット").expect("プリセット");
+        let mut db = preset_db_with_labels(vec![label(1, "H")]);
+        // 使っていないラベルを持つ種目 + 体重だけの日 + メニュー
+        set_pins(&mut db, squat, vec!["7".into()]);
+        db.sessions.insert(
+            date_key(d(2026, 8, 2)),
+            Session {
+                logs: Vec::new(),
+                body_weight: Some(70.0),
+                note: String::new(),
+            },
+        );
+        db.routines.push(Routine {
+            id: r(1),
+            name: "胸の日".into(),
+            exercises: vec![squat],
+        });
+
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+        let rs = rows(&tsv);
+        let col = label_col(&rs);
+        for row in &rs[1..] {
+            assert_eq!(row[col], "", "記録行以外にラベルが出ている: {row:?}");
+        }
+        // ★ ラベル定義しか持たない種目のためにマスタ行を増やさない（非対称は意図）
+        assert!(
+            !rs[1..].iter().any(|row| row[2] == "ベンチプレス"),
+            "未使用のラベルのためにマスタ行を増やしている"
+        );
+    }
+
+    /// 書き出し → 新品端末へ戻す。**この経路が通らないと機種変更でラベルが消える。**
+    #[test]
+    fn tsv_round_trips_the_label_so_only_still_finds_the_same_day() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut db = preset_db_with_labels(vec![label(1, "H"), label(2, "P")]);
+        for (date, label_id, sets) in [
+            (d(2026, 8, 1), 1, &[(70.0, 10)][..]),
+            (d(2026, 8, 8), 2, &[(100.0, 3)][..]),
+        ] {
+            db.sessions.insert(
+                date_key(date),
+                Session {
+                    logs: vec![ExerciseLog {
+                        exercise_id: bench,
+                        label: Some(lb(label_id)),
+                        ..log(0, sets, None)
+                    }],
+                    ..Session::default()
+                },
+            );
+        }
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+
+        let mut fresh = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let incoming = parse_import(&tsv, &mut ids(), &fresh).expect("読み戻せる");
+        merge_db(&mut fresh, incoming);
+
+        let labels = fresh.exercise(bench).expect("種目").labels.clone();
+        assert_eq!(
+            labels.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+            ["H", "P"],
+            "TSV の往復でラベル定義が落ちた"
+        );
+        // 「P の前回」が 8/8 に戻る
+        let p = labels.iter().find(|l| l.name == "P").expect("P がある").id;
+        let got = last_logs_before_with(&fresh, bench, d(2026, 8, 9), 3, LabelFilter::Only(p));
+        assert_eq!(
+            got.iter().map(|(date, _)| *date).collect::<Vec<_>>(),
+            vec![d(2026, 8, 8)]
+        );
+    }
+
+    /// 自分のファイルを戻すだけなら**手元の ID を再利用**して `Conflict` を出さない
+    /// （`resolve_label` の梯子 1）。
+    #[test]
+    fn tsv_import_reuses_my_own_label_id_and_reports_no_conflict() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let mut mine = preset_db_with_labels(vec![label(1, "H"), label(2, "P")]);
+        mine.sessions.insert(
+            date_key(d(2026, 8, 8)),
+            Session {
+                logs: vec![ExerciseLog {
+                    exercise_id: bench,
+                    label: Some(lb(2)),
+                    ..log(0, &[(100.0, 3)], None)
+                }],
+                ..Session::default()
+            },
+        );
+        let tsv = export_tsv(&mine, jst(), crate::i18n::Lang::Ja);
+
+        let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読み戻せる");
+        // ★ ログが指す ID が**手元のもの**であること。新しく採番されると `merge_db` の
+        //   同名寄せ枝を通り、写像でログを張り替える余計な往復が増える。
+        //   （定義そのものは `resolve_exercise` の梯子 1 が手元の `Exercise` を丸ごと
+        //   複製するので未使用のものまで乗る。ファイルには載っていないので、
+        //   新品端末では往復テストのとおり使ったラベルだけが復元される）
+        assert_eq!(
+            incoming.sessions[&date_key(d(2026, 8, 8))].logs[0].label,
+            Some(lb(2)),
+            "手元の ID を再利用していない"
+        );
+
+        let report = merge_db(&mut mine, incoming);
+        assert_eq!(report.labels_added, 0, "自分のファイルでラベルが増えた");
+        assert_eq!(
+            mine.exercise(bench).expect("種目").labels.len(),
+            2,
+            "同名のラベルが増えた"
+        );
+    }
+
+    /// ★ **キャッシュの存在証明。** 無いと行ごとに採番して 1 種目に数百ラベルが生える。
+    #[test]
+    fn tsv_import_allocates_one_label_id_for_thirty_rows() {
+        let mut tsv = String::from("日付\t部位\t種目\tセット\t重量kg\t回数\tラベル\n");
+        for i in 1..=30 {
+            tsv.push_str(&format!("2026-08-{i:02}\t胸\tベンチプレス\t1\t100\t3\tP\n"));
+        }
+
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let incoming = parse_import(&tsv, &mut ids(), &mine).expect("読める");
+
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        assert_eq!(
+            incoming.exercise(bench).expect("種目").labels.len(),
+            1,
+            "行ごとに採番している"
+        );
+        // 全 30 日が同じラベルを指す
+        let id = incoming.exercise(bench).expect("種目").labels[0].id;
+        assert!(
+            incoming
+                .sessions
+                .values()
+                .all(|s| s.logs[0].label == Some(id))
+        );
+    }
+
+    /// ラベル列を持たない古いファイルも今までどおり読める（進化規則 3）。
+    #[test]
+    fn tsv_import_reads_a_file_written_before_the_label_column() {
+        let mine = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let incoming = parse_import(
+            "日付\t部位\t種目\tセット\t重量kg\t回数\n2026-08-01\t胸\tベンチプレス\t1\t60\t10\n",
+            &mut ids(),
+            &mine,
+        )
+        .expect("ラベル列より前しか無い TSV も読める");
+        assert!(incoming.exercises.iter().all(|e| e.labels.is_empty()));
+        assert!(
+            incoming
+                .sessions
+                .values()
+                .all(|s| s.logs.iter().all(|l| l.label.is_none()))
+        );
+    }
+
+    /// ★ 落ちた定義を指すログは取り込み直しても二度と生き返らない dangling になる。
+    /// **`is_noop()` には入れない**（何も増えていない）が、数は出す。
+    #[test]
+    fn labels_over_the_cap_are_counted_as_dropped() {
+        let full: Vec<Label> = (0..MAX_LABELS as u64)
+            .map(|i| label(i, &format!("L{i}")))
+            .collect();
+        let mut mine = preset_db_with_labels(full);
+        let report = merge_db(
+            &mut mine,
+            preset_db_with_labels(vec![label(99, "はみ出し")]),
+        );
+
+        assert_eq!(report.labels_dropped, 1);
+        assert_eq!(report.labels_added, 0);
+        assert_eq!(bench_labels(&mine).len(), MAX_LABELS, "上限を超えて入った");
+        assert!(
+            report.is_noop(),
+            "何も増えていないので is_noop は真。落ちたことは labels_dropped が言う"
+        );
     }
 }

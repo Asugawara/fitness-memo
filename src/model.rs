@@ -33,6 +33,7 @@ pub const SCHEMA: u32 = 3;
 pub type GroupId = Id<GroupTag>;
 pub type ExerciseId = Id<ExerciseTag>;
 pub type RoutineId = Id<RoutineTag>;
+pub type LabelId = Id<LabelTag>;
 
 // ── ID ──────────────────────────────────────────────────────────────────────
 //
@@ -78,6 +79,10 @@ pub struct ExerciseTag;
 /// トレーニングメニュー ID のタグ。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RoutineTag;
+
+/// ラベル ID のタグ。
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct LabelTag;
 
 impl<T> Id<T> {
     /// 予約領域の固定 ID を書くための入口。`const` なので `presets.rs` の定数に使える。
@@ -220,6 +225,42 @@ pub struct Group {
     pub order: u32,
 }
 
+/// 種目ごとのユーザー定義ラベル。**その種目のセッションの分類体系。**
+///
+/// HPS トレーニング（Hypertrophy / Power / Strength）のように、同じ種目で毎回
+/// 狙いを変えて重量とレップを変えるやり方がある。ラベルを [`ExerciseLog::label`] に
+/// 付けておくと、「前回」をその狙いの中だけから引ける
+/// （adr/data-model/labels-on-the-exercise-and-a-mark-on-the-log.md）。
+///
+/// ★ **ラベルは種目ごとに独立**（[`Exercise::labels`]）。共通プールを作らない。
+/// 参照の解決は必ず「そのログの種目の `labels` の中」で行うので、種目をまたいだ
+/// 宙に浮いた参照が構造的に起きない。
+///
+/// ★ **名前ではなく ID で参照する。** この機能の目的が「数か月にわたる Power の
+/// 履歴」なので、`P` → `Power` の改名で過去ログが全部外れる形は採れない。2 台で
+/// 独立に定義した `P` を寄せたいという名前側の利点は、`merge_db` が既に持つ梯子
+/// （ID 一致 → 同名 → 新規）で回収する。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Label {
+    pub id: LabelId,
+    pub name: String,
+    /// 推移タブのデータ点の色（`#rrggbb`）。
+    /// adr/ux/label-colour-on-the-progress-dots.md
+    ///
+    /// ★ **既定色の門番は [`crate::core::clean_labels`] の 1 箇所だけ。** 空文字や
+    /// `#rrggbb` でない値はそこで [`crate::core::next_label_color`] に置き換わるので、
+    /// 画面側は「有効な色が必ず入っている」前提で読める。逆に**有効な色は同色でも
+    /// 触らない** — 利用者が選んだ色を黙って書き換えない。
+    ///
+    /// ★ **`skip_serializing_if` を付けない。** [`Exercise::labels`] 自体が
+    /// `skip_serializing_if` なので、ラベルを使っていない利用者の JSON は
+    /// このフィールドが増えても 1 バイトも変わらない。付けると「色が空のラベル」と
+    /// 「色を持たない旧版のラベル」が JSON 上で区別できなくなり、書き出しの
+    /// バイト一致テストが表現できる形も 2 通りに割れる。
+    #[serde(default)]
+    pub color: String,
+}
+
 /// 種目。
 ///
 /// ★ 指標の種類（旧 `Kind`: 加重 / 自重 / 時間）は**持たない**。種目名を見れば
@@ -270,11 +311,29 @@ pub struct Exercise {
     /// 利用者の JSON は**今までとバイト単位で同一**のままになる。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interval_sec: Option<u32>,
+    /// その種目のラベルの**定義**（[`Label`]）。**`Vec` の順が表示順。**
+    ///
+    /// ★ [`Exercise::pins`] / [`Exercise::interval_sec`] と同じ「種目に貼り付く」棚。
+    /// 日ごとに変わるのは [`ExerciseLog::label`]（どのラベルを選んだか）だけ。
+    ///
+    /// ★ **プリセットには配らない。** 既定ラベルを配ると
+    /// adr/data-model/metric-is-a-view-setting.md で `Exercise.kind` を捨てた判断
+    /// （「ユーザーに宣言させる意味が無い」）を逆走する。定義が 0 本の種目では
+    /// 記録タブのチップ行ごと描かないので、既存利用者の画面は 1px も動かない。
+    ///
+    /// 不変条件: `id` は重複しない（[`crate::core::normalize`] が採り直す。
+    /// `<For key=id>` の重複キーは wasm で panic する）。**同名は潰さない**
+    /// （`merge_db` が正当に生む）。
+    ///
+    /// ★ `skip_serializing_if` は [`Exercise::pins`] と同じ理由。ラベルを使わない
+    /// 利用者の JSON は**今までとバイト単位で同一**のままになる。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<Label>,
 }
 
 /// 1 種目が持てるピンの本数。
 ///
-/// 393px 幅のカードで内側 369px、チップ 1 個が約 84px なので 4 個 × 2 行が現実的な
+/// 393px 幅のカードで内側 339px、チップ 1 個が約 84px なので 4 個 × 2 行が現実的な
 /// 上限。UI からはここまでしか入らないが、**取り込んだ JSON には何個でも入りうる**
 /// ので [`crate::core::normalize`] が門番になる（`drop_unrepresentable_weights` と
 /// 同じ立場）。
@@ -296,6 +355,31 @@ pub const MAX_INTERVAL_SEC: u32 = 999;
 /// ★ 別の定数にするのは、`maxlength` が**文字数**で上限が**値**なので単位が違うため。
 /// 2 つがずれないことは `max_interval_len_matches_the_cap` が見る。
 pub const MAX_INTERVAL_LEN: usize = 3;
+
+/// 1 種目が持てるラベルの本数。
+///
+/// ★ **これは取り込みの門番であって、カードの高さの保証ではない**（[`MAX_PINS`] と
+/// 同じ立場）。チップ 1 行は 50px（44 + gap 6）で、行数はラベル名の長さで 2〜7 行に
+/// 振れる（カード内側 339px に対し、1 文字チップなら 1 行 5 個、"Hypertrophy" なら
+/// 2 個）。UI からはここまでしか入らないが、**取り込んだ JSON には何個でも入りうる**。
+pub const MAX_LABELS: usize = 6;
+
+/// ラベル 1 つの長さ。**バイトではなく char で数える**（バイトで切ると UTF-8 の
+/// 途中で割れて panic する。[`MAX_PIN_LEN`] と同じ）。
+///
+/// "Hypertrophy"(11) と「高重量ローレップ」(8) が収まる。
+///
+/// ★ **入力欄の `maxlength` はこの定数を補間する**（`views::settings` の
+/// `maxlength=MAX_LABEL_LEN.to_string()`）。同じ定数なので 2 つの値がドリフトする
+/// 経路は構造的に無い。
+///
+/// ★ ただし**単位は厳密には一致しない**。HTML の `maxlength` は **UTF-16 コード
+/// ユニット**を数えるので、サロゲートペア（絵文字など）を含む名前は UI では 6 文字で
+/// 止まる一方、[`crate::core::set_labels`] は 12 char まで許す。BMP 内の文字
+/// （日本語・英数・記号）では一致するので実害は無く、**UI のほうが厳しい側にずれる**
+/// ので「打てたのに切られる」は起きない
+/// （`the_label_length_cap_reads_the_same_in_chars_and_utf16_for_these_names`）。
+pub const MAX_LABEL_LEN: usize = 12;
 
 /// 名前付きの種目リスト。**UI では「トレーニングメニュー」**。
 ///
@@ -416,6 +500,27 @@ pub struct ExerciseLog {
     /// こちらは種目に閉じる。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// **その日その種目**に付けた狙いのラベル（[`Exercise::labels`] の 1 つを指す）。
+    ///
+    /// ★ 粒度は「その日その種目に 1 つ」。[`SetEntry`] には持たせない
+    /// （adr/data-model/notes-on-logs-and-sets.md の粒度の 3 つ目の軸）。
+    ///
+    /// ★ **`Option` で「ラベルなし」を言う。** `Id::default()`（`Id(0)` 番兵）は
+    /// 使わない。
+    ///
+    /// ★ 参照先が存在しないことは**ある**（他端末のデータを取り込む / 設定タブで
+    /// 定義を削除する）。[`crate::core::normalize`] は**消さない**
+    /// （`normalize_routines` の「宙に浮いた参照は宙に浮いたまま残す」と同じ規則。
+    /// 後から相手のファイルを取り込めば生き返る）。読み出し側が門番になる。
+    ///
+    /// ★ **[`ExerciseLog::is_empty`] に入れない。** 入れるとラベルだけのログが
+    /// 保存に値することになり、セット 0 本のゴーストが `has_logs_on` を真にして
+    /// その日が候補リストから永久に外れる。
+    ///
+    /// ★ `skip_serializing_if` は [`ExerciseLog::note`] と同じ理由。ラベルを使わない
+    /// 利用者の JSON は**今までとバイト単位で同一**のままになる。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<LabelId>,
 }
 
 impl ExerciseLog {
@@ -631,6 +736,7 @@ mod tests {
             sets,
             at: None,
             note: note.to_string(),
+            label: None,
         }
     }
 
@@ -748,13 +854,17 @@ mod tests {
             archived: false,
             pins,
             interval_sec: None,
+            labels: Vec::new(),
         }
     }
 
+    /// ピン・インターバル・ラベルが空/未設定なら 3 つとも JSON に出ない。バイト一致で
+    /// 見る（崩れるとそれらを使っていない利用者の保存データが変わり、
+    /// `e2e/pwa.spec.mjs` が組み立てている生 JSON と食い違う）。入力・期待文字列が
+    /// 3 フィールドとも同一だった旧 `exercise_omits_an_unset_interval_from_its_json` /
+    /// `exercise_omits_empty_labels_from_its_json` をここに統合した。
     #[test]
-    fn exercise_omits_empty_pins_from_its_json() {
-        // ★ バイト一致で見る。ここが崩れるとピンを使っていない利用者の保存データが
-        //   変わり、`e2e/pwa.spec.mjs` が組み立てている生 JSON と食い違う
+    fn exercise_omits_empty_optional_fields_from_its_json() {
         assert_eq!(
             serde_json::to_string(&ex_of(Vec::new())).expect("直列化できる"),
             r#"{"id":"000000000001","name":"ベンチプレス","group_id":"000000000002","order":0,"archived":false}"#
@@ -780,16 +890,6 @@ mod tests {
     }
 
     // ── インターバル（adr/ux/interval-seconds-on-the-exercise.md）──────────────
-
-    #[test]
-    fn exercise_omits_an_unset_interval_from_its_json() {
-        // ★ バイト一致で見る。ここが崩れるとインターバルを使っていない利用者の保存
-        //   データが変わり、`e2e/pwa.spec.mjs` が組み立てている生 JSON と食い違う
-        assert_eq!(
-            serde_json::to_string(&ex_of(Vec::new())).expect("直列化できる"),
-            r#"{"id":"000000000001","name":"ベンチプレス","group_id":"000000000002","order":0,"archived":false}"#
-        );
-    }
 
     #[test]
     fn exercise_writes_the_interval_when_it_is_set() {
@@ -906,5 +1006,137 @@ mod tests {
             !session.is_trained(),
             "メモだけの日にカレンダーのドットを点けてはいけない"
         );
+    }
+
+    // ── ラベル（adr/data-model/labels-on-the-exercise-and-a-mark-on-the-log.md）──
+
+    type L = Id<LabelTag>;
+
+    #[test]
+    fn exercise_writes_labels_when_there_are_any() {
+        let mut ex = ex_of(Vec::new());
+        ex.labels.push(Label {
+            id: L::from_bits(0x1_0001),
+            name: "P".into(),
+            color: "#e0524a".into(),
+        });
+        let json = serde_json::to_string(&ex).expect("直列化できる");
+        assert!(
+            json.ends_with(r##","labels":[{"id":"000000002001","name":"P","color":"#e0524a"}]}"##),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn exercise_reads_json_written_before_labels_existed() {
+        // ★ schema を上げずにフィールドを足せる根拠（SCHEMA の doc）。ピン / インターバルを
+        //   足したときと同じで、旧版が書いた JSON がそのまま読めるので `migrate` は
+        //   Err を返さず退避パスにも落ちない
+        let ex: Exercise = serde_json::from_str(
+            r#"{"id":"000000000001","name":"ベンチプレス","group_id":"000000000002","order":0,"archived":false,"pins":["3"],"interval_sec":90}"#,
+        )
+        .expect("ラベル以前の形も読める");
+        assert!(ex.labels.is_empty());
+        assert_eq!(ex.interval_sec, Some(90));
+    }
+
+    #[test]
+    fn exercise_log_omits_an_unset_label_from_its_json() {
+        let json = serde_json::to_string(&log_of(Vec::new(), "")).expect("直列化できる");
+        assert!(
+            !json.contains("label"),
+            "ラベルなしで label が出ている: {json}"
+        );
+    }
+
+    #[test]
+    fn exercise_log_writes_the_label_when_it_is_set() {
+        let mut log = log_of(Vec::new(), "");
+        log.label = Some(L::from_bits(0x1_0001));
+        let json = serde_json::to_string(&log).expect("直列化できる");
+        assert!(json.ends_with(r#","label":"000000002001"}"#), "{json}");
+    }
+
+    #[test]
+    fn exercise_log_reads_json_written_before_labels_existed() {
+        let log: ExerciseLog =
+            serde_json::from_str(r#"{"exercise_id":"000000000001","sets":[],"note":"肩が痛い"}"#)
+                .expect("ラベル以前の形も読める");
+        assert_eq!(log.label, None);
+        assert_eq!(log.note, "肩が痛い");
+    }
+
+    #[test]
+    fn a_log_with_only_a_label_is_still_empty() {
+        // ★ `is_empty` にラベルを入れてはいけない。入れるとセット 0 本のログが
+        //   保存に値することになり、`has_logs_on` を真にするゴーストが永続して
+        //   **その日が候補リストから永久に外れる**。逆に `views::day` の側は
+        //   「ラベルだけのカードは Db に何も書かない」設計でこれと噛み合っている
+        let mut log = log_of(Vec::new(), "");
+        log.label = Some(L::from_bits(0x1_0001));
+        assert!(log.is_empty(), "ラベルだけのログを保存してはいけない");
+
+        let session = Session {
+            logs: vec![log],
+            body_weight: None,
+            note: String::new(),
+        };
+        assert!(!session.is_trained(), "ラベルはトレーニングの証拠ではない");
+    }
+
+    #[test]
+    fn a_label_round_trips_through_json() {
+        let label = Label {
+            id: L::from_bits(0x1_0001),
+            name: "高重量ローレップ".into(),
+            color: "#7a56c9".into(),
+        };
+        let json = serde_json::to_string(&label).expect("直列化できる");
+        assert_eq!(
+            serde_json::from_str::<Label>(&json).expect("読み戻せる"),
+            label,
+            "{json}"
+        );
+    }
+
+    /// ★ 色を足しても schema を上げずに済む根拠（`#[serde(default)]`）。旧版が書いた
+    /// ラベルは色を持たないので、読めなければ `migrate` が Err を返して退避パスへ
+    /// 落ち、**ラベルを使っている利用者だけが旧世代へ降格する**。
+    ///
+    /// 空で読めた色は [`crate::core::clean_labels`] が正規化のたびにパレットから
+    /// 埋めるので、画面に空の色が出ることはない。
+    #[test]
+    fn a_label_reads_json_written_before_colours_existed() {
+        let label: Label = serde_json::from_str(r#"{"id":"000000002001","name":"P"}"#)
+            .expect("色以前の形も読める");
+        assert_eq!(label.name, "P");
+        assert_eq!(label.color, "", "色の無い形は空で読む（埋めるのは core）");
+    }
+
+    /// 入力欄の `maxlength`（UTF-16 コードユニット）と [`MAX_LABEL_LEN`]（char）の
+    /// 単位差が、この機能が対象にする名前では現れないこと。
+    ///
+    /// ★ **`MAX_INTERVAL_LEN` の `max_interval_len_matches_the_cap` とは性質が違う。**
+    /// あちらは `MAX_INTERVAL_SEC`（値）と `MAX_INTERVAL_LEN`（文字数）という**別々の
+    /// 2 定数**の突き合わせだが、`views::settings` は
+    /// `maxlength=MAX_LABEL_LEN.to_string()` と**同じ定数を補間している**ので、2 つの値が
+    /// ドリフトする経路が構造的に存在しない。残る差は単位だけで、それをここで見る。
+    ///
+    /// ★ ずれるときは UI のほうが厳しい側（サロゲートペア 1 文字 = 2 コードユニット）
+    /// なので、「打てたのに保存で切られる」は起きない。
+    #[test]
+    fn the_label_length_cap_reads_the_same_in_chars_and_utf16_for_these_names() {
+        for name in [
+            "Hypertrophy",
+            "高重量ローレップ",
+            "あいうえおかきくけこさし",
+        ] {
+            assert_eq!(
+                name.chars().count(),
+                name.encode_utf16().count(),
+                "BMP 外の文字が混ざっている: {name}"
+            );
+            assert!(name.chars().count() <= MAX_LABEL_LEN, "{name}");
+        }
     }
 }

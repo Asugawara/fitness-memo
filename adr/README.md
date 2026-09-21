@@ -91,7 +91,8 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](ux/copy-whole-day-menu.md) | 採用（候補の出所は [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) で拡張） |
 | [ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする](ux/install-guide-banner-and-sheet.md) | 採用 |
 | [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](ux/destructive-affordance-quiet-at-rest.md) | 採用 |
-| [体重を推移グラフの第2軸に常時重ねる](ux/body-weight-second-axis-always-on.md) | 採用 |
+| [体重を推移グラフの第2軸に常時重ねる](ux/body-weight-second-axis-always-on.md) | 採用（決定 5 は [体重の線を 3M / 6M / 1Y ごとに日ごと / 週平均から選ぶ設定にする](ux/weight-line-daily-or-weekly-per-period.md) で改訂） |
+| [体重の線を 3M / 6M / 1Y ごとに日ごと / 週平均から選ぶ設定にする](ux/weight-line-daily-or-weekly-per-period.md) | 採用 |
 | [セット削除は確認を挟まない（カード削除の確認は残す）](ux/set-delete-without-confirmation.md) | 採用 |
 | [`color-scheme` を宣言し、クラスなしの `<button>` を作らない](ux/declare-color-scheme-for-ua-widgets.md) | 採用（`input[type=file]` は受益者から外れた） |
 | [シートをネイティブ `<dialog>` にし、手動の重なり順から降りる](ux/native-dialog-for-sheets.md) | 採用 |

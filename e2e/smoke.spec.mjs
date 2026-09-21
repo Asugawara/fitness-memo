@@ -739,7 +739,7 @@ test('全期間の体重は合計ではなく週平均で集計される', async
   expect(labels).toEqual(['70.5', '70', '69.5']);
 });
 
-// ★ 週平均に落とす経路（体重 45 点超）はブラウザでも一度は通しておく。
+// ★ 既定の 1Y は週平均に落とす。その経路をブラウザでも一度は通す。
 //   単体テストで座標は固めてあるが、SVG 属性の綴りは実行時に黙って無視されるため
 test('毎日の記録が続いても体重の破線がプロット領域からはみ出さない', async ({ page }) => {
   const entries = [
@@ -752,8 +752,10 @@ test('毎日の記録が続いても体重の破線がプロット領域から�
   await seedPastLogs(page, entries);
 
   await page.getByTestId('tab-progress').click();
+  await page.getByTestId('period-select').getByTestId('period-btn')
+    .filter({ hasText: '1Y' }).click();
   const chart = page.getByTestId('chart');
-  // 56 点 > WEIGHT_DENSE_POINTS(45) なので描画は週平均に落ちている
+  // 56 日は 1Y の範囲内。既定の 1Y は週平均なので描画は週平均に落ちている
   await expect(chart).toHaveAttribute('data-weight-smoothed', 'true');
 
   const outside = await chart.evaluate((svg) => {
@@ -3049,11 +3051,11 @@ test('★ 設定タブの入口は節の一覧で、中身は入るまで出な�
   await blurActive(page);
   await page.getByTestId('tab-settings').click();
 
-  // トップは 8 行だけ（書き出し / メニュー / 種目 / 表示数 / ドロップセット /
-  // ホーム画面 / 活用方法 / 言語）。
+  // トップは 9 行だけ（書き出し / メニュー / 種目 / 表示数 / ドロップセット /
+  // 体重の線 / ホーム画面 / 活用方法 / 言語）。
   // 種目もメニューも 1 件も出ていない
   // （`.row` で数える。手順シートの <dialog> も同じ親に出るので `> *` だと 1 多くなる）
-  await expect(page.getByTestId('settings-rows').locator('.row')).toHaveCount(8);
+  await expect(page.getByTestId('settings-rows').locator('.row')).toHaveCount(9);
   await expect(page.getByTestId('group-item')).toHaveCount(0);
   await expect(page.getByTestId('routine-item')).toHaveCount(0);
   await expect(page.getByTestId('settings-add-group')).toHaveCount(0);

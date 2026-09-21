@@ -1098,6 +1098,27 @@ h3 {
   color: var(--muted);
 }
 
+/* 体重の線（設定）: 期間ラベル + 2 択のセグメントを 1 行に。`.pct-box` と同じ寸法
+   （adr/ux/weight-line-daily-or-weekly-per-period.md） */
+.wline-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.wline-label {
+  flex: none;
+  min-width: 2.2em;
+  font-weight: 600;
+}
+
+.wline-row > .segmented {
+  flex: 1;
+}
+
 /* 入力欄そのものは `.pin-num` とセレクタを共有している（同じ見た目の同じ部品）。
    単位の「秒」はラベルと同じ --muted / 13px を継ぐので専用ルールは持たない。
    ★ gap は `.pin-box` の列間 10px と同値。数値と「秒」が詰まって

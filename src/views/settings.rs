@@ -26,7 +26,7 @@
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
-use crate::core::Drops;
+use crate::core::{Drops, WeightLine, WeightLines};
 use crate::i18n::Lang;
 use crate::model::{
     Db, Exercise, ExerciseId, Group, GroupId, Label, LabelId, MAX_LABEL_LEN, MAX_LABELS, RoutineId,
@@ -40,7 +40,7 @@ use super::routine::{RoutineEditor, routine_exercise_names};
 use super::{
     SettingsPage, Sheet, cur_lang, ex_name, fmt_weight, grp_name, kb_blur, kb_focus, parse_weight,
     scroll_into_view_if_needed, t, use_db, use_drop_pct, use_drops, use_history_count, use_kb,
-    use_lang, use_open_group, use_settings_page,
+    use_lang, use_open_group, use_settings_page, use_weight_lines,
 };
 
 /// 部位を追加するときの既定色。プリセットの 6 色を順に回す。
@@ -297,6 +297,7 @@ pub fn Settings() -> impl IntoView {
     let hist = use_history_count();
     let drops = use_drops();
     let drop_pct = use_drop_pct();
+    let lines = use_weight_lines();
     // ★ 落とし幅の入力欄のため。キーボードが開くとタブ帯を隠す仕組みに乗せる
     //   （adr/pwa/hide-tabs-when-keyboard-open.md）
     let kb = use_kb();
@@ -419,6 +420,13 @@ pub fn Settings() -> impl IntoView {
                                 ),
                                 "settings-row-drop-sets",
                                 move || go(SettingsPage::DropSets),
+                            )}
+                            // 表示数・ドロップセットと同じ「推移の見せ方」の帯。右端は現在値
+                            {section_row(
+                                t.settings.row_weight_line,
+                                Some(Signal::derive(move || cur_lang().weight_line_summary(lines.get()))),
+                                "settings-row-weight-line",
+                                move || go(SettingsPage::WeightLine),
                             )}
                             // 手順シートを開くだけなので、節ではなく行として並べる
                             <InstallHelpLink />
@@ -636,6 +644,80 @@ pub fn Settings() -> impl IntoView {
 
                         <p class="settings-note muted" data-testid="drop-pct-note">
                             {t.settings.drop_pct_note}
+                        </p>
+                    }
+                        .into_any()
+                }
+                SettingsPage::WeightLine => {
+                    // 3 行（3M / 6M / 1Y）を 1 つの配列から作る。fn ポインタで
+                    // getter / setter を持つ（マークアップを 3 回複製しない）
+                    type Get = fn(&WeightLines) -> WeightLine;
+                    type Set = fn(&mut WeightLines, WeightLine);
+                    const ROWS: [(&str, &str, Get, Set); 3] = [
+                        ("3m", "3M", |w| w.m3, |w, l| w.m3 = l),
+                        ("6m", "6M", |w| w.m6, |w, l| w.m6 = l),
+                        ("1y", "1Y", |w| w.y1, |w, l| w.y1 = l),
+                    ];
+                    // 言語 / 表示数ページと同じ形（同値ガード → 保存 → シグナル）
+                    let pick = move |set: Set, l: WeightLine| {
+                        let mut next = lines.get_untracked();
+                        set(&mut next, l);
+                        if next == lines.get_untracked() {
+                            return;
+                        }
+                        storage::save_weight_lines(next);
+                        lines.set(next);
+                    };
+                    view! {
+                        {back_head(t.settings.row_weight_line, move || go(SettingsPage::Root))}
+
+                        {ROWS
+                            .into_iter()
+                            .map(|(period, period_label, get, set)| {
+                                view! {
+                                    <div
+                                        class="wline-row"
+                                        data-testid="weight-line-row"
+                                        data-period=period
+                                    >
+                                        <span class="wline-label">{period_label}</span>
+                                        <div
+                                            class="segmented"
+                                            role="group"
+                                            aria-label=cur_lang().weight_line_for(period_label)
+                                            data-testid="weight-line-select"
+                                        >
+                                            {[
+                                                (WeightLine::Daily, t.settings.weight_line_daily, "daily"),
+                                                (WeightLine::Weekly, t.settings.weight_line_weekly, "weekly"),
+                                            ]
+                                                .into_iter()
+                                                .map(|(l, label, line_attr)| {
+                                                    view! {
+                                                        <button
+                                                            class="seg-btn"
+                                                            class:active=move || get(&lines.get()) == l
+                                                            aria-pressed=move || {
+                                                                (get(&lines.get()) == l).to_string()
+                                                            }
+                                                            data-testid="weight-line-btn"
+                                                            data-period=period
+                                                            data-line=line_attr
+                                                            on:click=move |_| pick(set, l)
+                                                        >
+                                                            {label}
+                                                        </button>
+                                                    }
+                                                })
+                                                .collect::<Vec<_>>()}
+                                        </div>
+                                    </div>
+                                }
+                            })
+                            .collect::<Vec<_>>()}
+
+                        <p class="settings-note muted" data-testid="weight-line-note">
+                            {t.settings.weight_line_note}
                         </p>
                     }
                         .into_any()

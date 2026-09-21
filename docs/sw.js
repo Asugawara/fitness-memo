@@ -1,5 +1,5 @@
-const CACHE = `fitness-memo-4ca95a6ed56b36fa`;
-const SHELL = ["./fitness-memo-a42b6227880d20e9.js","./fitness-memo-a42b6227880d20e9_bg.wasm","./icons/icon-192.png","./icons/icon-32.png","./icons/icon-512.png","./icons/icon-maskable-512.png","./index.html","./manifest.webmanifest","./styles-692f5992a85cb41c.css",];
+const CACHE = `fitness-memo-d477aa51f6f2220a`;
+const SHELL = ["./fitness-memo-33d7510633e2937f.js","./fitness-memo-33d7510633e2937f_bg.wasm","./icons/icon-192.png","./icons/icon-32.png","./icons/icon-512.png","./icons/icon-maskable-512.png","./index.html","./manifest.webmanifest","./styles-65a392e15cf1de9d.css",];
 
 self.addEventListener('install', e => e.waitUntil((async () => {
   const c = await caches.open(CACHE);

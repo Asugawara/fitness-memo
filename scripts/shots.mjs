@@ -1,10 +1,12 @@
-// README の「画面」セクションと、設定タブのマニュアルの図を撮り直す。
+// README の「画面」セクションと、設定タブのマニュアル / お知らせの図を撮り直す。
 //
 //   trunk build
-//   node scripts/shots.mjs                          # README 3 枚 + マニュアル 24 枚
-//   node scripts/shots.mjs --only=manual            # マニュアル 24 枚だけ（★ pre-commit が呼ぶのはこれ）
+//   node scripts/shots.mjs                          # README 3 枚 + マニュアル 24 枚 + お知らせの図
+//   node scripts/shots.mjs --only=manual            # マニュアルだけ（★ pre-commit は --only=manual,whatsnew）
 //   node scripts/shots.mjs --only=readme            # README 3 枚だけ（UI を触った PR の最後に手で叩く）
-//   node scripts/shots.mjs --only=manual:copy-last  # 1 図だけ（ja / en 両方）。反復用
+//   node scripts/shots.mjs --only=whatsnew          # お知らせの図だけ
+//   node scripts/shots.mjs --only=manual,whatsnew   # 種別をカンマ区切りで複数（pre-commit が呼ぶ形）
+//   node scripts/shots.mjs --only=manual:copy-last  # 1 図だけ（ja / en 両方）。種別が 1 つのときだけ id を付けられる
 //   node scripts/shots.mjs --check                  # 一時ディレクトリに撮ってバイト比較。差があれば exit 1
 //
 // 環境変数は scripts/static-server.mjs と同名同義にしてある:
@@ -314,6 +316,46 @@ const FIGS = [
   { id: 'whats-new', pad: 0, scroll: false, setup: setupWhatsNew },
 ];
 
+/**
+ * 「新機能のお知らせ」の図。マニュアルの `FIGS` とは**別コンテキスト（ctx D/E）**で撮る
+ * （`setupWeightLine` の doc を見よ。マニュアルの `FIGS` は順序依存で、混ぜると単発撮影と
+ * 全枚数撮影の絵が食い違いうる）。
+ *
+ * 既存 id 1〜4 は図の基準（`adr/ux/whats-new-notes-are-user-facing-features-with-figures.md`）
+ * より前なので図を付けない。id 5（体重の線）にだけ 1 枚。
+ */
+const WN_FIGS = [{ id: 'weight-line', pad: 4, setup: setupWeightLine, teardown: teardownWeightLine }];
+
+/**
+ * 章「体重の線」。被写体は**設定の「体重の線」節（見出し + 3 本の行）**。
+ *
+ * ★ **`pad` は 4（8 ではない）。** `.settings-head` は `margin-left: -10px`
+ *   （`styles.css:2098-2104`。`:first-child` のトップだけ 0）で `.screen` の左 padding
+ *   14px（`:182`）に食い込み x ≈ 4px。pad 8 だと `left = -4 < 0` で `clipOf` が
+ *   「viewport をはみ出す」で throw する。pad 4 なら left = 0、right ≈ 383 < 393。
+ * ★ 見出し（h1「体重の線」/「Weight line」）を入れて図を自己完結させる。
+ * ★ **セグメントは押さない。** `storage::save_weight_lines` が走って db を汚す
+ *   （既定値 3M/6M 日ごと・1Y 週平均が被写体）。
+ * ★ `weight-line-note` は入れない（長文で縦に伸びるだけ）。
+ */
+async function setupWeightLine(page) {
+  await gotoTab(page, 'tab-settings', 'screen-settings');
+  if ((await page.getByTestId('settings-back').count()) > 0) {
+    await page.getByTestId('settings-back').click();
+    await settle(page);
+  }
+  await page.getByTestId('settings-row-weight-line').click();
+  const rows = page.getByTestId('weight-line-row');
+  await waitFor(async () => (await rows.count()) === 3, '体重の線の行が 3 本出る');
+  return [page.locator('.settings-head'), rows.first(), rows.last()];
+}
+
+/** [`setupWeightLine`] の後始末。設定ページの状態はタブ往復で保持されるので Root へ戻す */
+async function teardownWeightLine(page) {
+  await page.getByTestId('settings-back').click();
+  await settle(page);
+}
+
 // ── 引数 ──────────────────────────────────────────────────────────────────────
 
 const argv = process.argv.slice(2);
@@ -321,33 +363,51 @@ const check = argv.includes('--check');
 const only = argv.find((a) => a.startsWith('--only='))?.slice('--only='.length) ?? null;
 for (const a of argv) {
   if (a !== '--check' && !a.startsWith('--only=')) {
-    throw new Error(`知らない引数: ${a}（--only=readme|manual|manual:<id> / --check）`);
+    throw new Error(`知らない引数: ${a}（--only=<kind>[,<kind>…] | <kind>:<id> / --check。kind は readme|manual|whatsnew）`);
   }
 }
 
-let wantReadme = true;
-let wantManual = true;
+/**
+ * `--only=` の種別リスト（カンマ区切り）を解く。
+ *
+ * ★ 既存の `--only=manual` / `--only=readme` / `--only=manual:<id>` の意味は変えない
+ *   （後方互換）。`:<id>` は種別が 1 つのときだけ許す。`readme` に id は付かない。
+ *   重複・複数種別 + id・未知 id は throw。
+ */
+let wantReadme = false;
+let wantManual = false;
+let wantWhatsnew = false;
 let figFilter = null;
-if (only !== null) {
-  const [kind, id, ...rest] = only.split(':');
+if (only === null) {
+  wantReadme = true;
+  wantManual = true;
+  wantWhatsnew = true;
+} else {
+  const [kindsPart, idPart, ...rest] = only.split(':');
   if (rest.length > 0) throw new Error(`--only= の形が違う: ${only}`);
-  if (kind === 'readme') {
-    if (id) throw new Error('--only=readme に図の指定は付かない');
-    wantManual = false;
-  } else if (kind === 'manual') {
-    wantReadme = false;
-    if (id) {
-      if (!FIGS.some((f) => f.id === id)) {
-        throw new Error(`知らない図: ${id}（${FIGS.map((f) => f.id).join(' / ')}）`);
-      }
-      figFilter = id;
+  const kinds = kindsPart.split(',');
+  const seen = new Set();
+  for (const kind of kinds) {
+    if (seen.has(kind)) throw new Error(`--only= に種別が重複している: ${kind}`);
+    seen.add(kind);
+    if (kind === 'readme') wantReadme = true;
+    else if (kind === 'manual') wantManual = true;
+    else if (kind === 'whatsnew') wantWhatsnew = true;
+    else throw new Error(`--only= は readme / manual / whatsnew のどれか: ${kind}`);
+  }
+  if (idPart) {
+    if (kinds.length > 1) throw new Error('--only= に id を付けられるのは種別が 1 つのときだけ');
+    if (kinds[0] === 'readme') throw new Error('--only=readme に図の指定は付かない');
+    const list = kinds[0] === 'manual' ? FIGS : WN_FIGS;
+    if (!list.some((f) => f.id === idPart)) {
+      throw new Error(`知らない図: ${idPart}（${list.map((f) => f.id).join(' / ')}）`);
     }
-  } else {
-    throw new Error(`--only= は readme / manual / manual:<id> のどれか: ${only}`);
+    figFilter = idPart;
   }
 }
 
 const figs = FIGS.filter((f) => figFilter === null || f.id === figFilter);
+const wnFigs = wantWhatsnew ? WN_FIGS.filter((f) => figFilter === null || f.id === figFilter) : [];
 
 // ── 出力先 ────────────────────────────────────────────────────────────────────
 
@@ -356,6 +416,8 @@ const outRoot = check ? await mkdtemp(join(tmpdir(), 'fitness-memo-shots-')) : R
 const readmeOut = (file) => join(outRoot, 'assets', file);
 const manualOut = (lang, id) => join(outRoot, 'public', 'manual', lang, `${id}.webp`);
 const manualRepo = (lang, id) => join(REPO_ROOT, 'public', 'manual', lang, `${id}.webp`);
+const whatsnewOut = (lang, id) => join(outRoot, 'public', 'whatsnew', lang, `${id}.webp`);
+const whatsnewRepo = (lang, id) => join(REPO_ROOT, 'public', 'whatsnew', lang, `${id}.webp`);
 
 // ── ページ側に流し込む init script ────────────────────────────────────────────
 
@@ -677,7 +739,7 @@ function englishNames(json) {
 // ── 図ごとの setup ────────────────────────────────────────────────────────────
 //
 // setup は「撮る直前の状態」を作り、clip の対象になる locator の配列を返す。
-// スクロール（scrollUnion）とクリップ（clipOf）は shootManual が共通に行うので、
+// スクロール（scrollUnion）とクリップ（clipOf）は shootFigs が共通に行うので、
 // setup は**位置を決めない**。
 
 /**
@@ -877,7 +939,7 @@ async function setupAccordions(page, { ids }) {
  * ★ **選ぶ種目は当日にセットを持たないもの**に限る。シードは当日にベンチプレスと
  *   ダンベルプレスを持つので、その 2 つでは `show_copy`（day.rs:943）が偽になる。
  *
- * ★ `pick()` の rAF スクロールと競合する。**2 フレーム待ってから** shootManual の
+ * ★ `pick()` の rAF スクロールと競合する。**2 フレーム待ってから** shootFigs の
  *   `scrollUnion` が位置を上書きするので、run ごとに絵が変わらない。
  */
 async function setupCopyLast(page, { ids }) {
@@ -923,7 +985,7 @@ async function setupBackup(page) {
  *   1 枚 400px 超で、上下と一緒には viewport に入らなかった）。
  *
  * 押しっぱなしのまま撮るので、`mouse.up()` は撮影の**後**（[`teardownReorder`]）。
- * `shootManual` が `fig.teardown` を呼ぶ。
+ * `shootFigs` が `fig.teardown` を呼ぶ。
  *
  * ★ **待ち時間はゼロなので一律待ちを置かない。** `pointerdown` の中で
  *   `row_drag` が立つ（`views/day.rs` のセット行の `grab`。カードの `.card-head` と
@@ -977,7 +1039,7 @@ async function setupReorder(page, { ids }) {
   return targets;
 }
 
-/** [`setupReorder`] の後始末。**撮影の後**に呼ばれる（`shootManual`）。 */
+/** [`setupReorder`] の後始末。**撮影の後**に呼ばれる（`shootFigs`）。 */
 async function teardownReorder(page) {
   await page.mouse.up();
   await settle(page);
@@ -1042,7 +1104,12 @@ async function shootReadme(page) {
   return out;
 }
 
-async function shootManual(page, cx) {
+/**
+ * `figs` を 1 つずつ撮る。マニュアル / お知らせの両方が使う共通の撮影ループ。
+ * `outFn(lang, id)` が撮影先、`repoFn(lang, id)` がリポジトリの手元ファイル、
+ * `labelFn(lang, id)` が `--check` に出すラベルを返す。
+ */
+async function shootFigs(page, cx, figs, outFn, repoFn, labelFn) {
   const out = [];
   for (const fig of figs) {
     const targets = await fig.setup(page, cx);
@@ -1052,7 +1119,7 @@ async function shootManual(page, cx) {
     if (cx.lang === 'en') await assertEnglish(targets, fig.id);
     const clip = await clipOf(page, targets, fig.pad, cx.viewport);
     await assertNoStickyOverlap(page, clip, fig.id);
-    const path = manualOut(cx.lang, fig.id);
+    const path = outFn(cx.lang, fig.id);
     await page.screenshot({
       path, // 拡張子 .webp から type を推論する
       clip,
@@ -1063,8 +1130,8 @@ async function shootManual(page, cx) {
     // ★ **撮った後に呼ぶ。** `reorder` は押しっぱなしの状態そのものが被写体なので、
     //   setup の中で `mouse.up()` できない
     await fig.teardown?.(page);
-    const label = `public/manual/${cx.lang}/${fig.id}.webp`;
-    out.push({ shot: path, repo: manualRepo(cx.lang, fig.id), label });
+    const label = labelFn(cx.lang, fig.id);
+    out.push({ shot: path, repo: repoFn(cx.lang, fig.id), label });
     if (!check) console.log(`撮影: ${label}（${clip.width}×${clip.height}）`);
   }
   return out;
@@ -1072,17 +1139,35 @@ async function shootManual(page, cx) {
 
 // ── 実行 ──────────────────────────────────────────────────────────────────────
 
-async function waitForServer(url, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return;
-    } catch {
-      // まだ listen していない
+/**
+ * ★ **子プロセスの終了で fail-fast にする。** `static-server.mjs` は EADDRINUSE で
+ *   即死するが、ここが子の終了を見ずに `fetch` だけ回すと、**先に居た別のサーバ**
+ *   （他 worktree の pre-commit 等）から 200 をもらって**別の dist を撮ってしまう**
+ *   （一致 / 不一致がどちらも起こりうる、静かな壊れ方）。子が先に死んだら reject する。
+ */
+async function waitForServer(url, child, timeoutMs = 10_000) {
+  let exited = null;
+  const onExit = (code) => {
+    exited = code;
+  };
+  child.once('exit', onExit);
+  try {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (exited !== null) {
+        throw new Error(`static-server がポート待受け前に終了した（exit ${exited}）`);
+      }
+      try {
+        const res = await fetch(url);
+        if (res.ok) return;
+      } catch {
+        // まだ listen していない
+      }
+      if (Date.now() > deadline) throw new Error(`static-server が ${url} で応答しない`);
+      await new Promise((r) => setTimeout(r, 150));
     }
-    if (Date.now() > deadline) throw new Error(`static-server が ${url} で応答しない`);
-    await new Promise((r) => setTimeout(r, 150));
+  } finally {
+    child.off('exit', onExit);
   }
 }
 
@@ -1130,7 +1215,7 @@ async function newContext(browser, { locale, deviceScaleFactor, db }) {
 let browser;
 let failed = false;
 try {
-  await waitForServer(BASE);
+  await waitForServer(BASE, server);
   browser = await chromium.launch();
 
   // ── ctx A: シード投入 + README ──────────────────────────────────────────────
@@ -1256,6 +1341,27 @@ try {
     }
   }
 
+  // ── ctx D / E: お知らせ ja / en ──────────────────────────────────────────
+  //
+  // ★ マニュアルの `FIGS`（ctx B/C）とは別のコンテキストにする。`FIGS` は順序依存
+  //   （`copy-last` / `whats-new` が db や storage を書き換える）ので、混ぜると
+  //   `--only=whatsnew:<id>` の単発と全枚数の絵が食い違いうる。設定は ctx B/C と同じ
+  //   （dsf 2・db は同じシード・UI_STATE も同じ）。`WN_FIGS` が空ならここも作らない。
+  const whatsnewCtx = [];
+  if (wnFigs.length > 0) {
+    for (const lang of LANGS) {
+      const { page } = await newContext(browser, {
+        locale: lang === 'ja' ? 'ja-JP' : 'en-US',
+        deviceScaleFactor: 2,
+        db: lang === 'en' ? englishNames(seedJson) : seedJson,
+      });
+      await page.goto(BASE);
+      await page.getByTestId('screen-record').waitFor({ state: 'visible' });
+      await assertStandalone(page, `ctx whatsnew-${lang}`);
+      whatsnewCtx.push({ page, lang, ids, viewport });
+    }
+  }
+
   // ── フェーズ 2 ────────────────────────────────────────────────────────────
   //
   // マニュアルの ja / en は完全に独立（別 storage・サーバはステートレス）なので並列に撮る。
@@ -1274,7 +1380,17 @@ try {
   //   偽なので、この直列化が効くのは全枚数撮影と `--check` のときだけ。
   //   決定性は `release.sh` の `--check` が hard gate なので、速さより優先する。
   const readmeShot = wantReadme ? await shootReadme(pageA) : [];
-  const shot = [readmeShot, ...(await Promise.all(manualCtx.map((cx) => shootManual(cx.page, cx))))].flat();
+  const manualLabel = (lang, id) => `public/manual/${lang}/${id}.webp`;
+  const whatsnewLabel = (lang, id) => `public/whatsnew/${lang}/${id}.webp`;
+  const shot = [
+    readmeShot,
+    ...(await Promise.all(
+      manualCtx.map((cx) => shootFigs(cx.page, cx, figs, manualOut, manualRepo, manualLabel)),
+    )),
+    ...(await Promise.all(
+      whatsnewCtx.map((cx) => shootFigs(cx.page, cx, wnFigs, whatsnewOut, whatsnewRepo, whatsnewLabel)),
+    )),
+  ].flat();
 
   // ── --check: バイト比較 ────────────────────────────────────────────────────
   if (check) {
@@ -1290,13 +1406,26 @@ try {
         diffs.push(`${label}: 内容が違う（撮影 ${got.length}B / 手元 ${want.length}B）`);
       }
     }
-    // 図を消したのにファイルが残っている場合も差分として扱う（全枚数を撮ったときだけ）
+    // 図を消したのにファイルが残っている場合も差分として扱う（全枚数を撮ったときだけ）。
+    // ★ ドットファイル（`.DS_Store` 等）は skip する — 1 個で release.sh の hard gate が止まる
     if (wantManual && figFilter === null) {
       for (const lang of LANGS) {
         const dir = join(REPO_ROOT, 'public', 'manual', lang);
         for (const f of await readdir(dir).catch(() => [])) {
+          if (f.startsWith('.')) continue;
           if (!FIGS.some((fig) => `${fig.id}.webp` === f)) {
             diffs.push(`public/manual/${lang}/${f}: 図の一覧に無い（孤児）`);
+          }
+        }
+      }
+    }
+    if (wantWhatsnew && figFilter === null) {
+      for (const lang of LANGS) {
+        const dir = join(REPO_ROOT, 'public', 'whatsnew', lang);
+        for (const f of await readdir(dir).catch(() => [])) {
+          if (f.startsWith('.')) continue;
+          if (!WN_FIGS.some((fig) => `${fig.id}.webp` === f)) {
+            diffs.push(`public/whatsnew/${lang}/${f}: 図の一覧に無い（孤児）`);
           }
         }
       }

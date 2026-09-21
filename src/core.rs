@@ -7166,6 +7166,12 @@ mod tests {
 
     // ── unseen_releases / latest_release_id ─────────────────────────────────
 
+    /// テストが使うダミーの `items`。**`const` で外に出す。** クロージャの中で
+    /// `&[ReleaseItem::plain(..)]` を作ろうとすると rvalue static promotion が
+    /// 関数呼び出し（`plain` は const fn だが呼び出し自体）を許さず E0716 になる
+    /// （rustc で実測済み）。`const` として先に確定させておけば参照できる。
+    const DUMMY_ITEMS: &[crate::i18n::ReleaseItem] = &[crate::i18n::ReleaseItem::plain("x", "x")];
+
     /// 生値の異常系をここで全部潰す。`UiState.release_seen` は `Option<i64>` で
     /// 範囲を絞らずに受けているので、ここが唯一の検証地点になる。
     #[test]
@@ -7176,8 +7182,7 @@ mod tests {
             .map(|id| ReleaseNote {
                 id,
                 date: "2026-01-01",
-                ja: &["x"],
-                en: &["x"],
+                items: DUMMY_ITEMS,
             })
             .collect();
 
@@ -7212,8 +7217,7 @@ mod tests {
         let notes = [ReleaseNote {
             id: 7,
             date: "2026-01-01",
-            ja: &["x"],
-            en: &["x"],
+            items: DUMMY_ITEMS,
         }];
         assert_eq!(latest_release_id(&notes), Some(7));
         assert_eq!(latest_release_id(&[]), None);

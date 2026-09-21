@@ -27,8 +27,9 @@ use super::drag::{
 use super::icon::{self, icon};
 use super::{
     Sheet, cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, fmt_weight, grp_name, kb_blur,
-    kb_focus, now_ms, parse_reps, parse_weight, scroll_to_id, t, use_dates, use_db, use_drop_pct,
-    use_history_count, use_kb,
+    kb_focus, keep_in_place_then_reveal, now_ms, parse_reps, parse_weight,
+    scroll_into_view_if_needed, scroll_to_id, t, use_dates, use_db, use_drop_pct,
+    use_history_count, use_kb, viewport_top,
 };
 
 /// 選択日に並べているカード 1 枚。
@@ -118,6 +119,12 @@ fn card_dom_id(ex: ExerciseId) -> String {
 /// 衝突しない。
 fn set_dom_id(ex: ExerciseId, key: u32) -> String {
     format!("set-{ex}-{key}")
+}
+
+/// カード末尾（メモ開閉ボタンを含む）の DOM id。メモの開閉で「押したボタンの画面上の
+/// 位置を保つ」計算の基準にする。
+fn foot_dom_id(ex: ExerciseId) -> String {
+    format!("foot-{ex}")
 }
 
 // ── ドラッグで並び替える（adr/ux/drag-to-reorder-in-record-tab.md）────────────
@@ -1423,7 +1430,15 @@ fn ExerciseCard(
         //   ★ ラベルも `None` で渡す。刈り取りはラベルを見ないので残しても消えるが、
         //     「カードを閉じる = その日のその種目を無かったことにする」なので明示する
         db.update(|d| write_log(d, date, ex, Vec::new(), String::new(), None, false));
+        // ★ `retain` の**前**に直下を控える。`card_order` を通すのは、日付切替直後の
+        //   1 tick に前日の ID が `cards` に混ざりうるため（このカードだけの並びを見る）
+        let next = crate::reorder::next_after(&card_order(cards, date), ex);
         cards.update(|cs| cs.retain(|c| c.ex != ex));
+        // 外した位置に来たカードを先頭へ。末尾を外したときは何もしない
+        // （ブラウザのクランプに任せるのが最小の動き — 決めた挙動 2）
+        if let Some(n) = next {
+            scroll_to_id(card_dom_id(n));
+        }
     };
 
     let request_close = move |_| {
@@ -1432,9 +1447,9 @@ fn ExerciseCard(
             return;
         }
         confirm_close.set(true);
-        // ★ 確認はカード末尾に出るので、sticky の「種目を追加」の背後に
-        //   入って見えないことがある。開いたら必ず視界へ送る
-        scroll_to_id(confirm_dom_id(ex));
+        // 最上端へ送るのはやめ、隠れているぶんだけ出す（`.card .warn-box` の
+        // `scroll-margin-bottom` が sticky の「種目を追加」帯を避ける）
+        scroll_into_view_if_needed(confirm_dom_id(ex));
     };
 
     let today_metric = move || {
@@ -2541,7 +2556,7 @@ fn ExerciseCard(
             //   destructive-affordance-quiet-at-rest.md が事故として挙げた
             //   「+ セットと 41px・右端完全一致」より離れ、3 者が別の列（左端/中央/右端）に居る。
             //   adr/ux/exercise-and-set-notes-behind-one-toggle.md
-            <footer class="card-foot">
+            <footer class="card-foot" id=foot_dom_id(ex)>
                 <button
                     class="link-btn card-remove"
                     data-testid="close-card"
@@ -2556,7 +2571,27 @@ fn ExerciseCard(
                     //   扱われると false のとき属性ごと消える（＝折りたためることが消える）
                     aria-expanded=move || if note_open.get() { "true" } else { "false" }
                     data-testid="note-toggle"
-                    on:click=move |_| note_open.update(|o| *o = !*o)
+                    // ★ 開くとき: カード上端は固定のまま（決めた挙動 3）。ボタンが sticky の
+                    //   帯の裏に入ったときだけ、隠れた分だけ見せる。
+                    //   ★ 閉じるとき: 押した「メモ」ボタンの画面上の位置を保つ（決めた挙動 4）。
+                    //   `viewport_top` は `note_open.set` の**前**（更新前の layout）に呼ぶ。
+                    //   見出しが画面外に残るときだけカードを nearest で収める
+                    on:click=move |_| {
+                        let open = !note_open.get_untracked();
+                        if open {
+                            note_open.set(true);
+                            scroll_into_view_if_needed(foot_dom_id(ex));
+                        } else {
+                            let before = viewport_top(&foot_dom_id(ex));
+                            note_open.set(false);
+                            match before {
+                                Some(top) => {
+                                    keep_in_place_then_reveal(foot_dom_id(ex), top, card_dom_id(ex))
+                                }
+                                None => scroll_into_view_if_needed(card_dom_id(ex)),
+                            }
+                        }
+                    }
                 >
                     {move || if note_open.get() { t().day.note_close } else { t().day.note_open }}
                 </button>

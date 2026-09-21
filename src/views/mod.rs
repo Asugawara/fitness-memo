@@ -486,12 +486,56 @@ pub fn scroll_to_id(element_id: String) {
 /// はみ出しているときだけ最小限スクロールする。「開いた部位を必ず画面に入れる」ように
 /// 使うのが目的で、`scroll_to_id` を使うと**タップして開いただけの部位まで**画面上端へ
 /// 飛ぶ（アコーディオンを開くたびに視界がジャンプする）。
+///
+/// 記録タブのフッタ／確認箱にも使う。下端は `--reveal-bottom` で sticky の帯を避ける。
 pub fn scroll_into_view_if_needed(element_id: String) {
     request_animation_frame(move || {
         if let Some(el) = document().get_element_by_id(&element_id) {
             let opts = web_sys::ScrollIntoViewOptions::new();
             opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
             el.scroll_into_view_with_scroll_into_view_options(&opts);
+        }
+    });
+}
+
+/// id の要素の **viewport 座標**の上端。無ければ None。
+///
+/// click ハンドラで signal を更新する**前**に同期で呼ぶ（更新前の layout を測る）。
+pub fn viewport_top(element_id: &str) -> Option<f64> {
+    document()
+        .get_element_by_id(element_id)
+        .map(|el| el.get_bounding_client_rect().top())
+}
+
+/// 次のフレームで、`anchor_id` の要素が画面上で動いた分（rect.top の前後差）だけ
+/// scrollBy して**画面上の位置を保つ**。そのあと同じフレームで、`reveal_id` の要素の
+/// 上端が 12px より上（見出しが画面外）なら `block: nearest` で収める。
+///
+/// ★ viewport 座標の差分で測る。文書座標の差分（rect.top + scrollY）にすると、
+///   Chromium の scroll anchoring が同じフレームで先に補正した分を二重に足して
+///   ボタンが下へ飛ぶ。viewport 差分なら anchoring が既に保っていれば差分 0 で
+///   何もしない。click から次フレームまでの ≤16ms に利用者のスクロールが挟まる懸念は、
+///   タップが慣性を止めるので無視できる。
+/// ★ 見出しが見えているときは nearest を呼ばない。フッタ下端はカードの margin box
+///   下端より 151px 上にあるので、無条件に呼ぶと帯の直上に居るだけのカードが
+///   最大 21px 動く。
+/// ★ 要素が消えていれば何もしない。
+pub fn keep_in_place_then_reveal(anchor_id: String, before_top: f64, reveal_id: String) {
+    request_animation_frame(move || {
+        let doc = document();
+        if let Some(anchor) = doc.get_element_by_id(&anchor_id) {
+            let after_top = anchor.get_bounding_client_rect().top();
+            let delta = after_top - before_top;
+            if delta != 0.0 {
+                window().scroll_by_with_x_and_y(0.0, delta);
+            }
+        }
+        if let Some(reveal) = doc.get_element_by_id(&reveal_id)
+            && reveal.get_bounding_client_rect().top() < 12.0
+        {
+            let opts = web_sys::ScrollIntoViewOptions::new();
+            opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
+            reveal.scroll_into_view_with_scroll_into_view_options(&opts);
         }
     });
 }

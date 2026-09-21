@@ -264,9 +264,30 @@ pub fn edge_band(top: f64, bottom: f64) -> (f64, f64) {
     }
 }
 
+/// 並びから 1 つ外したあとに先頭へ置く相手 = 直下。末尾や無い値なら None。
+pub fn next_after<T: PartialEq + Copy>(items: &[T], removed: T) -> Option<T> {
+    let i = items.iter().position(|&x| x == removed)?;
+    items.get(i + 1).copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn next_after_returns_the_item_directly_below_the_removed_one() {
+        assert_eq!(next_after(&[1, 2, 3], 1), Some(2));
+    }
+
+    #[test]
+    fn next_after_returns_none_when_removing_the_last_item() {
+        assert_eq!(next_after(&[1, 2, 3], 3), None);
+    }
+
+    #[test]
+    fn next_after_returns_none_when_the_removed_value_is_absent() {
+        assert_eq!(next_after(&[1, 2, 3], 99), None);
+    }
 
     /// 高さ `h` の箱を隙間 `gap` で `n` 個並べる。
     fn even(n: usize, h: f64, gap: f64) -> Slots {

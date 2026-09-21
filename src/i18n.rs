@@ -1035,7 +1035,7 @@ const JA_MANUAL: Manual = Manual {
     offline_note: "圏外では図が表示されません。文章だけで手順が分かるようにしてあります。",
     light_note: "図はライトテーマの画面です。ダークテーマで使っていても配置は同じです。",
     see_install_help: "ホーム画面への追加は「ホーム画面への追加のしかた」を見てください。",
-    hint_body: "このアプリには気づきにくい機能がいくつかあります。設定タブの「活用方法」でまとめて確認できます。",
+    hint_body: "設定タブの「活用方法」でまとめて確認できます。",
     hint_cta: "活用方法を見る ›",
     hint_dismiss: "この案内を今後表示しない",
     chapters: &[
@@ -1238,7 +1238,7 @@ const EN_MANUAL: Manual = Manual {
     offline_note: "Offline, the figures do not load. The text alone is enough to follow each step.",
     light_note: "The figures show the light theme. The layout is the same if you use the dark theme.",
     see_install_help: "See \"How to add it to your home screen\" for adding this app to your home screen.",
-    hint_body: "This app has a few features that are easy to miss. See \"Making the most of it\" in the Settings tab for a rundown.",
+    hint_body: "See \"Making the most of it\" in the Settings tab for a rundown.",
     hint_cta: "Make the most of it ›",
     hint_dismiss: "Do not show this again",
     chapters: &[

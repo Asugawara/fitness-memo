@@ -939,7 +939,7 @@ impl Seed {
                         reps,
                         note,
                         drops,
-                        at: _, // 運ばない（adr/data-model/at-optional-same-day-only.md）
+                        at: _, // 運ばない（adr/ux/copy-carries-the-notes.md 決定 6 / adr/data-model/set-at-typed-today-only.md）
                     } = s;
                     SetEntry {
                         weight: *weight,
@@ -5519,7 +5519,7 @@ mod tests {
             Session {
                 logs: vec![ExerciseLog {
                     // ★ 元のセットに時刻が付いていても運ばれない、を同じ 1 本で固定する
-                    //   （adr/data-model/at-optional-same-day-only.md 決定 6）
+                    //   （adr/ux/copy-carries-the-notes.md 決定 6 / adr/data-model/set-at-typed-today-only.md）
                     sets: vec![
                         SetEntry {
                             weight: 60.0,
@@ -10363,6 +10363,33 @@ mod tests {
         assert_eq!(sets[1].at, Some(600));
         assert_eq!(sets[2].at, None, "変わったセットに時刻は生まれない");
         assert_eq!(report.times_added, 0, "追加ではなく保持なので数えない");
+    }
+
+    /// `carry_set_ats` の第 1 段（＝既に同じ時刻を持つ相手には触らない）を直接踏む。
+    /// `mine` は「一度 carry_set_ats で時刻を持ち越した状態」（同じ重量・回数のセットが
+    /// 2 本、別々の時刻を持つ）を直接組み、それを同じ相手ともう一度 merge_db する。
+    /// 第 1 段が無いと、from を順に処理する素朴な実装では既に正しく一致している
+    /// into の枠を後続の from 要素が上書きし、対照値のうち片方が丸ごと失われる。
+    #[test]
+    fn merge_does_not_let_carry_set_ats_overwrite_an_already_matching_time() {
+        let (mut mine, theirs) = timed_pair(
+            &[(60.0, 10, Some(600)), (60.0, 10, Some(500))],
+            // 取り込む側はセットが 1 本多いので log_rank で勝つ。1 本目は mine と
+            // 既に同じ時刻（600）を持つ — 同じ相手をもう一度取り込んだ形
+            &[(60.0, 10, Some(600)), (60.0, 10, None), (40.0, 5, None)],
+        );
+
+        let report = merge_db(&mut mine, theirs);
+
+        let sets = &merged_log(&mine).sets;
+        assert_eq!(sets[0].at, Some(600), "既に正しい時刻を持つ枠は動かさない");
+        assert_eq!(
+            sets[1].at,
+            Some(500),
+            "第 1 段が無いと 600 が先に消費されて 500 が丸ごと失われる"
+        );
+        assert_eq!(sets[2].at, None);
+        assert_eq!(report.times_added, 0, "持ち越しなので数えない");
     }
 
     /// `same_sets_unordered` の枝（並べ替えただけ）は運ばない。現状固定。

@@ -40,14 +40,17 @@ Settings has a new row, **Making the most of it**, right after the home-screen w
 All twelve chapters carry a screenshot of the real screen, in both languages — twenty-four `.webp` files under `public/manual/{ja,en}/`, always shot in the **light theme** ([Serve the manual's figures as real screenshots of the app, not hand-drawn diagrams](adr/architecture/manual-figures-as-served-screenshots.md)). Retaking a figure is safe any time — the clock and time zone are pinned in `scripts/shots.mjs`, so reshooting months later never moves "today", and produces byte-identical output when nothing actually changed:
 
 ```sh
-node scripts/shots.mjs                     # everything: README's 3 + the manual's 24
-node scripts/shots.mjs --only=manual       # just the manual's 24 (what pre-commit runs)
-node scripts/shots.mjs --only=readme       # just README's 3 (run by hand once the UI settles)
-node scripts/shots.mjs --only=manual:<id>  # one chapter, both languages, e.g. --only=manual:copy-last
-node scripts/shots.mjs --check             # shoot to a scratch dir and byte-compare; exits 1 on drift
+node scripts/shots.mjs                        # everything: README's 3 + the manual's 24 + what's-new's 1
+node scripts/shots.mjs --only=manual,whatsnew # what pre-commit runs (no README)
+node scripts/shots.mjs --only=manual          # just the manual's 24
+node scripts/shots.mjs --only=whatsnew        # just the what's-new figure(s)
+node scripts/shots.mjs --only=readme          # just README's 3 (run by hand once the UI settles)
+node scripts/shots.mjs --only=manual:<id>     # one chapter, both languages, e.g. --only=manual:copy-last
+node scripts/shots.mjs --only=whatsnew:<id>   # one what's-new figure, both languages
+node scripts/shots.mjs --check                # shoot to a scratch dir and byte-compare; exits 1 on drift
 ```
 
-`.githooks/pre-commit` only ever calls `--only=manual`, and only for a commit that touches a UI-affecting path — README's three are a deliberately manual, occasional job, and `scripts/release.sh`'s `--check` is meant to catch a forgotten reshoot before a release ships ([Reshoot the manual's figures in pre-commit, but only for commits that touch a UI-affecting path](adr/deploy/screenshots-in-pre-commit-on-ui-paths.md)). The figures add up to about 350KiB but are never in the Service Worker's offline shell: offline, the manual says so and falls back to its text, so nobody who never opens it should pay for it on every install.
+`.githooks/pre-commit` only ever calls `--only=manual,whatsnew`, and only for a commit that touches a UI-affecting path — README's three are a deliberately manual, occasional job, and `scripts/release.sh` runs `shots.mjs --check` right before its heavy E2E pass, catching a forgotten reshoot (or a rebase / GitHub-merge drift, since `pre-commit` never runs for either) before a release ships ([Reshoot the manual's figures in pre-commit, but only for commits that touch a UI-affecting path](adr/deploy/screenshots-in-pre-commit-on-ui-paths.md)). The figures add up to about 350KiB but are never in the Service Worker's offline shell: offline, the manual (and the what's-new sheet) says so and falls back to its text, so nobody who never opens it should pay for it on every install.
 
 ## Icons and share images
 
@@ -84,7 +87,7 @@ sh scripts/gen-og.sh      # public/og.png (1200x630) + assets/social-preview.png
 - **Time since your last session** — overall and per muscle group. **Days are counted in local calendar days**: once the date rolls over you get "Yesterday / 3 days ago", and only within the same day do you get "45 min / 12 hr". Dividing elapsed time by 24 hours would roll over 24 hours after you trained, so last night's record would still read "today" the next morning ([Count elapsed days in local calendar days and keep clock granularity inside one day](adr/data-model/elapsed-in-local-calendar-days.md)).
 - **Body weight and a note for the day** — one line per day. It can be recorded on days you did not train, and those days still appear on the chart.
 - **Drop sets** — record up to four stages under a main set, for the reps you kept going for after dropping the weight. **Whether they count towards the Progress tab is a setting, and by default they do not** — mixing the dropped stages into volume inflates the baseline you use to decide "same or a little more" from one session to the next. Excluded, progress is based on your main sets alone; the Record tab's daily totals always count the stages too. **Set how much you drop by, as a percentage, and the first stage's weight is worked out for you** the moment you add it (20% by default, free input to one decimal place). From the second stage on the previous stage's weight is copied, so you only retype when you actually go lower. **Add one without opening anything** — the `↓` on the set row does it in place ([Show drop-set stages in a box under the main set and exclude them from progress by default](adr/ux/drop-sets-as-a-box-under-the-main-set.md)).
-- **What's new banner** — a thin banner at the top of every tab announces new features after each release. Tap it to read every release you have not seen yet in one sheet, newest first; close it (or dismiss it with ✕) and it is gone for good — there is no menu to bring it back ([Put the what's-new banner above the screen](adr/ux/whats-new-banner-above-the-screen.md)).
+- **What's new banner** — a thin banner at the top of every tab announces new features after each release. Tap it to read every release you have not seen yet in one sheet, newest first; close it (or dismiss it with ✕) and it is gone for good — there is no menu to bring it back ([Put the what's-new banner above the screen](adr/ux/whats-new-banner-above-the-screen.md)). Only features that actually give you something new make it in, never a rename or a UI shuffle by itself, and any feature you can point at on the screen gets a screenshot in the sheet ([What's-new entries are user-facing features, with figures where they show up on screen](adr/ux/whats-new-notes-are-user-facing-features-with-figures.md)).
 
 **The metric is a property of the chart, not of the exercise.** Per-exercise units cannot be compared on one axis, and if an exercise's character changes later, every past chart breaks retroactively ([Make the metric a view setting rather than a property of the exercise](adr/data-model/metric-is-a-view-setting.md)). The weight field is shown for every exercise, and **an empty weight counts as 1**, so bodyweight and timed exercises work by simply leaving it blank.
 
@@ -140,7 +143,7 @@ npx playwright test --project=chromium  # the light E2E pass
 npx playwright test                     # every project (Chromium / iPhone 15 Pro (WebKit) / Pixel 7)
 ```
 
-`.githooks/pre-commit` first guards against `docs/` sneaking into `main`, then runs `cargo fmt --all -- --check` → `cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings` → `cargo test` → `trunk build` → (on a commit that touches a UI-affecting path) `node scripts/shots.mjs --only=manual` → `npx playwright test --project=chromium --project=harness`. In an emergency, `SKIP_HOOKS=1 git commit` skips the whole hook; `SHOTS=0 git commit` is narrower and skips only the reshoot, leaving fmt / clippy / test / build / E2E running — use it when the screenshots themselves are broken or you want to commit the code and the figures separately.
+`.githooks/pre-commit` first guards against `docs/` sneaking into `main`, then runs `cargo fmt --all -- --check` → `cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings` → `cargo test` → `trunk build` → (on a commit that touches a UI-affecting path) `node scripts/shots.mjs --only=manual,whatsnew` → `npx playwright test --project=chromium --project=harness`. In an emergency, `SKIP_HOOKS=1 git commit` skips the whole hook; `SHOTS=0 git commit` is narrower and skips only the reshoot, leaving fmt / clippy / test / build / E2E running — use it when the screenshots themselves are broken or you want to commit the code and the figures separately.
 
 While iterating on one manual chapter's figure, `node scripts/shots.mjs --only=manual:<id>` (e.g. `--only=manual:copy-last`) reshoots just that chapter, both languages, instead of walking all ten.
 

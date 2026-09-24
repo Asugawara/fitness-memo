@@ -1550,40 +1550,102 @@ pub struct Releases {
     /// バナーの ✕ の `aria-label`
     pub banner_dismiss: &'static str,
     pub sheet_title: &'static str,
+    /// 図が読めなかったときの代替文。`<img on:error>` で `<p>` に差し替える。
+    ///
+    /// ★ **「圏外では」と断定しない。** `on:error` は 404（版ずれ: 旧 wasm が撤去済みの
+    ///   図を参照、Pages 反映の最悪 20 分）でも発火するので、原因を決め打ちしない。
+    pub fig_missing: &'static str,
+    /// ダークテーマ利用者への断り。図は常にライトテーマの画面（[`EN_MANUAL`] の
+    /// `light_note` と同じ役割・同じ理由）。
+    pub fig_light: &'static str,
 }
 
 const JA_RELEASES: Releases = Releases {
     banner_cta: "見る ›",
     banner_dismiss: "このお知らせを閉じる",
     sheet_title: "新機能のお知らせ",
+    fig_missing: "図を読み込めませんでした（圏外では表示されません）",
+    fig_light: "図はライトテーマの画面です。ダークテーマで使っていても配置は同じです。",
 };
 
 const EN_RELEASES: Releases = Releases {
     banner_cta: "See what's new ›",
     banner_dismiss: "Dismiss this notice",
     sheet_title: "What's new",
+    fig_missing: "Couldn't load the figure (it may not show up when you're offline)",
+    fig_light: "The figures show the light theme. The layout is the same if you use the dark theme.",
 };
 
-/// 1 リリースぶんのお知らせ。
+/// お知らせの項目に付ける図。**被写体は「今の画面」**（そのときの画面ではない）。
 ///
-/// ★ 言語ごとにリストを分けず、エントリの中で分岐する（[`crate::presets::Names`] と
-///   同じ形）。リストを 2 本にすると片方への足し忘れがコンパイルを通ってしまう。
-pub struct ReleaseNote {
-    /// お知らせ番号。**単調増加。二度と振り直さない**（`storage::release_seen` の基準値）
-    pub id: u32,
-    /// ISO 8601。表示はこのまま出す
-    pub date: &'static str,
-    pub ja: &'static [&'static str],
-    pub en: &'static [&'static str],
+/// 被写体を消す・動かす改修をする PR は、同 PR で撮影の setup と `fig` を外し、
+/// ファイルを消す（文言は残す）。setup を追従修正して延命しない。
+pub struct ReleaseFig {
+    /// ASCII スラッグ。ファイル名 `public/whatsnew/{lang}/{id}.webp` になる。全体で一意。
+    /// 同じ被写体を別の項目で再び写すときは `<slug>-<release id>`（図は「今の画面」なので
+    /// 番号は被写体の一部ではなく、再登場を示すためだけに前置する）。
+    pub id: &'static str,
+    /// 1 行に収まる名詞句。**ja ≤ 16 字 / en ≤ 33 字**（マニュアルの 20/45 より厳しい。
+    /// `.sheet-body` の実効幅と `.wn-fig img` の 12px から算出、2 割以上余らせてある。
+    /// 根拠は AT 向けの短い名詞句 + `on:error` の代替表示に切り替わる保険であって、
+    /// マニュアルの「WebKit は 1 行に収まらない alt を描かない」制約はここでは無関係
+    /// — 失敗時は `<img>` ごと `<p>` に差し替えるので alt が描かれない局面が無い）
+    pub alt_ja: &'static str,
+    pub alt_en: &'static str,
+    /// 実測寸法（device px）。`<img width height>` に出す。クリップが外接矩形で
+    /// 内容依存なので言語ごとに持つ（マニュアルの `fig` と同じ理由）
+    pub size_ja: (u32, u32),
+    pub size_en: (u32, u32),
 }
 
-impl ReleaseNote {
-    pub const fn items(&self, lang: Lang) -> &'static [&'static str] {
+impl ReleaseFig {
+    pub const fn alt(&self, lang: Lang) -> &'static str {
+        match lang {
+            Lang::Ja => self.alt_ja,
+            Lang::En => self.alt_en,
+        }
+    }
+
+    pub const fn size(&self, lang: Lang) -> (u32, u32) {
+        match lang {
+            Lang::Ja => self.size_ja,
+            Lang::En => self.size_en,
+        }
+    }
+}
+
+/// お知らせ 1 件（= 1 機能）ぶんの項目。
+///
+/// ★ 言語ごとにリストを分けず、フィールドの中で分岐する（[`crate::presets::Names`] と
+///   同じ形）。リストを 2 本にすると片方への足し忘れがコンパイルを通ってしまう
+///   （`ja.len() == en.len()` を人力で揃える必要が無くなる）。
+pub struct ReleaseItem {
+    pub ja: &'static str,
+    pub en: &'static str,
+    pub fig: Option<ReleaseFig>,
+}
+
+impl ReleaseItem {
+    /// 図を持たない項目。既存 id 1〜4（基準制定前）はすべてこれで移す。
+    pub const fn plain(ja: &'static str, en: &'static str) -> Self {
+        Self { ja, en, fig: None }
+    }
+
+    pub const fn text(&self, lang: Lang) -> &'static str {
         match lang {
             Lang::Ja => self.ja,
             Lang::En => self.en,
         }
     }
+}
+
+/// 1 リリースぶんのお知らせ。
+pub struct ReleaseNote {
+    /// お知らせ番号。**単調増加。二度と振り直さない**（`storage::release_seen` の基準値）
+    pub id: u32,
+    /// ISO 8601。表示はこのまま出す
+    pub date: &'static str,
+    pub items: &'static [ReleaseItem],
 }
 
 /// **新しい順。先頭が最新。** `id` は厳密減少（`core::unseen_releases` が prefix 切り出しの
@@ -1592,74 +1654,102 @@ impl ReleaseNote {
 /// リリースのたびに機能 PR が自分のエントリを先頭に足す。`date` はマージ日、`id` は
 /// 直前の最新から 1 つ進める。`&'static [ReleaseNote]` ではなく `&[ReleaseNote]` と書く
 /// （clippy::redundant_static_lifetimes。`presets::PRESETS` と同じ書き方）。
+///
+/// ## 書く基準 — 利用者が新しくできるようになったことだけ
+///
+/// **判定文**: 以前はどんな操作でもできなかったことができる、または得られなかった
+/// 情報が得られる → 書く。同じ結果に別の操作で至るだけ → 書かない。
+///
+/// - 書く: 設定の追加、新しい入力・記録の種類、新しい表示（それまで無かった情報）、
+///   言語追加（図なし）、エクスポート形式の追加
+/// - 書かない: 既定値だけの変更、並び替え・アコーディオン化・セレクタ分割
+///   （負例: id 1 の 2 段セレクタ化、id 2 のアコーディオン化。文言は触らない）、
+///   スクロール位置・アニメーション・フォーカス、不具合修正、性能、内部構造、
+///   文言修正、ドキュメント、開発手順、テスト
+/// - 1 項目 = 1 機能。本文は 1〜2 文（旧挙動・仕組みの説明は書かない。詳しい説明は
+///   マニュアルへ）
+/// - 図: 新しい操作・設定が**指で指せる場所**にあるとき付ける（新しい設定行・チップ・
+///   グラフ）。画面に現れないものには付けない。図は**今の画面**を写す
+/// - `fig.id` は被写体のスラッグ。同じ被写体を別の項目で再び写すときは
+///   `<slug>-<release id>`（例 `weight-line-9`）
+/// - **既存 id 1〜5 は基準より前のものなので触らない**（文言もフィールド割当も）
 pub const RELEASES: &[ReleaseNote] = &[
     ReleaseNote {
         id: 6,
         date: "2026-09-22",
-        ja: &[
+        items: &[ReleaseItem::plain(
             "記録タブで、その日に打ったセットに時刻が自動で残るようになりました。日付の横にその日の開始–終了が薄く出て、「＋ メモ」を開くとセットごとの時刻が見えます。「前回をコピー」して触らなかったセットには付きません。",
-        ],
-        en: &[
             "Sets you type in the Record tab now keep the time you logged them. The day's start–end shows next to the date in dim text, and opening \"+ Note\" shows each set's time. Sets copied from last time and left untouched get no time.",
-        ],
+        )],
     },
     ReleaseNote {
         id: 5,
         date: "2026-09-21",
-        ja: &[
-            "推移タブの体重の線を、3M・6M・1Y のそれぞれで日ごとに描くか週平均にするか選べるようにしました（設定タブ → 体重の線）。これまでは点が多いと自動で週平均になっていましたが、3M・6M は既定で日ごと、1Y は計量の回数に関係なく既定で週平均です。",
-        ],
-        en: &[
-            "The Progress tab's body-weight line can now be drawn daily or as a weekly average, chosen separately for 3M, 6M and 1Y (Settings › Weight line). It used to switch to a weekly average on its own once a period held many weigh-ins; 3M and 6M now default to daily, and 1Y defaults to weekly however often you weigh in.",
-        ],
+        items: &[ReleaseItem {
+            ja: "推移タブの体重の線を、3M・6M・1Y のそれぞれで日ごとに描くか週平均にするか選べるようにしました（設定タブ → 体重の線）。これまでは点が多いと自動で週平均になっていましたが、3M・6M は既定で日ごと、1Y は計量の回数に関係なく既定で週平均です。",
+            en: "The Progress tab's body-weight line can now be drawn daily or as a weekly average, chosen separately for 3M, 6M and 1Y (Settings › Weight line). It used to switch to a weekly average on its own once a period held many weigh-ins; 3M and 6M now default to daily, and 1Y defaults to weekly however often you weigh in.",
+            fig: Some(ReleaseFig {
+                id: "weight-line",
+                alt_ja: "体重の線の設定",
+                alt_en: "The weight-line setting",
+                size_ja: (746, 424),
+                size_en: (746, 424),
+            }),
+        }],
     },
     ReleaseNote {
         id: 4,
         date: "2026-09-11",
-        ja: &[
-            "種目ごとにラベルを作れるようにしました。記録タブでラベルを選ぶと、そのラベルの前回だけが出て、「前回をコピー」もそのラベルの前回から入ります。",
-            "ドロップセットを記録できるようにしました。セット行の回数欄の右にあるアイコンから段を足せます。推移タブは既定で段を含めません。",
-            "設定タブに「活用方法」を足しました。気づきにくい操作を図つきでまとめてあります。",
-        ],
-        en: &[
-            "Exercises can now have labels. Pick one on the Record tab and you see only that label's last session, and \"Copy last time\" takes its sets from there too.",
-            "Drop sets can now be recorded. Add a stage from the icon to the right of a set row's reps field. The Progress tab leaves them out by default.",
-            "Added \"Making the most of it\" to the Settings tab — a rundown of the parts that are easy to miss, with screenshots.",
+        items: &[
+            ReleaseItem::plain(
+                "種目ごとにラベルを作れるようにしました。記録タブでラベルを選ぶと、そのラベルの前回だけが出て、「前回をコピー」もそのラベルの前回から入ります。",
+                "Exercises can now have labels. Pick one on the Record tab and you see only that label's last session, and \"Copy last time\" takes its sets from there too.",
+            ),
+            ReleaseItem::plain(
+                "ドロップセットを記録できるようにしました。セット行の回数欄の右にあるアイコンから段を足せます。推移タブは既定で段を含めません。",
+                "Drop sets can now be recorded. Add a stage from the icon to the right of a set row's reps field. The Progress tab leaves them out by default.",
+            ),
+            ReleaseItem::plain(
+                "設定タブに「活用方法」を足しました。気づきにくい操作を図つきでまとめてあります。",
+                "Added \"Making the most of it\" to the Settings tab — a rundown of the parts that are easy to miss, with screenshots.",
+            ),
         ],
     },
     ReleaseNote {
         id: 3,
         date: "2026-09-10",
-        ja: &[
-            "ラベルごとに色を選べるようにしました。設定タブ → 種目 のラベルの行に色見本が出ます。新しいラベルには互いに重ならない色が自動で付きます。",
-            "推移タブでラベルを絞り込めるようにしました。種目を選ぶとラベルのチップが並び、押すとグラフの点も記録の表もそのラベルだけになります。「すべて」ではラベルの付いた日がその色の点で出ます。",
-        ],
-        en: &[
-            "Labels can have a colour. A swatch now sits on each label row under Settings › Exercises, and new labels get colours that never repeat each other.",
-            "The Progress tab can be filtered by label. Pick an exercise and its labels appear as chips; tapping one narrows both the graph and the records table to that label. Under \"All labels\", labelled days are drawn in their label's colour.",
+        items: &[
+            ReleaseItem::plain(
+                "ラベルごとに色を選べるようにしました。設定タブ → 種目 のラベルの行に色見本が出ます。新しいラベルには互いに重ならない色が自動で付きます。",
+                "Labels can have a colour. A swatch now sits on each label row under Settings › Exercises, and new labels get colours that never repeat each other.",
+            ),
+            ReleaseItem::plain(
+                "推移タブでラベルを絞り込めるようにしました。種目を選ぶとラベルのチップが並び、押すとグラフの点も記録の表もそのラベルだけになります。「すべて」ではラベルの付いた日がその色の点で出ます。",
+                "The Progress tab can be filtered by label. Pick an exercise and its labels appear as chips; tapping one narrows both the graph and the records table to that label. Under \"All labels\", labelled days are drawn in their label's colour.",
+            ),
         ],
     },
     ReleaseNote {
         id: 2,
         date: "2026-09-09",
-        ja: &[
-            "記録タブの「種目を追加」を部位ごとのアコーディオンにしました。部位を開くとその種目だけが並び、同時に開くのは 1 つです。",
-            "新機能をまとめて知らせるこのバナーを追加しました。閉じると次のお知らせまで出ません。",
-        ],
-        en: &[
-            "The Record tab's \"Add exercise\" sheet is now a muscle-group accordion. Opening a group shows only its exercises, and only one opens at a time.",
-            "Added this banner to announce new features together. Once you close it, it stays away until the next release.",
+        items: &[
+            ReleaseItem::plain(
+                "記録タブの「種目を追加」を部位ごとのアコーディオンにしました。部位を開くとその種目だけが並び、同時に開くのは 1 つです。",
+                "The Record tab's \"Add exercise\" sheet is now a muscle-group accordion. Opening a group shows only its exercises, and only one opens at a time.",
+            ),
+            ReleaseItem::plain(
+                "新機能をまとめて知らせるこのバナーを追加しました。閉じると次のお知らせまで出ません。",
+                "Added this banner to announce new features together. Once you close it, it stays away until the next release.",
+            ),
         ],
     },
     ReleaseNote {
         id: 1,
         date: "2026-08-25",
-        ja: &[
+        items: &[ReleaseItem::plain(
             "推移タブの対象を「部位」と「種目」の 2 段セレクタにしました。部位を選ぶと種目の候補がその部位だけに絞られます。",
-        ],
-        en: &[
             "The Progress tab's target is now two selects, muscle group and exercise. Picking a group narrows the exercise list to it.",
-        ],
+        )],
     },
 ];
 
@@ -2407,21 +2497,158 @@ mod tests {
 
     // ── お知らせ（新機能バナー） ────────────────────────────────────────────
 
-    /// 各エントリで `ja.len() == en.len()`、空文字を含まない。
+    /// 各リリースの `items` が非空、各項目の `ja` / `en` が非空、`fig_missing` /
+    /// `fig_light` が両言語とも非空であること。
     ///
-    /// ★ リストを 1 本にした狙いそのものの検証。片方の言語だけ項目を書き忘れても
-    ///   `RELEASES` の宣言はコンパイルを通るので、ここで人力の突き合わせを肩代わりする。
+    /// ★ `ja.len() == en.len()` はもう見ない。`ReleaseItem` が 1 個の構造体で日英を
+    ///   両方持つ型になったので、型そのものが「片方だけ書き忘れる」を防いでいる
+    ///   （`ReleaseNote { ja: &[..], en: &[..] }` だった旧形だけが必要としていた検証）。
     #[test]
-    fn release_notes_line_up_across_languages() {
+    fn release_items_line_up_across_languages() {
         for r in RELEASES {
-            assert_eq!(
-                r.ja.len(),
-                r.en.len(),
-                "id={} で日英の項目数が食い違っている",
-                r.id
+            assert!(!r.items.is_empty(), "id={} の items が空", r.id);
+            for item in r.items {
+                assert!(!item.ja.is_empty(), "id={} に空の ja 項目がある", r.id);
+                assert!(!item.en.is_empty(), "id={} に空の en 項目がある", r.id);
+            }
+        }
+        for (lang, _) in Lang::CHOICES {
+            let r = &lang.strings().releases;
+            assert!(!r.fig_missing.is_empty(), "{lang:?} の fig_missing が空");
+            assert!(!r.fig_light.is_empty(), "{lang:?} の fig_light が空");
+        }
+    }
+
+    /// 図を持つ項目の `fig.id` がスラッグとして妥当（`[a-z0-9-]` のみ・非空・先頭末尾が
+    /// `-` でない）で全体一意、`alt_ja` ≤ 16 / `alt_en` ≤ 33 文字（非空）であること。
+    ///
+    /// ★ 上限はマニュアル（20/45）より厳しい。`.sheet-body` の実効幅と `.wn-fig img` の
+    ///   12px から算出した値で、`ReleaseFig` の doc に根拠がある。
+    #[test]
+    fn every_release_figure_has_a_slug_and_short_alt() {
+        let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for r in RELEASES {
+            for item in r.items {
+                let Some(fig) = &item.fig else { continue };
+                assert!(!fig.id.is_empty(), "id={} に空の fig.id がある", r.id);
+                assert!(
+                    fig.id
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                    "fig.id={} は [a-z0-9-] 以外を含む",
+                    fig.id
+                );
+                assert!(
+                    !fig.id.starts_with('-') && !fig.id.ends_with('-'),
+                    "fig.id={} の先頭か末尾が '-'",
+                    fig.id
+                );
+                assert!(
+                    seen_ids.insert(fig.id),
+                    "fig.id={} が複数のリリースで重複している",
+                    fig.id
+                );
+                assert!(!fig.alt_ja.is_empty(), "fig.id={} の alt_ja が空", fig.id);
+                assert!(!fig.alt_en.is_empty(), "fig.id={} の alt_en が空", fig.id);
+                assert!(
+                    fig.alt_ja.chars().count() <= 16,
+                    "fig.id={} の alt_ja が 16 字を超える: {:?}",
+                    fig.id,
+                    fig.alt_ja
+                );
+                assert!(
+                    fig.alt_en.chars().count() <= 33,
+                    "fig.id={} の alt_en が 33 字を超える: {:?}",
+                    fig.id,
+                    fig.alt_en
+                );
+            }
+        }
+    }
+
+    /// 宣言した図が実在し、**宣言寸法が実ファイルと言語ごとに一致**していること。
+    /// 逆向き（どの項目からも参照されていない図が残っていないこと）も見る。
+    ///
+    /// ★ `src/manual.rs` の `every_manual_figure_exists_with_the_declared_size` と同じ形。
+    ///   `read_dir_sorted` はあちらの `tests` モジュール private fn なので、ここに
+    ///   8 行複製する（元は `src/manual.rs` の同名関数）。
+    ///
+    /// ★ **`RELEASES` に `fig` が 1 つも無いときは `public/whatsnew` 不在を許容**する
+    ///   （逆向き検査だけスキップ）。撤去規則で図が 0 枚になっても panic しないため。
+    #[test]
+    fn every_release_figure_exists_with_the_declared_size() {
+        fn read_dir_sorted(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+            let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+                .unwrap_or_else(|e| panic!("{} が読めない: {e}", dir.display()))
+                .map(|e| e.expect("ディレクトリの走査").path())
+                .collect();
+            paths.sort();
+            paths
+        }
+
+        let root =
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/public/whatsnew"));
+        let has_any_fig = RELEASES
+            .iter()
+            .any(|r| r.items.iter().any(|i| i.fig.is_some()));
+        if !has_any_fig && !root.exists() {
+            return;
+        }
+
+        let mut referenced: std::collections::HashSet<std::path::PathBuf> =
+            std::collections::HashSet::new();
+        for (lang, _) in Lang::CHOICES {
+            let dir = root.join(lang.tag());
+            for r in RELEASES {
+                for item in r.items {
+                    let Some(fig) = &item.fig else { continue };
+                    let path = dir.join(format!("{}.webp", fig.id));
+                    let declared = fig.size(lang);
+                    let bytes = std::fs::read(&path)
+                        .unwrap_or_else(|e| panic!("{} が読めない: {e}", path.display()));
+                    let actual = crate::manual::webp_size(&bytes)
+                        .unwrap_or_else(|| panic!("{} の WebP ヘッダが読めない", path.display()));
+                    assert_eq!(
+                        actual,
+                        declared,
+                        "{} の実寸法 {actual:?} が宣言 {declared:?} と食い違う。\
+                         `node scripts/shots.mjs --only=whatsnew` で撮り直したなら \
+                         src/i18n.rs の size_* を実測値へ直すこと",
+                        path.display()
+                    );
+                    referenced.insert(path);
+                }
+            }
+        }
+
+        // ── 逆向き: 孤児が残っていないこと ──────────────────────────────────
+        let langs: std::collections::HashSet<&str> =
+            Lang::CHOICES.iter().map(|(l, _)| l.tag()).collect();
+        for lang_dir in read_dir_sorted(&root) {
+            let name = lang_dir
+                .file_name()
+                .expect("public/whatsnew の直下")
+                .to_string_lossy()
+                .into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            assert!(
+                langs.contains(name.as_str()),
+                "public/whatsnew/{name} はどの言語にも対応しない"
             );
-            for s in r.ja.iter().chain(r.en.iter()) {
-                assert!(!s.is_empty(), "id={} に空の項目がある", r.id);
+            for fig in read_dir_sorted(&lang_dir) {
+                if fig
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+                {
+                    continue;
+                }
+                assert!(
+                    referenced.contains(&fig),
+                    "{} はどの項目からも参照されていない（項目を消したら図も消すこと）",
+                    fig.display()
+                );
             }
         }
     }

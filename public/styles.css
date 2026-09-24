@@ -2769,8 +2769,56 @@ h3 {
   display: block;
   width: 100%;
   height: auto;
+  font-size: 12px; /* ★ .wn-fig img と 12px を揃えること（alt 上限テストの前提） */
+  color: var(--muted);
+}
+
+/* お知らせシートの本文リスト。UA 既定の padding-left 40px は 393px 幅で窮屈（.man-list と同じ理由） */
+.wn-list {
+  padding-left: 1.4em;
+}
+
+/* お知らせシートの図。.man-fig と規則を共有しない（箱幅が違う・alt 上限の前提が別）。
+   ★ max-width は必須。.sheet は width: 100% / max-width: none（:1512-1513）なので、
+     iPad / PC では <li> の幅いっぱい（1024px で約 950px）に伸びて 2.5 倍にぼやける。
+   ★ background は読み込み中の「枠だけの空箱」を面に見せる（弱い回線で数秒見える）。
+   ★ font-size は .man-fig img と同じ 12px を保つこと（alt 上限テストの前提） */
+.wn-fig {
+  max-width: 365px;
+  margin: 8px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.wn-fig img {
+  display: block;
+  width: 100%;
+  height: auto;
   font-size: 12px;
   color: var(--muted);
+}
+
+.wn-fig-missing {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.wn-note {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+/* ダークで見ている人にだけ出す（.man-light-note と同じ） */
+.wn-light-note {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .wn-light-note {
+    display: block;
+  }
 }
 
 /* ── データの書き出し / 読み込み ─────────────────────────────────────────── */

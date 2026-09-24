@@ -124,6 +124,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [使い方マニュアルを設定タブの節にし、章は 1 つだけ開く](ux/manual-as-a-settings-section-with-one-open-chapter.md) | 採用 |
 | [記録タブ: 種目を外す / メモを開閉 / 外す確認 で視界が飛ばないようにする](ux/viewport-after-card-height-changes.md) | 採用（[メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](ux/exercise-and-set-notes-behind-one-toggle.md) 決定 4 の「開いた瞬間フッタが下がる」に対処） |
 | [記録タブの日付の横に開始–終了を薄字で出し、セットの時刻はメモを開いたときだけ出す](ux/day-time-span-in-the-header-and-set-times-behind-the-memo-toggle.md) | 採用 |
+| [新機能のお知らせは「利用者の便益になる機能」だけを書き、画面に現れるものには図を付ける](ux/whats-new-notes-are-user-facing-features-with-figures.md) | 採用（[新機能のお知らせバナーを画面最上段に置く](ux/whats-new-banner-above-the-screen.md) の `ReleaseNote` を `items` の形に改める） |
 
 ### deploy — 配信とブランチ運用
 

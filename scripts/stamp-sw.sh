@@ -12,8 +12,9 @@ STAGE="$TRUNK_STAGING_DIR"
 #   欠けても本文だけで完結する補助資産」だけ。
 #   - **og.png**（前者）: 取りに来るのはクローラと SNS のスクレイパだけで、
 #     アプリは一度も参照しない（adr/seo/crawler-metadata-and-hardcoded-origin.md）
-#   - **public/manual/**（後者）: マニュアルの章を開いたときだけ <img> で参照される、
-#     アプリが参照する初めてのシェル外配信物。次の 5 条件を全部満たすものだけ
+#   - **public/manual/ と public/whatsnew/**（後者）: マニュアルの章 / お知らせシートの
+#     項目を開いたときだけ <img> で参照される、アプリが参照するシェル外配信物。
+#     次の 5 条件を全部満たすものだけ
 #     後者に載せてよいと基準を改めた（基準の改訂自体は
 #     adr/seo/crawler-metadata-and-hardcoded-origin.md と adr/pwa/sw-atomic-shell-swap.md
 #     への追記で記録する。ここには規則だけを書く）:
@@ -41,6 +42,7 @@ shell_files() {
       ! -name sw.js \
       ! -name og.png \
       ! -path './manual/*' \
+      ! -path './whatsnew/*' \
       ! -name '.*' \
       "$@")
 }

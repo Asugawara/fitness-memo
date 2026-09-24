@@ -72,7 +72,17 @@ pub fn WhatsNewBanner(unseen: &'static [ReleaseNote]) -> impl IntoView {
         dismissed.set(true);
     };
 
-    let n_items: usize = unseen.iter().map(|r| r.items(cur_lang()).len()).sum();
+    let n_items: usize = unseen.iter().map(|r| r.items.len()).sum();
+
+    // ★ 一度でもシートを開いたことがあるラッチ。**図のゲートに `open.get()` を直接
+    //   使わない。** 閉じた瞬間に `<figure>` が unmount され、退場アニメーション
+    //   （`.sheet` の `translate` 0.22s、styles.css）の途中でシートの高さが縮む
+    //   （`inset: auto 0 0` の下端貼りで高さは内容依存）。`revealed` はここで作り、
+    //   バナーの `on:click` で `open` と同時に立て、**閉じてもリセットしない**
+    //   （閉じる = 既読でバナーが消え、開き直す導線が無いため）。言語切替でこの
+    //   コンポーネント自体が作り直されると `false` に戻るので、そのときは開き直す
+    //   まで図が無い。
+    let revealed = RwSignal::new(false);
 
     view! {
         // ★ `help.rs` の `InstallBanner` は `!dismissed.get() && applicable` で
@@ -89,7 +99,10 @@ pub fn WhatsNewBanner(unseen: &'static [ReleaseNote]) -> impl IntoView {
                             <button
                                 class="whatsnew-body"
                                 data-testid="whatsnew-banner-open"
-                                on:click=move |_| open.set(true)
+                                on:click=move |_| {
+                                    open.set(true);
+                                    revealed.set(true);
+                                }
                             >
                                 <span class="whatsnew-text">
                                     {cur_lang().whatsnew_banner(n_items)}
@@ -134,18 +147,86 @@ pub fn WhatsNewBanner(unseen: &'static [ReleaseNote]) -> impl IntoView {
             testid="whatsnew-sheet"
             close_testid="whatsnew-sheet-close"
         >
+            // ★ ダークテーマ利用者への断り。図を持つ項目が 1 つでもあればシート本文の
+            //   先頭に置く。CSS で**ダークのときだけ表示**（`.man-light-note` と同じ
+            //   `@media (prefers-color-scheme: dark)` ゲート）なのでライト利用者にはノイズ 0。
+            {unseen
+                .iter()
+                .flat_map(|r| r.items.iter())
+                .any(|item| item.fig.is_some())
+                .then(|| {
+                    view! {
+                        <p class="muted wn-note wn-light-note" data-testid="whatsnew-light-note">
+                            {t().releases.fig_light}
+                        </p>
+                    }
+                })}
             {unseen
                 .iter()
                 .map(|r| {
-                    let items = r.items(cur_lang());
+                    let lang = cur_lang();
                     view! {
                         // ★ 新しい順のまま並べる（`unseen` 自体が新しい順）
                         <section data-testid="whatsnew-release" data-id=r.id.to_string()>
                             <h3>{r.date}</h3>
-                            <ul>
-                                {items
+                            <ul class="wn-list">
+                                {r.items
                                     .iter()
-                                    .map(|item| view! { <li>{*item}</li> })
+                                    .map(|item| {
+                                        // ★ `<Sheet>` の children クロージャの中、項目ごとに 1 つ
+                                        //   作る。`mod.rs` の `Sheet` は `{children()}` を 1 回
+                                        //   だけ呼ぶ `FnOnce` なので、ここより外（ゲートの
+                                        //   クロージャの中）に置くと render effect のたびに
+                                        //   作り直されてしまう。
+                                        let broken = RwSignal::new(false);
+                                        let fig_view = item.fig.as_ref().map(|fig| {
+                                            let (w, h) = fig.size(lang);
+                                            let alt = fig.alt(lang);
+                                            let id = fig.id;
+                                            move || {
+                                                revealed
+                                                    .get()
+                                                    .then(|| {
+                                                        if broken.get() {
+                                                            view! {
+                                                                <p
+                                                                    class="muted wn-fig-missing"
+                                                                    data-testid="whatsnew-fig-missing"
+                                                                >
+                                                                    {t().releases.fig_missing}
+                                                                </p>
+                                                            }
+                                                                .into_any()
+                                                        } else {
+                                                            view! {
+                                                                <figure class="wn-fig">
+                                                                    // ★ 先頭 `/` 禁止（サブパス配信）。
+                                                                    //   `on:error` の型は素の `Event`
+                                                                    //   （tachys が `ErrorEvent` へ
+                                                                    //   unchecked cast する）。ハンドラは
+                                                                    //   引数を使わない。
+                                                                    <img
+                                                                        src=format!(
+                                                                            "whatsnew/{}/{}.webp",
+                                                                            lang.tag(),
+                                                                            id,
+                                                                        )
+                                                                        width=w
+                                                                        height=h
+                                                                        alt=alt
+                                                                        decoding="async"
+                                                                        data-testid="whatsnew-fig"
+                                                                        on:error=move |_| broken.set(true)
+                                                                    />
+                                                                </figure>
+                                                            }
+                                                                .into_any()
+                                                        }
+                                                    })
+                                            }
+                                        });
+                                        view! { <li>{item.text(lang)}{fig_view}</li> }
+                                    })
                                     .collect::<Vec<_>>()}
                             </ul>
                         </section>

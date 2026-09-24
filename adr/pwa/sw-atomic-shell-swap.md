@@ -28,6 +28,17 @@
 >   落ちるため Pages で 404 → `cache.addAll` 拒否 → **install 失敗で全端末が旧版に
 >   固定される**（無言。ローカル E2E では通る）
 
+> **追記（2026-09-22。除外の 2 つ目の適用先が増えた）**
+> [新機能のお知らせは「利用者の便益になる機能」だけを書き、画面に現れるものには図を付ける](../ux/whats-new-notes-are-user-facing-features-with-figures.md)
+> の `public/whatsnew/**` が `public/manual/**` に続く 2 つ目の適用先になり、
+> `shell_files()` の除外語は `og.png` / `./manual/*` / `./whatsnew/*` / dotfile の
+> 4 語になった。**BUILD_ID は毎リリース変わる**——測ったのは「同一ビルド入力で
+> `public/whatsnew/` だけ足し引きしたときの不変性」で、除外前後・非ドットのダミー
+> `public/whatsnew/ja/probe.webp` 追加前後のいずれも `fitness-memo-ff5d8b52eb44d198`
+> のまま動かなかった（`stamp-sw.sh` を触ったこと自体による変化ではない。触ると
+> スクリプト自身がハッシュ入力なので変わるのは既知どおりだが、今回の実測はその
+> 変化を含まない「除外の効き目」だけを見ている）。
+
 ## 背景
 
 要件は「完全にオフラインでも動作する」。Service Worker でアプリシェル（index.html / js / wasm / css / manifest / icons）をキャッシュする必要がある。

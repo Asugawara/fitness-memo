@@ -35,7 +35,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | タイトル | 状態 |
 |---|---|
 | [セッションをローカル日付文字列で BTreeMap に持つ](data-model/session-keyed-by-local-date.md) | 採用 |
-| [`at` を `Option<i64>` にし当日入力時のみ埋める](data-model/at-optional-same-day-only.md) | 採用（表示規則は [経過日数をローカル暦の日差にし、時刻粒度を同じ日の中だけに閉じる](data-model/elapsed-in-local-calendar-days.md) で改訂） |
+| [`at` を `Option<i64>` にし当日入力時のみ埋める](data-model/at-optional-same-day-only.md) | 採用（表示規則は [経過日数をローカル暦の日差にし、時刻粒度を同じ日の中だけに閉じる](data-model/elapsed-in-local-calendar-days.md) で改訂。セット単位の時刻は [セットごとの `at` を当日の手入力時だけ埋め、コピーした行には持ち込まない](data-model/set-at-typed-today-only.md)） |
 | [指標の種類を種目の明示属性にする（推論しない）](data-model/exercise-kind-explicit.md) | 置換済み → [指標を種目の属性ではなくグラフの表示設定にする](data-model/metric-is-a-view-setting.md) |
 | [「1日1種目1ログ」を不変条件にする](data-model/one-log-per-exercise-per-day.md) | 採用 |
 | [部位別の指標を volume ではなくセット数にする](data-model/group-metric-is-set-count.md) | 置換済み → [指標を種目の属性ではなくグラフの表示設定にする](data-model/metric-is-a-view-setting.md) |
@@ -48,6 +48,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [トレーニングメニューを「名前 + 種目 ID の並び」だけのデータにする](data-model/routines-as-named-exercise-lists.md) | 採用（宙に浮いた参照を残す規則を継いだ相手は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)） |
 | [ドロップセットをメインセットにぶら下がる段（`SetEntry.drops`）として持つ](data-model/drop-sets-as-stages-under-the-main-set.md) | 採用 |
 | [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md) | 採用（画面側は [チップでラベルを選ぶと履歴とコピーが切り替わる](ux/label-chips-switch-the-history-and-the-copy.md)。`color` の追加と「推移タブはラベルを見ない」の改訂は [ラベルに色を持たせ、推移タブのデータ点をその色で描く](ux/label-colour-on-the-progress-dots.md)） |
+| [セットごとの `at` を当日の手入力時だけ埋め、コピーした行には持ち込まない](data-model/set-at-typed-today-only.md) | 採用 |
 
 ### storage — 永続化
 
@@ -122,6 +123,8 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [ラベルに色を持たせ、推移タブのデータ点をその色で描く](ux/label-colour-on-the-progress-dots.md) | 採用（2 つのラベル ADR の「推移タブはラベルを見ない」を改訂） |
 | [使い方マニュアルを設定タブの節にし、章は 1 つだけ開く](ux/manual-as-a-settings-section-with-one-open-chapter.md) | 採用 |
 | [記録タブ: 種目を外す / メモを開閉 / 外す確認 で視界が飛ばないようにする](ux/viewport-after-card-height-changes.md) | 採用（[メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](ux/exercise-and-set-notes-behind-one-toggle.md) 決定 4 の「開いた瞬間フッタが下がる」に対処） |
+| [記録タブの日付の横に開始–終了を薄字で出し、セットの時刻はメモを開いたときだけ出す](ux/day-time-span-in-the-header-and-set-times-behind-the-memo-toggle.md) | 採用 |
+| [新機能のお知らせは「利用者の便益になる機能」だけを書き、画面に現れるものには図を付ける](ux/whats-new-notes-are-user-facing-features-with-figures.md) | 採用（[新機能のお知らせバナーを画面最上段に置く](ux/whats-new-banner-above-the-screen.md) の `ReleaseNote` を `items` の形に改める） |
 
 ### deploy — 配信とブランチ運用
 

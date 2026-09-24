@@ -29,6 +29,22 @@ async function flushToStorage(page) {
   });
 }
 
+/**
+ * `<img>` が読み込み終わる（成功 / 失敗いずれか）まで待つ。
+ * `e2e/manual.spec.mjs` の同名ヘルパーと同じ実装。共有モジュールは持たない
+ * （`manual.spec.mjs` 冒頭のコメントが明記する既存 spec の作法）。
+ */
+async function waitForImageSettled(locator) {
+  await locator.evaluate(
+    (el) =>
+      new Promise((resolve) => {
+        if (el.complete) return resolve();
+        el.addEventListener('load', resolve, { once: true });
+        el.addEventListener('error', resolve, { once: true });
+      }),
+  );
+}
+
 /** UI 専用キーの生の JSON を読む。 */
 async function uiState(page) {
   return page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}'), UI_KEY);
@@ -278,4 +294,170 @@ test('10. バナーが出ている状態で言語を切り替えても、既読�
   //   すると、この切り替えで作り直された瞬間に既読済みのバナーが復活する
   await page.getByTestId('lang-btn').and(page.locator('[data-lang="ja"]')).click();
   await expect(page.getByTestId('whatsnew-banner')).toHaveCount(0);
+});
+
+// ── 図（src/views/whatsnew.rs の `revealed` ラッチ / `on:error` / ダーク断り） ──
+//
+// ★ **11 と 14 は Service Worker を block する。** E2E サーバー（4173）は
+//   `index.html` が SW を登録し、`sw.js` は `skipWaiting` + `clients.claim` で
+//   初回ロード直後から同一オリジンの全 GET を仲介する。Playwright は
+//   **SW が仲介したリクエストを `page.route()` でインターセプトできない**
+//   （`node_modules/playwright-core/types/types.d.ts` の `page.route` の NOTE:
+//   "will not intercept requests intercepted by Service Worker … We recommend
+//   disabling Service Workers by setting `serviceWorkers` to `'block'`"。
+//   microsoft/playwright#1090 も同じ制約を記録している）。
+//   `e2e/manual.spec.mjs:528` と `e2e/pwa.spec.mjs:391` も同じ壁を踏んでいる
+//   （`setOffline` が SW 発の fetch に効かない）。SW の activate との競走なので
+//   block しないと flaky になる（chromium / Pixel 7）。
+
+/**
+ * 図を持つ項目が 1 つでもあれば、項目ごとに `<img>`（`whatsnew-fig`）か代替の
+ * `<p>`（`whatsnew-fig-missing`）のどちらか 1 つが必ず DOM にある
+ * （`<img>` は `revealed` と同時にマウントされ、`on:error` で `<p>` に**置き換わる**）。
+ *
+ * ★ skip 判定はこの和集合で行う。**`whatsnew-fig` 単独の `count()` は使わない** —
+ *   404 で `<p>` に差し替わった図が「無い」扱いになり、本来 FAIL すべき状況
+ *   （宣言した図が読めない）が skip という緑の結果に化ける
+ *   （差し替え前に `count()` が走れば `naturalWidth` 0 で FAIL、差し替え後なら skip、
+ *   とタイミング次第で結果が変わっていた）。
+ */
+function figOrFallback(page) {
+  return page.getByTestId('whatsnew-fig').or(page.getByTestId('whatsnew-fig-missing'));
+}
+
+test.describe('11: 図はシートを開くまで取りに行かない', () => {
+  test.use({ serviceWorkers: 'block' });
+
+  test('起動直後は whatsnew/ へのリクエストが 0 件、開くと 1 件以上', async ({ page }) => {
+    await setUiState(page, { release_seen: 0 });
+
+    const requests = [];
+    // ★ reload の前に listener を張る。後から張ると起動直後のリクエストを
+    //   数え漏らす（reload はナビゲーションなので listener は張り直しになる）
+    page.on('request', (req) => {
+      if (req.url().includes('whatsnew/')) requests.push(req.url());
+    });
+
+    await page.reload();
+    await expect(page.getByTestId('screen-record')).toBeVisible();
+    await expect(page.getByTestId('whatsnew-fig')).toHaveCount(0);
+    expect(requests.length, '開く前に whatsnew/ へのリクエストが飛んでいる').toBe(0);
+
+    await page.getByTestId('whatsnew-banner-open').click();
+    test.skip((await figOrFallback(page).count()) === 0, '図を持つ項目が無い');
+
+    const figs = page.getByTestId('whatsnew-fig');
+    await expect(figs.first()).toBeVisible();
+    const srcs = await figs.evaluateAll((els) => els.map((el) => el.getAttribute('src')));
+    for (const src of srcs) {
+      expect(src.startsWith('/'), `src が絶対パス参照になっている: ${src}`).toBe(false);
+      expect(src).toContain('whatsnew/ja/');
+    }
+    // ★ Chromium は SW 経由の fetch を二重に数えうるので toBe(1) にしない。
+    //   正の側（開けば取りに行く）を見る
+    expect(requests.length, '開いた後は whatsnew/ へのリクエストが 1 件以上').toBeGreaterThanOrEqual(1);
+  });
+});
+
+test('12. 宣言寸法 = 実ファイル: img の naturalWidth/Height が width/height 属性と一致する', async ({
+  page,
+}) => {
+  await setUiState(page, { release_seen: 0 });
+  await page.reload();
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+
+  await page.getByTestId('whatsnew-banner-open').click();
+  test.skip((await figOrFallback(page).count()) === 0, '図を持つ項目が無い');
+
+  // 読めなかった図があれば、以下の naturalWidth 検査を待たずここで明示的に落とす
+  await expect(page.getByTestId('whatsnew-fig-missing')).toHaveCount(0);
+
+  const figs = page.getByTestId('whatsnew-fig');
+  const count = await figs.count();
+  for (let i = 0; i < count; i++) {
+    const img = figs.nth(i);
+    await img.scrollIntoViewIfNeeded();
+    await waitForImageSettled(img);
+
+    const [naturalWidth, naturalHeight, width, height] = await Promise.all([
+      img.evaluate((el) => el.naturalWidth),
+      img.evaluate((el) => el.naturalHeight),
+      img.evaluate((el) => Number(el.getAttribute('width'))),
+      img.evaluate((el) => Number(el.getAttribute('height'))),
+    ]);
+    expect(naturalWidth, `${i} 枚目が読めていない`).toBeGreaterThan(0);
+    expect(naturalWidth, `${i} 枚目の naturalWidth`).toBe(width);
+    expect(naturalHeight, `${i} 枚目の naturalHeight`).toBe(height);
+  }
+});
+
+test('13. SW のシェルに whatsnew/ が入っていない', async ({ page }) => {
+  const sw = await (await page.request.get('./sw.js')).text();
+
+  // まず置換自体が走っていること（プレースホルダが残っていたら以下の assert が空振りする）
+  expect(sw).not.toContain('__BUILD_ID__');
+  expect(sw).not.toContain('__SHELL__');
+  // SHELL が空でないこと（空配列なら whatsnew/ が無いのは当たり前で、何も検証できていない）
+  expect(sw).toContain('"./manifest.webmanifest"');
+
+  expect(sw, 'バナーを開かない人のオフラインシェルに図を載せてはならない').not.toContain('whatsnew/');
+});
+
+test.describe('14: 図が取れないとき代替表示になる', () => {
+  test.use({ serviceWorkers: 'block' });
+
+  test('本文は読めて断りが出る（図・SW を経由しない）', async ({ page }) => {
+    await setUiState(page, { release_seen: 0 });
+    // ★ シートを開くまで図は fetch されないので、abort を先に張っても
+    //   キャッシュ経由で偶然読める心配は無い（SW を block しているので route が届く）
+    await page.route('**/whatsnew/**', (route) => route.abort());
+
+    await page.reload();
+    await expect(page.getByTestId('screen-record')).toBeVisible();
+
+    await page.getByTestId('whatsnew-banner-open').click();
+    test.skip((await figOrFallback(page).count()) === 0, '図を持つ項目が無い');
+
+    // ★ 専用サーバーを kill する重い形（manual.spec.mjs:516-556）は使わない。
+    //   図はシートを開くまで一切 fetch されないので、abort だけで足りる
+    const missing = page.getByTestId('whatsnew-fig-missing');
+    await expect(missing.first()).toBeVisible();
+    await expect(page.getByTestId('whatsnew-fig')).toHaveCount(0);
+    await expect(page.getByTestId('whatsnew-release').first().locator('li').first()).toBeVisible();
+  });
+});
+
+test('14b. ダークの断りはダークのときだけ出る', async ({ page }) => {
+  await setUiState(page, { release_seen: 0 });
+  await page.reload();
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+  await page.getByTestId('whatsnew-banner-open').click();
+
+  const note = page.getByTestId('whatsnew-light-note');
+  test.skip((await note.count()) === 0, '図を持つ項目が無い');
+
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(note).toBeVisible();
+
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(note).toBeHidden();
+});
+
+test('15. 言語切替後にバナーを開き直すと図の src が en/ になる', async ({ page }) => {
+  await setUiState(page, { release_seen: 0 });
+  await page.reload();
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+
+  // ★ 言語切替で WhatsNewBanner ごと作り直され、`revealed` は false に戻る
+  //   （テスト 10 と同じ理由）。開き直さないと図がまだ DOM に無い
+  await page.getByTestId('tab-settings').click();
+  await page.getByTestId('settings-row-language').click();
+  await page.getByTestId('lang-btn').and(page.locator('[data-lang="en"]')).click();
+
+  await expect(page.getByTestId('whatsnew-banner')).toBeVisible();
+  await page.getByTestId('whatsnew-banner-open').click();
+
+  test.skip((await figOrFallback(page).count()) === 0, '図を持つ項目が無い');
+  const figs = page.getByTestId('whatsnew-fig');
+  await expect(figs.first()).toHaveAttribute('src', /whatsnew\/en\//);
 });

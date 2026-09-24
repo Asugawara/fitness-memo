@@ -43,6 +43,20 @@
 > [GitHub の Social preview 画像を `assets/` に生成し、アップロードは手作業と割り切る](github-social-preview-image.md)
 > にも追記した。
 
+> **追記（2026-09-22。5 条件の 2 つ目の適用先が増えた）**
+> [新機能のお知らせは「利用者の便益になる機能」だけを書き、画面に現れるものには図を付ける](../ux/whats-new-notes-are-user-facing-features-with-figures.md)
+> の `public/whatsnew/**` が、`public/manual/**` に続く**2 つ目**の「参照するが、
+> 欠けても本文だけで完結する補助資産」になった。上の 5 条件を全部満たしている
+> （E2E 11 が条件 1、E2E 13 が条件 4、E2E 14 が条件 5 を固定する）。除外語は
+> `og.png` / `./manual/*` / `./whatsnew/*` / dotfile の**4 語**に増えた
+> （`scripts/stamp-sw.sh` の `shell_files()`）。
+>
+> **BUILD_ID は毎リリース変わる。** 測ったのは「同一ビルド入力で `public/whatsnew/`
+> だけ足し引きしたときの不変性」であって、「BUILD_ID がリリースをまたいで固定である」
+> ことではない（誤読しないこと）。実測: 除外を足す前後で同一ビルド入力に対して
+> `fitness-memo-ff5d8b52eb44d198` のまま動かず、非ドットのダミー
+> `public/whatsnew/ja/probe.webp` を追加してビルドし直しても同じ値だった。
+
 ## 背景
 
 公開先は <https://asugawara.github.io/fitness-memo/> だが、**SEO 資産が一度も存在しなかった**。配信されていたのは HTML / js / wasm / css / manifest / sw / アイコンだけで、`description` も OGP も無い。

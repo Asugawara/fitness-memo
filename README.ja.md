@@ -40,14 +40,17 @@ iPhone のホーム画面から起動して完全オフラインで動く、個�
 12 章すべてが実際の画面のスクリーンショットを日英両方で持つ — `public/manual/{ja,en}/` の下に計 24 枚の `.webp`。撮影は常に**ライトテーマ固定**（[使い方マニュアルの図を手描きの模式図ではなくアプリ自身のスクリーンショットにする](adr/architecture/manual-figures-as-served-screenshots.md)）。撮り直しはいつ行っても安全 — 時計とタイムゾーンを `scripts/shots.mjs` の中で固定してあるので、何か月後に撮り直しても「今日」が動かず、中身が変わっていなければバイト単位で同じ画像になる:
 
 ```sh
-node scripts/shots.mjs                     # 全部：README の 3 枚 + マニュアルの 24 枚
-node scripts/shots.mjs --only=manual       # マニュアルの 24 枚だけ（pre-commit が呼ぶのはこれ）
-node scripts/shots.mjs --only=readme       # README の 3 枚だけ（UI が落ち着いたら手で叩く）
-node scripts/shots.mjs --only=manual:<id>  # 1 章だけ日英両方、例: --only=manual:copy-last
-node scripts/shots.mjs --check             # 一時ディレクトリに撮ってバイト比較。差があれば exit 1
+node scripts/shots.mjs                        # 全部：README の 3 枚 + マニュアルの 24 枚 + お知らせの図
+node scripts/shots.mjs --only=manual,whatsnew # pre-commit が呼ぶのはこれ（README は含まない）
+node scripts/shots.mjs --only=manual          # マニュアルの 24 枚だけ
+node scripts/shots.mjs --only=whatsnew        # お知らせの図だけ
+node scripts/shots.mjs --only=readme          # README の 3 枚だけ（UI が落ち着いたら手で叩く）
+node scripts/shots.mjs --only=manual:<id>     # 1 章だけ日英両方、例: --only=manual:copy-last
+node scripts/shots.mjs --only=whatsnew:<id>   # お知らせの図 1 枚だけ日英両方
+node scripts/shots.mjs --check                # 一時ディレクトリに撮ってバイト比較。差があれば exit 1
 ```
 
-`.githooks/pre-commit` が呼ぶのは常に `--only=manual` で、しかも UI に関わるパスを触ったコミットのときだけ。README の 3 枚は意図的に手動・不定期の作業にしてあり、撮り忘れは `scripts/release.sh` の `--check` がリリース前に捕まえる想定（[マニュアルの図は pre-commit で撮り直すが、UI に関わるパスを触ったコミットに限る](adr/deploy/screenshots-in-pre-commit-on-ui-paths.md)）。図は合計で約 350KiB になるが、Service Worker のオフラインシェルには一度も入れていない — オフラインでは図が欠けることをマニュアル自身が本文で伝える設計なので、開かない人にまで毎回のインストールで背負わせる理由が無い。
+`.githooks/pre-commit` が呼ぶのは常に `--only=manual,whatsnew` で、しかも UI に関わるパスを触ったコミットのときだけ。README の 3 枚は意図的に手動・不定期の作業にしてあり、撮り忘れ（や rebase・GitHub 上のマージ後のドリフト。どちらも `pre-commit` は走らない）は `scripts/release.sh` が重い E2E の直前に走らせる `shots.mjs --check` が実際に捕まえる（[マニュアルの図は pre-commit で撮り直すが、UI に関わるパスを触ったコミットに限る](adr/deploy/screenshots-in-pre-commit-on-ui-paths.md)）。図は合計で約 350KiB になるが、Service Worker のオフラインシェルには一度も入れていない — オフラインでは図が欠けることをマニュアルとお知らせシート自身が本文で伝える設計なので、開かない人にまで毎回のインストールで背負わせる理由が無い。
 
 ## アイコンと共有画像
 
@@ -74,6 +77,7 @@ sh scripts/gen-og.sh      # public/og.png (1200x630) + assets/social-preview.png
 - **ラベルと、ラベル別の「前回」** — 同じ種目で毎回狙いを変える（今日は高重量で 3 レップ、次は 10 レップ）なら、素の「前回」は役に立たない。直近の 1 件が出るだけで、数値がまるで違うからだ。設定タブ → 種目 で**種目ごとに自分のラベルを定義**すると、その種目のカードにチップの行が出る。1 つ押すと**過去の記録と「前回をコピー」の中身が同時にそのラベルへ切り替わる**ので、読んでいるものと入るものが常に一致する。先頭のチップは**「指定なし」** — 従来どおりの挙動で、常に見えていて 1 タップで戻れる。履歴が無いラベルは「記録なし」と言ってコピーボタンを隠す（別の狙いの記録へ黙って落ちない）。参照は ID なので、**改名しても数か月ぶんの履歴が付いてくる**。ラベルを 1 つも定義していない種目にはチップが出ないので、この機能を使わない人の画面は 1px も動かない（[チップでラベルを選ぶと履歴とコピーが切り替わる](adr/ux/label-chips-switch-the-history-and-the-copy.md) / [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](adr/data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)）。**推移タブでも同じチップで絞り込める** — 下の項目を参照。
 - **ラベルの色と、推移タブのラベル絞り込み** — ラベルごとに色を選べる（設定タブ → 種目 → ラベルの行の色見本）。新しいラベルには**互いに重ならない色**が自動で振られ、青系は候補に入らない（折れ線と体重の線の色を避けるため）。推移タブで種目を選ぶと、その種目のラベルがチップの行になる。1 つ押すと**グラフの点も記録テーブルも同時にそのラベルだけになる**。「すべて」に戻すと全部が出て、**ラベルの付いた日はその色の点、付いていない日は既定の色の点**で描かれる — チップの行がそのまま凡例になっている。折れ線・軸・体重の破線は色を変えない（色が読めなくてもグラフの意味は変わらない）。絞り込みは指標や期間と同じ「今の見方」なので保存されず、種目を切り替えると「すべて」に戻る（[ラベルに色を持たせ、推移タブのデータ点をその色で描く](adr/ux/label-colour-on-the-progress-dots.md)）。
 - **インターバル** — 種目ごとにセット間の休憩を秒で保存できる。ピンとまったく同じで**種目に貼り付いて日をまたぐ**ので、次に同じ種目をやるとき「前回どれくらい休んだか」を思い出さなくていい。ピンの下に薄字で出るのでタップは要らず、直すときだけ「＋ メモ」から開く。数字キーパッドだけで打ち切れる（[インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](adr/ux/interval-seconds-on-the-exercise.md)）。
+- **記録した時刻** — 当日に重量か回数を打ったセットには、その時刻が自動で残る（端末のタイムゾーン）。日付の横にその日の開始–終了が「19:02–20:15」と薄字で出て、「＋ メモ」を開くとセットごとの時刻が読める。「前回をコピー」で入って触らなかったセットと、過去日に入れた記録には付かない — いつやったか分からないものに時刻を捏造しない（[セットごとの `at` を当日の手入力時だけ埋め、コピーした行には持ち込まない](adr/data-model/set-at-typed-today-only.md) / [記録タブの日付の横に開始–終了を薄字で出し、セットの時刻はメモを開いたときだけ出す](adr/ux/day-time-span-in-the-header-and-set-times-behind-the-memo-toggle.md)）。
 - **トレーニングメニュー** — よくやる種目の組み合わせに名前を付けて保存できる。空の日にはその一覧が候補として並び、1 タップで種目のカードが揃う。入る数値は**種目ごとに別々の日**から引く — その種目の直近の記録なので、「胸の日」の外でベンチプレスをやった分もちゃんと反映される。まだ一度もやったことのない種目は空のカードとして出る。メモも数値と同じログから来る（[保存したメニューから始める（種目タブを設定タブに改める）](adr/ux/start-from-a-saved-routine.md) / [トレーニングメニューを「名前 + 種目 ID の並び」だけのデータにする](adr/data-model/routines-as-named-exercise-lists.md)）。
 - **その日の記録をそのままメニューにする** — 作り方は 2 通り。設定タブで種目を選んで組むか、記録タブで**その日の下に出る「＋ この日をメニューにする」**を押す。後者はカレンダーで選んだ任意の日が対象で、その日の種目が初期選択で入るので名前を付けるだけで終わる。開くシートは設定タブと同じものなので、その場で種目を足し引きしてから保存できる（[その日の記録から直接メニューを作れるようにする](adr/ux/save-a-day-as-a-routine.md)）。
 - **カレンダーからの記録追加** — 記録タブは月グリッドと選択日の入力欄が縦に並んだ 1 画面。実施日は部位カラーのドットで示す。記録が無い日でも、**日セルをタップした時点で下の入力欄がその日のものになる**ので、前日の記録し忘れをタブ往復なしでそのまま入れられる。
@@ -85,7 +89,7 @@ sh scripts/gen-og.sh      # public/og.png (1200x630) + assets/social-preview.png
 - **種目メモとセットメモ** — 種目カードのフッタの「＋ メモ」で、その日のその種目のメモと各セット行のメモが一斉に開く。閉じていても入力済みのメモは薄字で読めるので、開くのは書くときだけでいい（[メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](adr/ux/exercise-and-set-notes-behind-one-toggle.md)）。
 - **ドロップセット** — メインセットの下に、重量を落として続けた段を 1〜4 段まで記録できる。**推移タブに含めるかは設定で選べて、既定は含めない** — 落とした段をボリュームに混ぜると「前回と同じかそれ以上」の基準値が日によって膨らむため。含めないときはメインセットだけで推移が出る（記録タブの当日合計は設定にかかわらず段も数える）。**落とし幅（%）を設定しておくと、段を足した瞬間に 1 段目の重量が計算されて入る**（既定 20%、小数点以下 1 桁まで自由入力）。2 段目以降は前の段の重量をそのままコピーするので、下げるときだけ打ち直せばよい。**メモを開かずに、セット行の `↓` を押せばその場で足せる**（[ドロップセットの段はメインセットの下の箱に出し、推移では既定で外す](adr/ux/drop-sets-as-a-box-under-the-main-set.md)）。
 - **日本語 / 英語** — ブラウザの言語で自動判定し、設定タブの「言語」から切り替えられる（[言語はブラウザに従い、選んだらそれを優先する](adr/ux/language-follows-the-browser-then-the-setting.md)）。
-- **新機能のお知らせ** — リリースのたびに、全タブの最上段に細いバナーで新機能を知らせる。押すと未読のリリースをまとめて 1 枚のシートに新しい順で読める。閉じる（✕ でも同じ）とそのお知らせは二度と出ない — 読み返す常設のメニューは無い（[新機能のお知らせバナーを画面最上段に置く](adr/ux/whats-new-banner-above-the-screen.md)）。
+- **新機能のお知らせ** — リリースのたびに、全タブの最上段に細いバナーで新機能を知らせる。押すと未読のリリースをまとめて 1 枚のシートに新しい順で読める。閉じる（✕ でも同じ）とそのお知らせは二度と出ない — 読み返す常設のメニューは無い（[新機能のお知らせバナーを画面最上段に置く](adr/ux/whats-new-banner-above-the-screen.md)）。書くのは**利用者が新しくできるようになったこと**だけで、並び替えや文言修正は書かない。画面に現れる機能にはスクリーンショットを 1 枚添える（[新機能のお知らせは「利用者の便益になる機能」だけを書き、画面に現れるものには図を付ける](adr/ux/whats-new-notes-are-user-facing-features-with-figures.md)）。
 
 **指標は種目の属性ではなくグラフの表示設定**にしている。種目ごとに単位が違うと同じ軸で比べられず、後から種目の性質が変わると過去のグラフが遡って壊れるため（[指標を種目の属性ではなくグラフの表示設定にする](adr/data-model/metric-is-a-view-setting.md)）。重量欄は全種目に出し、**空欄は重量 1 として数える**ので、自重種目も時間種目も「入れなければよい」で成立する。
 
@@ -141,7 +145,7 @@ npx playwright test --project=chromium  # 軽い E2E
 npx playwright test                     # 全 project（Chromium / iPhone 15 Pro (WebKit) / Pixel 7）
 ```
 
-`.githooks/pre-commit` は `main` への `docs/` 混入をガードしたうえで、`cargo fmt --all -- --check` → `cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings` → `cargo test` → `trunk build` →（UI に関わるパスを触ったコミットのときだけ）`node scripts/shots.mjs --only=manual` → `npx playwright test --project=chromium --project=harness` を順に実行する。緊急時は `SKIP_HOOKS=1 git commit` でフック全体を飛ばせる。`SHOTS=0 git commit` はそれより狭く、**撮り直しだけ**を飛ばして fmt / clippy / test / build / E2E はそのまま走らせる — 撮影そのものが壊れているときや、コードと図のコミットを分けたいときに使う。
+`.githooks/pre-commit` は `main` への `docs/` 混入をガードしたうえで、`cargo fmt --all -- --check` → `cargo clippy --target wasm32-unknown-unknown --all-features -- -D warnings` → `cargo test` → `trunk build` →（UI に関わるパスを触ったコミットのときだけ）`node scripts/shots.mjs --only=manual,whatsnew` → `npx playwright test --project=chromium --project=harness` を順に実行する。緊急時は `SKIP_HOOKS=1 git commit` でフック全体を飛ばせる。`SHOTS=0 git commit` はそれより狭く、**撮り直しだけ**を飛ばして fmt / clippy / test / build / E2E はそのまま走らせる — 撮影そのものが壊れているときや、コードと図のコミットを分けたいときに使う。
 
 マニュアルの図を 1 章だけ直しているときは、`node scripts/shots.mjs --only=manual:<id>`（例: `--only=manual:copy-last`）でその章だけを日英両方撮り直せる。12 枚全部は回らない。
 

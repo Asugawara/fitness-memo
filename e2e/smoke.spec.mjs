@@ -1735,8 +1735,11 @@ test('メモ欄にフォーカスするとタブバーが隠れ、blur で戻る
 });
 
 test('メモを使っていないデータの保存 JSON に note キーが増えていない', async ({ page }) => {
-  // ★ skip_serializing_if の退行検知。ここが崩れると保存形式が全利用者ぶん変わり、
-  //   calendar.spec.mjs / backup.spec.mjs の toEqual([{weight, reps}]) も落ちる
+  // ★ skip_serializing_if の退行検知。当日に重量・回数を打ったセットには
+  //   `SetEntry::at` が付くので（adr/data-model/set-at-typed-today-only.md）、
+  //   ここではキー集合を `['at','reps','weight']` に固定する形で見る
+  //   （`toEqual([{weight, reps}]))` は使わない）。`note` は使っていないので
+  //   ログ側に増えていないことは今までどおり見る
   const card = await addExercise(page, 'ベンチプレス');
   await card.getByTestId('set-weight').first().fill('60');
   await card.getByTestId('set-reps').first().fill('10');
@@ -1745,8 +1748,10 @@ test('メモを使っていないデータの保存 JSON に note キーが増�
 
   const raw = await page.evaluate(() => localStorage.getItem('fitness-memo/v3'));
   const session = Object.values(JSON.parse(raw).sessions)[0];
-  expect(session.logs[0].sets).toEqual([{ weight: 60, reps: 10 }]);
-  expect(session.logs[0]).not.toHaveProperty('note');
+  const log = session.logs[0];
+  expect(Object.keys(log.sets[0]).sort()).toEqual(['at', 'reps', 'weight']);
+  expect(log.sets[0]).toMatchObject({ weight: 60, reps: 10 });
+  expect(log).not.toHaveProperty('note');
 });
 
 // 以下2件は計画の12ケースには無い追加の退行テスト。worker-d が実機相当の検証で見つけた

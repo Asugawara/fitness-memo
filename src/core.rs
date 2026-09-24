@@ -229,6 +229,47 @@ pub fn parse_reps(s: &str) -> Option<u32> {
     s.trim().parse::<u32>().ok().filter(|r| *r > 0)
 }
 
+/// セット行の重量か回数を手で打った直後に呼ぶ。
+/// - 過去日なら触らない（打ち直しで消さない・捏造しない）
+/// - 一度入った時刻は打ち直し・回数の消去でも動かさない（動かすには行を ✕ で消して足し直す）
+/// - まだ無い行は、回数が読めた最初の打鍵で now。読めないうちは None（"0" と空欄は `parse_reps` が None）
+pub fn stamp_set_at(
+    prev: Option<i64>,
+    reps_readable: bool,
+    is_today: bool,
+    now_ms: i64,
+) -> Option<i64> {
+    if !is_today || prev.is_some() {
+        prev
+    } else if reps_readable {
+        Some(now_ms)
+    } else {
+        None
+    }
+}
+
+/// その日の開始–終了（min / max の epoch ms）。**全セットの `SetEntry::at` だけ**を見る。
+///
+/// `ExerciseLog::at` は使わない — コピーでも入るので、朝にメニューを適用して夜に
+/// トレすると「08:00–20:10」のように嘘の開始時刻になる（adr/data-model/set-at-typed-today-only.md）。
+/// コピーだけで 1 セットも打ち直していない日は、`at` を持つセットが無いので `None`
+/// （「触らなかったセットに時刻なし」と整合する）。時計を持たない。
+pub fn day_span(session: &Session) -> Option<(i64, i64)> {
+    let mut span: Option<(i64, i64)> = None;
+    for at in session
+        .logs
+        .iter()
+        .flat_map(|l| l.sets.iter())
+        .filter_map(|s| s.at)
+    {
+        span = Some(match span {
+            None => (at, at),
+            Some((min, max)) => (min.min(at), max.max(at)),
+        });
+    }
+    span
+}
+
 /// 入力欄の生文字列 → インターバル（秒）。**空欄は「未設定」。**
 ///
 /// ★ [`parse_reps`] と違って **0 を落とさない**。0 秒は「休まず次のセットへ」という
@@ -370,6 +411,42 @@ fn merge_set_drops_unordered(mine: &mut [SetEntry], theirs: &[SetEntry]) -> usiz
         }
     }
     filled
+}
+
+/// 重量・回数が同じセット同士を突き合わせて `at` を持ち越す。**`log_rank` で負ける側
+/// （`existing`）から、勝って生き残る側（`log`）へ**。数えない — 追加ではなく保持
+/// （adr/data-model/set-at-typed-today-only.md）。
+///
+/// [`merge_set_drops_unordered`] の 2 段構成を写す。素朴に「時刻付きの相手を、
+/// 同じ重量・回数の未使用な先頭に入れる」だと、**並べ替えただけの同じ記録**で
+/// 無関係なセットに時刻が付く（同じ理由が `merge_set_drops_unordered` の doc にある）。
+fn carry_set_ats(from: &[SetEntry], into: &mut [SetEntry]) {
+    let mut used = vec![false; into.len()];
+    // 第 1 段: 同じ時刻を既に持っている相手に寄せる（何も変えない）
+    let mut leftover = Vec::new();
+    for f in from.iter().filter(|f| f.at.is_some()) {
+        let found = into
+            .iter()
+            .enumerate()
+            .find(|(i, m)| !used[*i] && m.at == f.at && same_set(m, f))
+            .map(|(i, _)| i);
+        match found {
+            Some(i) => used[i] = true,
+            None => leftover.push(f),
+        }
+    }
+    // 第 2 段: 余ったものが、時刻の無い相手に入る
+    for f in leftover {
+        let found = into
+            .iter()
+            .enumerate()
+            .find(|(i, m)| !used[*i] && m.at.is_none() && same_set(m, f))
+            .map(|(i, _)| i);
+        if let Some(i) = found {
+            used[i] = true;
+            into[i].at = f.at;
+        }
+    }
 }
 
 /// メモの合流。**同じ文が既に入っていれば足さない。** 足したら `true`。
@@ -862,6 +939,7 @@ impl Seed {
                         reps,
                         note,
                         drops,
+                        at: _, // 運ばない（adr/ux/copy-carries-the-notes.md 決定 6 / adr/data-model/set-at-typed-today-only.md）
                     } = s;
                     SetEntry {
                         weight: *weight,
@@ -870,6 +948,7 @@ impl Seed {
                         // ★ 段も運ぶ。閉じていても行に見えるので、違えばその場で消せる
                         //   （adr/ux/copy-carries-the-notes.md と同じ規則）
                         drops: drops.clone(),
+                        at: None,
                     }
                 })
                 .collect(),
@@ -3549,6 +3628,7 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
                     reps,
                     note: at(cols.set_note).to_string(),
                     drops: parse_drops_cell(at(cols.drop)),
+                    at: None, // 取り込みは時刻を持たない
                 },
             ));
         } else if !reps_cell.is_empty() {
@@ -3938,6 +4018,14 @@ pub struct MergeReport {
     /// 数字が動く**ので、数えないと [`MergeReport::is_noop`] が真になって画面が
     /// 「新しく取り込むものはありませんでした」と嘘をつく。
     pub drops_added: usize,
+    /// 新しく時刻が埋まったセットの数。
+    ///
+    /// ★ [`drops_added`](Self::drops_added) と同じ理由で必要。`same_sets` の枝で
+    /// 位置埋めした `SetEntry::at` は `conflicts` に出ないのに日ヘッダの開始–終了が
+    /// 動くので、数えないと [`MergeReport::is_noop`] が真になって画面が
+    /// 「新しく取り込むものはありませんでした」と嘘をつく。**`log_rank` の差し替え枝で
+    /// [`carry_set_ats`] が持ち越すぶんは数えない**（追加ではなく保持なので）。
+    pub times_added: usize,
     /// 追加したトレーニングメニューの本数。
     pub routines_added: usize,
     /// 増えたラベル（**定義の追加とログへの付与の合算**。`notes_added` が既に
@@ -3973,6 +4061,7 @@ impl MergeReport {
             && self.logs_added == 0
             && self.notes_added == 0
             && self.drops_added == 0
+            && self.times_added == 0
             && self.routines_added == 0
             && self.labels_added == 0
     }
@@ -4212,7 +4301,7 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             continue;
         };
 
-        for log in logs {
+        for mut log in logs {
             let Some(existing) = dst
                 .logs
                 .iter_mut()
@@ -4252,6 +4341,14 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
                         mine.drops = theirs.drops.clone();
                         report.drops_added += 1;
                     }
+                    // ★ 時刻も同じ理由で埋める。`same_sets` が時刻を見ない
+                    //   （= 時刻の差だけでは食い違いにしない）ので、ここで運ばないと
+                    //   他端末で打った時刻が `Conflict` も出さずに黙って消える。
+                    //   **空のときだけ入れる**（`drops` と同じ、位置対応がつくので）
+                    if mine.at.is_none() && theirs.at.is_some() {
+                        mine.at = theirs.at;
+                        report.times_added += 1;
+                    }
                 }
                 continue;
             }
@@ -4273,6 +4370,10 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             // 取り込む側が強いときだけ差し替える。逆向きは黙って捨てる
             // （記録すると、同じファイルを 2 回入れたとき同じ食い違いを毎回報告する）
             if log_rank(&log) > log_rank(existing) {
+                // ★ 差し替える**前**に、負ける側（`existing`）のセット時刻を勝つ側
+                //   （`log`）へ持ち越す。当日の記録に 1 セット足した TSV を取り込む
+                //   だけでその日のセット時刻が全部消えるのを防ぐ。数えない（保持）
+                carry_set_ats(&existing.sets, &mut log.sets);
                 report.conflicts.push(Conflict::SetsDiverged {
                     date: date.clone(),
                     name: mine
@@ -5416,12 +5517,26 @@ mod tests {
         db.sessions.insert(
             date_key(d(2026, 8, 5)),
             Session {
-                logs: vec![noted_log(
-                    10,
-                    "セーフティ 2 穴目",
-                    &[(60.0, 10, "軽い"), (60.0, 8, "限界")],
-                    None,
-                )],
+                logs: vec![ExerciseLog {
+                    // ★ 元のセットに時刻が付いていても運ばれない、を同じ 1 本で固定する
+                    //   （adr/ux/copy-carries-the-notes.md 決定 6 / adr/data-model/set-at-typed-today-only.md）
+                    sets: vec![
+                        SetEntry {
+                            weight: 60.0,
+                            reps: 10,
+                            note: "軽い".into(),
+                            at: Some(1_700_000_000_000),
+                            ..Default::default()
+                        },
+                        SetEntry {
+                            weight: 60.0,
+                            reps: 8,
+                            note: "限界".into(),
+                            ..Default::default()
+                        },
+                    ],
+                    ..noted_log(10, "セーフティ 2 穴目", &[], None)
+                }],
                 body_weight: Some(70.5),
                 note: "よく寝た".into(),
             },
@@ -5444,6 +5559,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(60.0, 10, "軽い"), (60.0, 8, "限界")],
             "セットメモは重量・回数と同じ行に付いたまま運ぶ"
+        );
+        assert!(
+            log.sets.iter().all(|s| s.at.is_none()),
+            "時刻は運ばない（Seed::carry に at が無い）"
         );
     }
 
@@ -5474,6 +5593,12 @@ mod tests {
                 .map(|s| s.drops.len())
                 .collect::<Vec<_>>()
         };
+        let ats = |db: &Db, day: NaiveDate| {
+            db.sessions[&date_key(day)].logs[0]
+                .sets
+                .iter()
+                .all(|s| s.at.is_none())
+        };
 
         copy_day(&mut db, d(2026, 8, 5), d(2026, 8, 8), None);
         assert_eq!(
@@ -5481,6 +5606,7 @@ mod tests {
             vec![0, 1],
             "コピーで段が落ちている"
         );
+        assert!(ats(&db, d(2026, 8, 8)), "コピーで時刻が運ばれている");
 
         // メニューは前回のログ（8/5）を種にするので、段もそこから来る
         apply_routine(&mut db, r(1), d(2026, 8, 9), None);
@@ -5488,6 +5614,10 @@ mod tests {
             stages(&db, d(2026, 8, 9)),
             vec![0, 1],
             "メニューから始めたときに段が落ちている"
+        );
+        assert!(
+            ats(&db, d(2026, 8, 9)),
+            "メニューから始めたときに時刻が運ばれている"
         );
     }
 
@@ -7430,6 +7560,21 @@ mod tests {
         assert!(same_sets_unordered(&plain, &marked));
         assert_ne!(plain, marked, "== は印を見る（だから same_sets が要る）");
 
+        // ★ `at` も同一性に入らない（段・メモと同じ扱い）
+        let timed = vec![
+            SetEntry {
+                at: Some(1_700_000_000_000),
+                ..set(60.0, 10)
+            },
+            set(50.0, 5),
+        ];
+        assert!(
+            same_sets(&plain, &timed),
+            "時刻の違いで不一致にしてはいけない"
+        );
+        assert!(same_sets_unordered(&plain, &timed));
+        assert_ne!(plain, timed, "== は時刻を見る（だから same_sets が要る）");
+
         let a = ExerciseLog {
             exercise_id: e(10),
             sets: plain,
@@ -7742,6 +7887,10 @@ mod tests {
         let log = &db.sessions["2026-08-01"].logs[0];
         assert_eq!(log.exercise_id, ExerciseId::from_bits(0x11));
         assert_eq!(log.sets[0].reps, 10);
+        assert_eq!(
+            log.sets[0].at, None,
+            "取り込みは過去日のバックフィルなので時刻を持たない"
+        );
     }
 
     /// 逆向き。英語の見出しと英語のプリセット名で書かれた TSV を、日本語で使っている
@@ -9099,6 +9248,102 @@ mod tests {
         assert_eq!(parse_reps("あ"), None);
     }
 
+    #[test]
+    fn stamp_set_at_past_day_is_never_touched() {
+        assert_eq!(
+            stamp_set_at(None, true, false, 1000),
+            None,
+            "過去日・None は据え置き"
+        );
+        assert_eq!(
+            stamp_set_at(Some(500), true, false, 1000),
+            Some(500),
+            "過去日・Some は据え置き"
+        );
+    }
+
+    #[test]
+    fn stamp_set_at_today_none_unreadable_reps_stays_none() {
+        assert_eq!(stamp_set_at(None, false, true, 1000), None);
+    }
+
+    #[test]
+    fn stamp_set_at_today_none_readable_reps_stamps_now() {
+        assert_eq!(stamp_set_at(None, true, true, 1000), Some(1000));
+    }
+
+    #[test]
+    fn stamp_set_at_today_some_does_not_move_when_reps_are_cleared() {
+        assert_eq!(
+            stamp_set_at(Some(500), false, true, 1000),
+            Some(500),
+            "回数を消しても一度入った時刻は動かない"
+        );
+    }
+
+    #[test]
+    fn stamp_set_at_today_some_does_not_move_on_retype() {
+        assert_eq!(
+            stamp_set_at(Some(500), true, true, 1000),
+            Some(500),
+            "打ち直しても一度入った時刻は動かない"
+        );
+    }
+
+    #[test]
+    fn day_span_of_a_session_without_any_set_at_is_none() {
+        let s = Session {
+            logs: vec![log(10, &[(60.0, 10)], None)],
+            ..Session::default()
+        };
+        assert_eq!(day_span(&s), None);
+    }
+
+    #[test]
+    fn day_span_of_a_single_set_is_a_point() {
+        let mut s = Session {
+            logs: vec![log(10, &[(60.0, 10)], None)],
+            ..Session::default()
+        };
+        s.logs[0].sets[0].at = Some(1000);
+        assert_eq!(day_span(&s), Some((1000, 1000)));
+    }
+
+    #[test]
+    fn day_span_is_the_min_and_max_of_all_set_ats() {
+        let mut s = Session {
+            logs: vec![log(10, &[(60.0, 10), (60.0, 8), (50.0, 12)], None)],
+            ..Session::default()
+        };
+        s.logs[0].sets[0].at = Some(2000);
+        s.logs[0].sets[1].at = Some(1000);
+        s.logs[0].sets[2].at = Some(3000);
+        assert_eq!(day_span(&s), Some((1000, 3000)));
+    }
+
+    #[test]
+    fn day_span_ignores_sets_without_at() {
+        let mut s = Session {
+            logs: vec![log(10, &[(60.0, 10), (60.0, 8)], None)],
+            ..Session::default()
+        };
+        s.logs[0].sets[0].at = Some(1500);
+        // sets[1].at は None のまま
+        assert_eq!(day_span(&s), Some((1500, 1500)));
+    }
+
+    #[test]
+    fn day_span_does_not_use_the_log_at() {
+        // ★ コピーだけの日は `ExerciseLog::at` が入るが、セットには何も打っていない。
+        //   ここで `log.at` を拾うと「朝にメニューを適用して夜にトレ」で嘘の開始時刻になる
+        //   （adr/data-model/set-at-typed-today-only.md）
+        let s = Session {
+            logs: vec![log(10, &[(60.0, 10)], Some(999))],
+            ..Session::default()
+        };
+        assert_eq!(day_span(&s), None, "ログの at はセットの時刻ではない");
+    }
+
     // ── 書き出し / 読み込み ──────────────────────────────────────────────────
 
     /// ★ この機能の生命線。書き出したものが、そのまま読み戻せる。
@@ -10013,6 +10258,7 @@ mod tests {
                                         reps: *dr,
                                     })
                                     .collect(),
+                                at: None,
                             })
                             .collect(),
                         label: None,
@@ -10029,6 +10275,138 @@ mod tests {
 
     fn merged_log(db: &Db) -> &ExerciseLog {
         &db.sessions[&date_key(d(2026, 8, 1))].logs[0]
+    }
+
+    /// `(重量, 回数, at)` でセットを組む取り込みペア。[`dropped_pair`] の時刻版。
+    fn timed_pair(
+        mine_sets: &[(f32, u32, Option<i64>)],
+        theirs_sets: &[(f32, u32, Option<i64>)],
+    ) -> (Db, Db) {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+        let day = date_key(d(2026, 8, 1));
+        let build = |sets: &[(f32, u32, Option<i64>)]| {
+            let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+            db.sessions.insert(
+                day.clone(),
+                Session {
+                    logs: vec![ExerciseLog {
+                        exercise_id: bench,
+                        sets: sets
+                            .iter()
+                            .map(|(w, r, at)| SetEntry {
+                                weight: *w,
+                                reps: *r,
+                                at: *at,
+                                ..Default::default()
+                            })
+                            .collect(),
+                        label: None,
+                        at: None,
+                        note: String::new(),
+                    }],
+                    ..Session::default()
+                },
+            );
+            db
+        };
+        (build(mine_sets), build(theirs_sets))
+    }
+
+    /// `same_sets` の枝: 取り込み先が時刻を持っていなければ埋める。
+    #[test]
+    fn merge_fills_the_set_at_when_mine_is_none() {
+        let (mut mine, theirs) = timed_pair(&[(60.0, 10, None)], &[(60.0, 10, Some(1000))]);
+
+        let report = merge_db(&mut mine, theirs);
+
+        assert_eq!(merged_log(&mine).sets[0].at, Some(1000));
+        assert_eq!(report.times_added, 1);
+        assert!(
+            !report.is_noop(),
+            "時刻だけが埋まったマージを no-op と言っている"
+        );
+    }
+
+    /// `same_sets` の枝: 取り込み先が既に時刻を持っていれば据え置く。
+    #[test]
+    fn merge_keeps_my_set_at_when_mine_has_one() {
+        let (mut mine, theirs) = timed_pair(&[(60.0, 10, Some(500))], &[(60.0, 10, Some(1000))]);
+
+        let report = merge_db(&mut mine, theirs);
+
+        assert_eq!(
+            merged_log(&mine).sets[0].at,
+            Some(500),
+            "自分の時刻を上書きしない"
+        );
+        assert_eq!(report.times_added, 0);
+    }
+
+    /// `log_rank` の差し替え枝: 取り込む側が勝っても、同じ重量・回数のセットには
+    /// 取り込み先の時刻が持ち越される（[`carry_set_ats`]）。数えない。
+    #[test]
+    fn merge_carries_the_set_at_across_a_replace_without_counting_it() {
+        let (mut mine, theirs) = timed_pair(
+            &[(60.0, 10, Some(500)), (60.0, 8, Some(600))],
+            // 取り込む側はセットが 1 本多いので log_rank で勝つ
+            &[(60.0, 10, None), (60.0, 8, None), (60.0, 6, None)],
+        );
+
+        let report = merge_db(&mut mine, theirs);
+
+        let sets = &merged_log(&mine).sets;
+        assert_eq!(
+            sets[0].at,
+            Some(500),
+            "同じ重量・回数のセットへ時刻が持ち越される"
+        );
+        assert_eq!(sets[1].at, Some(600));
+        assert_eq!(sets[2].at, None, "変わったセットに時刻は生まれない");
+        assert_eq!(report.times_added, 0, "追加ではなく保持なので数えない");
+    }
+
+    /// `carry_set_ats` の第 1 段（＝既に同じ時刻を持つ相手には触らない）を直接踏む。
+    /// `mine` は「一度 carry_set_ats で時刻を持ち越した状態」（同じ重量・回数のセットが
+    /// 2 本、別々の時刻を持つ）を直接組み、それを同じ相手ともう一度 merge_db する。
+    /// 第 1 段が無いと、from を順に処理する素朴な実装では既に正しく一致している
+    /// into の枠を後続の from 要素が上書きし、対照値のうち片方が丸ごと失われる。
+    #[test]
+    fn merge_does_not_let_carry_set_ats_overwrite_an_already_matching_time() {
+        let (mut mine, theirs) = timed_pair(
+            &[(60.0, 10, Some(600)), (60.0, 10, Some(500))],
+            // 取り込む側はセットが 1 本多いので log_rank で勝つ。1 本目は mine と
+            // 既に同じ時刻（600）を持つ — 同じ相手をもう一度取り込んだ形
+            &[(60.0, 10, Some(600)), (60.0, 10, None), (40.0, 5, None)],
+        );
+
+        let report = merge_db(&mut mine, theirs);
+
+        let sets = &merged_log(&mine).sets;
+        assert_eq!(sets[0].at, Some(600), "既に正しい時刻を持つ枠は動かさない");
+        assert_eq!(
+            sets[1].at,
+            Some(500),
+            "第 1 段が無いと 600 が先に消費されて 500 が丸ごと失われる"
+        );
+        assert_eq!(sets[2].at, None);
+        assert_eq!(report.times_added, 0, "持ち越しなので数えない");
+    }
+
+    /// `same_sets_unordered` の枝（並べ替えただけ）は運ばない。現状固定。
+    #[test]
+    fn merge_does_not_carry_the_set_at_when_only_the_order_differs() {
+        let (mut mine, theirs) = timed_pair(
+            &[(60.0, 10, None), (60.0, 6, None)],
+            &[(60.0, 6, Some(700)), (60.0, 10, Some(600))],
+        );
+
+        let report = merge_db(&mut mine, theirs);
+
+        assert!(
+            merged_log(&mine).sets.iter().all(|s| s.at.is_none()),
+            "並び替えだけの枝では時刻を運ばない"
+        );
+        assert_eq!(report.times_added, 0);
     }
 
     #[test]
@@ -12270,6 +12648,7 @@ mod tests {
                             reps: 3,
                             note: set_note.to_string(),
                             drops: Vec::new(),
+                            at: None,
                         }],
                         at: None,
                         note: String::new(),

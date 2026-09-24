@@ -182,19 +182,25 @@ test('1. ★ メモを開かずに段を足して打てる', async ({ page }) =>
   // メモは一度も開いていない
   await expect(card.getByTestId('note-toggle')).toHaveAttribute('aria-expanded', 'false');
 
+  // ★ 当日に打ったセットには `SetEntry::at` も付く
+  //   （adr/data-model/set-at-typed-today-only.md）。`toEqual` は使わず、
+  //   キー集合を固定したうえで中身を見る
   const db = await readDb(page);
-  expect(Object.values(db.sessions)[0].logs[0].sets).toEqual([
-    { weight: 60, reps: 10, drops: [{ weight: 48, reps: 5 }] },
-  ]);
+  const sets = Object.values(db.sessions)[0].logs[0].sets;
+  expect(Object.keys(sets[0]).sort()).toEqual(['at', 'drops', 'reps', 'weight']);
+  expect(sets[0]).toMatchObject({ weight: 60, reps: 10, drops: [{ weight: 48, reps: 5 }] });
 });
 
 test('2. 段の無いセットの保存 JSON にキーが増えない', async ({ page }) => {
   // ★ `skip_serializing_if` の回帰検出器。ここが崩れると、段を使っていない
-  //   利用者の保存データが今までと変わる（smoke.spec.mjs の note 版と同じ主張）
+  //   利用者の保存データが今までと変わる（smoke.spec.mjs の note 版と同じ主張）。
+  //   `at` は当日の打鍵で当然出るので、ここでは `drops` キーが増えていないことだけを見る
   await cardWithOneSet(page);
 
   const db = await readDb(page);
-  expect(Object.values(db.sessions)[0].logs[0].sets).toEqual([{ weight: 60, reps: 10 }]);
+  const sets = Object.values(db.sessions)[0].logs[0].sets;
+  expect(Object.keys(sets[0]).sort()).toEqual(['at', 'reps', 'weight']);
+  expect(sets[0]).toMatchObject({ weight: 60, reps: 10 });
 });
 
 test('3. 段を消すと保存 JSON からキーが消える', async ({ page }) => {
@@ -204,7 +210,9 @@ test('3. 段を消すと保存 JSON からキーが消える', async ({ page }) 
   await row.getByTestId('drop-remove').click();
 
   const db = await readDb(page);
-  expect(Object.values(db.sessions)[0].logs[0].sets).toEqual([{ weight: 60, reps: 10 }]);
+  const sets = Object.values(db.sessions)[0].logs[0].sets;
+  expect(Object.keys(sets[0]).sort()).toEqual(['at', 'reps', 'weight']);
+  expect(sets[0]).toMatchObject({ weight: 60, reps: 10 });
 });
 
 test('4. ★ `＋` は 1 行目に乗り、行の高さを変えない', async ({ page }) => {

@@ -120,10 +120,23 @@ const SEED = [
   { daysAgo: 6, name: '懸垂', sets: [[0, 10], [0, 9], [0, 8]] },
   { daysAgo: 3, name: 'ベンチプレス', sets: [[60, 10], [60, 9], [60, 8]] },
   { daysAgo: 2, name: 'ラットプルダウン', sets: [[45, 12], [45, 10], [45, 10]] },
-  { daysAgo: 0, name: 'ベンチプレス', sets: [[60, 10], [60, 10], [60, 8]] },
+  // ★ `times` は当日ぶんのセットだけが持つ `SetEntry::at`（JST の "HH:MM"、`dayKey` と
+  //   同じ JST 固定で組む）。過去日のセットには付けない
+  //   （adr/data-model/set-at-typed-today-only.md）。
+  {
+    daysAgo: 0,
+    name: 'ベンチプレス',
+    sets: [[60, 10], [60, 10], [60, 8]],
+    times: ['09:58', '10:04', '10:10'],
+  },
   // ★ 段は**最終セット**に付ける。最後のセットだけ重量を落として追い込む、が実際の使い方。
   //   図 `drop-sets` の被写体（段を持たないセット行と持つセット行が 1 枚に並ぶ）
-  { daysAgo: 0, name: 'ダンベルプレス', sets: [[22.5, 12], [22.5, 10], [22.5, 8, [[17.5, 8], [15, 6]]]] },
+  {
+    daysAgo: 0,
+    name: 'ダンベルプレス',
+    sets: [[22.5, 12], [22.5, 10], [22.5, 8, [[17.5, 8], [15, 6]]]],
+    times: ['10:16', '10:22', '10:28'],
+  },
 ];
 
 /**
@@ -1147,20 +1160,24 @@ try {
         const p = (n) => String(n).padStart(2, '0');
         return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
       };
-      for (const { daysAgo, name, sets } of seed) {
+      for (const { daysAgo, name, sets, times } of seed) {
         const ex = db.exercises.find((e) => e.name === name);
         if (!ex) throw new Error(`プリセットに無い種目: ${name}`);
         const key = dateKey(daysAgo);
         const session = db.sessions[key] ?? { logs: [], body_weight: null, note: '' };
         session.logs.push({
           exercise_id: ex.id,
-          sets: sets.map(([weight, reps, drops]) => ({
+          sets: sets.map(([weight, reps, drops], i) => ({
             weight,
             reps,
             // ★ **段が無いセットは `drops` キーごと出さない。** `SetEntry::drops` は
             //   `skip_serializing_if = "Vec::is_empty"`（model.rs:444）なので、空配列を
             //   書くと `core::migrate` は通るが保存 JSON が実アプリと食い違う
             ...(drops ? { drops: drops.map(([w, r]) => ({ weight: w, reps: r })) } : {}),
+            // ★ `SetEntry::at` も同じ理由でキーごと出さない。`times` が無い（過去日の）
+            //   セットには付けない。TZ はブラウザ側の `timezoneId`（Asia/Tokyo）で固定して
+            //   あるので、"HH:MM" をその日のローカル時刻として解釈すれば JST になる
+            ...(times?.[i] ? { at: new Date(`${key}T${times[i]}:00`).getTime() } : {}),
           })),
           // at は当日ぶんだけ埋める（過去日バックフィルは null。ExerciseLog.at の意味）
           at: daysAgo === 0 ? Date.now() : null,

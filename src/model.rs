@@ -458,6 +458,19 @@ pub struct SetEntry {
     /// （`e2e/smoke.spec.mjs` の「保存 JSON にキーが増えていない」が主張している）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drops: Vec<DropStage>,
+    /// **当日に重量か回数を手で打った行だけ** `Some`（epoch ms）。
+    /// コピー・`+ セット`・過去日・TSV 取り込みは `None`。一度入ったら打ち直しで動かない。
+    ///
+    /// [`ExerciseLog::at`] とは別物 — あちらはその日にそのログを最後に触った時刻で、
+    /// コピーでも入る。日ヘッダの開始–終了は**こちらだけ**から出す
+    /// （adr/data-model/set-at-typed-today-only.md）。
+    ///
+    /// ★ `note` / `drops` と同じ扱いで、[`crate::core::same_set`] の判定には入れない。
+    ///
+    /// ★ **`skip_serializing_if` を外してはいけない。** 打っていない利用者の JSON は
+    /// 今までとバイト単位で同一でなければならない（e2e がキー集合を固定している）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<i64>,
 }
 
 /// ドロップセットの 1 段。**メインセット（[`SetEntry`]）にぶら下がる。**
@@ -775,6 +788,7 @@ mod tests {
             weight: 60.0,
             reps: 6,
             note: String::new(),
+            at: None,
             drops: vec![
                 DropStage {
                     weight: 50.0,
@@ -804,6 +818,45 @@ mod tests {
                 reps: 5
             }]
         );
+    }
+
+    #[test]
+    fn set_entry_writes_no_at_key_when_none() {
+        // ★ バイト一致で見る。打っていない利用者の保存データが 1 バイトも
+        //   変わらないことが、`skip_serializing_if` を外させないための唯一の歯止め
+        let set = SetEntry {
+            weight: 60.0,
+            reps: 10,
+            note: String::new(),
+            drops: Vec::new(),
+            at: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&set).expect("直列化できる"),
+            r#"{"weight":60.0,"reps":10}"#
+        );
+    }
+
+    #[test]
+    fn set_entry_writes_the_at_when_some() {
+        let set = SetEntry {
+            weight: 60.0,
+            reps: 10,
+            note: String::new(),
+            drops: Vec::new(),
+            at: Some(1_700_000_000_000),
+        };
+        assert_eq!(
+            serde_json::to_string(&set).expect("直列化できる"),
+            r#"{"weight":60.0,"reps":10,"at":1700000000000}"#
+        );
+    }
+
+    #[test]
+    fn set_entry_reads_none_at_from_json_without_the_key() {
+        let set: SetEntry =
+            serde_json::from_str(r#"{"weight":60.0,"reps":10}"#).expect("`at` 以前の形も読める");
+        assert_eq!(set.at, None);
     }
 
     #[test]

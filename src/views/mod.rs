@@ -353,6 +353,17 @@ pub fn now_ms() -> i64 {
     Local::now().timestamp_millis()
 }
 
+/// epoch ms → "HH:MM"（端末のタイムゾーン、24 時間表記、両言語共通）。
+///
+/// `backup.rs` の `snapshot_time` と同じ手（`chrono::DateTime::from_timestamp_millis` →
+/// `with_timezone(&Local)`）。chrono 0.4 は default features（wasmbind）が効いているので
+/// `Local` はブラウザの実 TZ を使う。`core` に `Local` を持ち込まないための境界がここ。
+pub fn fmt_clock(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|dt| dt.with_timezone(&Local).format("%H:%M").to_string())
+        .unwrap_or_default()
+}
+
 /// 曜日の短縮表記。
 ///
 /// ★ 表は `i18n::Cal::weekdays` に一本化してある（`views/calendar.rs` の `WEEKDAYS` と

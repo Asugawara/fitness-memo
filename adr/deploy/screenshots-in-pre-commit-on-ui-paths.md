@@ -5,6 +5,26 @@
 - **カテゴリ**: deploy
 - **関連**: [CI を `.githooks/pre-commit` で回す](ci-in-pre-commit.md), [ワークフローファイルを書かない（ただし Actions 機能は無効化しない）](no-workflow-files.md), [マージ方式を merge コミットのみに固定する](force-merge-commit-only.md), [マニュアルの図は `public/` に配信するスクリーンショットにし、`<img>` で参照する](../architecture/manual-figures-as-served-screenshots.md), [使い方マニュアルを設定タブの節にし、章は 1 つだけ開く](../ux/manual-as-a-settings-section-with-one-open-chapter.md)
 
+> **追記（2026-09-22。お知らせの図を hook の対象に加えた時点）**
+> hook は `node scripts/shots.mjs --only=manual,whatsnew` を呼ぶようになり、
+> `git add` / `git diff --cached --name-only` / `git diff --quiet --cached HEAD` /
+> `rm -rf` + `cp -R` はすべて `public/manual public/whatsnew` の 2 ディレクトリを
+> 対象にする。`UI_PATHS` に `|^public/whatsnew/` を足した
+> （[新機能のお知らせは「利用者の便益になる機能」だけを書き、画面に現れるものには図を付ける](../ux/whats-new-notes-are-user-facing-features-with-figures.md)）。
+> 撮影の増分（`--only=manual` 単体との差）と hook 全体の時間増は、この ADR の
+> 「結果（トレードオフ）」がマニュアルの図について書いたのと同じ理由で分けて読むこと
+> — 実測は `node scripts/shots.mjs --only=manual` 7.2s → `--only=manual,whatsnew` 8.5s
+> （**+1.3 秒**）。
+>
+> **`scripts/release.sh` の `--check` は、この時点まで決定だけで実装が無かった。**
+> 「決定」節の付随決定 5 と「結果（トレードオフ）」が「`scripts/shots.mjs --check`
+> が唯一の受け皿である」と書いているにもかかわらず、**2026-09-09（本 ADR の日付）
+> から本追記（2026-09-22）までの約 2 週間、`rg check scripts/release.sh` に該当行が
+> 無かった。** つまり rebase / GitHub 上のマージ後の図の実装ずれを捕まえる網は、
+> この期間ずっと決定文の中にしか存在しなかった。今回
+> `DIST_DIR="$DIST_DIR" E2E_BASE="$PUBLIC_URL" node scripts/shots.mjs --check`
+> を `scripts/release.sh` の重い E2E の直前に足して実装した。
+
 ## 背景
 
 [マニュアルの図は `public/` に配信するスクリーンショットにし、`<img>` で参照する](../architecture/manual-figures-as-served-screenshots.md) で、マニュアルの図をアプリ自身のスクリーンショットにした。スクショは**実装が変わると嘘になる**。しかも嘘になったことは誰も気づかない — グラフの読み取り欄を 1 段下げても、図は古い位置のまま何事もなく表示され続ける。

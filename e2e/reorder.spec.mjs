@@ -112,10 +112,46 @@ async function pickFromAddSheet(page, name) {
   throw new Error(`「種目を追加」シートに ${name} が無い`);
 }
 
+/**
+ * 種目を追加し、`add-sheet` の `close` イベントの配送完了を待ってからカードを返す。
+ *
+ * ★ なぜ待つか: `views::Sheet` は `<dialog>` の `on:close` で「開いたボタン」
+ *   （`add-exercise`）へ `focus()` を戻す（views/mod.rs）。Chromium は `<dialog>` の
+ *   `close` を**描画フレームのタイミング**で配送する。実測（Playwright 1.62.1、
+ *   `d.showModal(); d.close();` の直後に microtask / setTimeout(0) / rAF を並べた）:
+ *     chromium: microtask → setTimeout(0) → close → rAF1 → rAF2
+ *     webkit:   microtask → close → setTimeout(0) → rAF1 → rAF2
+ *   つまり Chromium では `close` は通常タスクより後、次の rendering update の中で
+ *   飛ぶ。全 project 並列で描画が遅れると、`pick.click()` が返ってからカードに
+ *   フォーカスを載せた**後**に戻しが着弾し、続くキー操作（`nudge` の Alt+↑↓）が
+ *   カードの外（`add-exercise`）へ飛んで何も動かない。リリースの重い E2E で
+ *   2 日連続で踏んだ（2026-09-21 は chromium と Pixel 7 が同じ実行で、2026-09-22
+ *   は Pixel 7）。WebKit では出ない — `close` が通常タスクで飛ぶうえ、ボタンの
+ *   クリックでフォーカスを与えないので戻し自体が起きない。
+ * ★ なぜここで待つか: 「シートが閉じ終わった」の定義が `close` イベントの配送完了
+ *   だから。`not.toBeVisible()` や `open` プロパティは `close()` の同期部分で
+ *   先に変わるので証拠にならない。
+ * ★ なぜ listener が後勝ちで安全か: Leptos の `on:close` は mount 時に登録済みで、
+ *   ここで後から足す listener は必ずその後に呼ばれる（= 呼ばれた時点でフォーカスの
+ *   戻しは終わっている）。
+ * ★ 再現の記録（2026-09-22）: この機では cpuload、CDP の CPU スロットル、全 project を
+ *   `--repeat-each=3` で回す同一負荷（ガード無しの旧 spec と並走）のどれでも、ガード
+ *   無しの赤を再現できなかった（旧・新とも 0/9）。機構は上の配送順序の実測で確定して
+ *   いるが、E2E での再現は未達。再発したら `nudge` が記録するキーの着弾先で切り分ける。
+ *   別のブラウザ群（別ポートで chromium/iPhone 15 Pro/Pixel 7 を 6 worker）と
+ *   cold build（別 target/dist）を同時に回す二重負荷（load average 16〜34）でも、
+ *   旧・新とも 0/18。
+ */
 async function addExercise(page, name) {
   await blurActive(page);
+  const sheet = page.getByTestId('add-sheet');
+  await sheet.evaluate((d) => {
+    d.__closes = 0;
+    d.addEventListener('close', () => { d.__closes += 1; }, { once: true });
+  });
   await page.getByTestId('add-exercise').click();
   await pickFromAddSheet(page, name);
+  await expect.poll(() => sheet.evaluate((d) => d.__closes)).toBe(1);
   return cardOf(page, name);
 }
 
@@ -213,17 +249,56 @@ async function dragSet(page, card, index, dy) {
  *
  * ★ **フォーカスが載ったことを確かめてから押す。** `views::Sheet` は `<dialog>` の
  *   `close` で「開いたボタン」へフォーカスを戻す（views/mod.rs の `opener`）。この
- *   `close` イベントはブラウザが非同期に投げるので、種目を追加した直後の `focus()` の
- *   **後から**着弾しうる。そうなるとキーがカードの外（`add-exercise`）へ飛んで
- *   **何も動かない** — 負荷の高い全 project 実行でだけ落ちる形になり、実際に
- *   リリースの重い E2E で 1 度踏んだ。`toPass` で載るまで取り直す。
+ *   `close` イベントは Chromium では描画フレームのタイミングで配送される
+ *   （`addExercise` の doc コメント参照）。種目追加直後の競合そのものは
+ *   `addExercise` 側で `close` の配送完了を待つことで塞いだが、`toPass` の
+ *   取り直しはそのまま残す — 害が無く、別経路（例えばシート以外からのフォーカス
+ *   移動）にも効くため。
+ * ★ 押した後に着弾先を検査する。この spec の並び替えの揺れは「キーが押せたのに
+ *   並びが変わらない」という形で出て、押す直前の `toBeFocused` では見えない窓
+ *   （Chromium の `close` 配送）がある。再発したら失敗メッセージの着弾先で、
+ *   フォーカス奪取（`add-exercise`）か別原因（`note-toggle` のまま）かを切り分ける。
+ * ★ 着弾先の比較は「押す**前**に取ったハンドル」と行う。Alt+↑↓ 自体が要素の
+ *   DOM 上の位置を動かすので、押した**後**に `el`（`.nth(N)` などの位置ベースの
+ *   locator）を再解決すると、同じ testid でも別のノードを掴んでしまい誤検出する
+ *   （実測: `set-reps` のテストで全滅した）。
+ * ★ Alt+↑↓ は Alt と ↑↓ の 2 発の keydown（別々の CDP コマンド）で、動かすのは
+ *   2 発目なので**最後の keydown** を上書き記録する。listener はフラグ
+ *   （`window.__keyProbe`）で 1 回だけ登録し、`nudge` を何度呼んでも `document`
+ *   に積み増さない。
  */
 async function nudge(page, el, up) {
   await expect(async () => {
     await el.focus();
     await expect(el).toBeFocused({ timeout: 1000 });
   }).toPass({ timeout: 5000 });
+  // 押す前に、今フォーカスしている要素そのものへのハンドルを取っておく。
+  const target = await el.elementHandle();
+  await page.evaluate((node) => {
+    if (!window.__keyProbe) {
+      window.__keyProbe = true;
+      document.addEventListener(
+        'keydown',
+        (e) => {
+          window.__lastKeyTarget = e.target;
+        },
+        { capture: true },
+      );
+    }
+    window.__lastKeyTarget = null;
+    window.__expectedKeyTarget = node;
+  }, target);
   await page.keyboard.press(up ? 'Alt+ArrowUp' : 'Alt+ArrowDown');
+  const landed = await page.evaluate(() => {
+    const t = window.__lastKeyTarget;
+    const expected = window.__expectedKeyTarget;
+    return { onTarget: t === expected, testid: t?.dataset?.testid ?? t?.tagName ?? null };
+  });
+  await target.dispose();
+  expect(
+    landed.onTarget,
+    `Alt+↑↓ がフォーカスを載せた要素に届かず ${landed.testid} に落ちた（押す直前に何かがフォーカスを動かした）`,
+  ).toBe(true);
 }
 
 async function openDay(page, date) {

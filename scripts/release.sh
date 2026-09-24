@@ -162,11 +162,19 @@ trunk build --release --public-url "$PUBLIC_URL" --dist "$DIST_DIR"
 grep -q "$PUBLIC_URL" "${DIST_DIR}/index.html" \
   || die "${DIST_DIR}/index.html に ${PUBLIC_URL} が出てきません。--public-url が効いていない可能性があります"
 
-# ── 3. 重い E2E（WebKit / iPhone エミュを含む全 project） ───────────────────
+# ── 3. 図のドリフト検査と重い E2E（WebKit / iPhone エミュを含む全 project） ───
 
 step "重い E2E（DIST_DIR=${DIST_DIR} / E2E_BASE=${PUBLIC_URL}）"
 require_cmd npx "Node.js を入れてください"
 [ -d node_modules ] || die "node_modules がありません。scripts/setup.sh を実行してください"
+
+# ★ rebase / GitHub 上のマージは pre-commit を通らないので、図が実装から
+#   ずれたまま docs/ に載る唯一の入口がここ。2026-09-09〜09-22 の間はこの行が
+#   無く、ここでドリフトを捕まえられていなかった（adr/deploy/screenshots-in-pre-commit-on-ui-paths.md
+#   の追記）。差分の内訳と直し方は shots.mjs 自身が stderr に出す。SHOT_PORT は
+#   素通し（既定 4274）
+DIST_DIR="$DIST_DIR" E2E_BASE="$PUBLIC_URL" node scripts/shots.mjs --check \
+  || die "スクリーンショットが実装とずれています。リリースを中断します"
 
 # ここで落ちたら公開しない。DIST_DIR で「いま build したもの」を名指しするので、
 # 他の作業者が並行して debug ビルドを回していても検証が汚染されない（冒頭の注記を参照）。

@@ -132,7 +132,7 @@
      SOFTWARE.
      ──────────────────────────────────────────────────────────────────── -->
 
-<link rel="stylesheet" href="/fitness-memo/styles-65a392e15cf1de9d.css" integrity="sha384-HN5RVL7+sDHIZcq0ScPKVvdC6djWddEhDeKim1jZuaC6rkJQrsOHCUJJcn0zW7f9"/>
+<link rel="stylesheet" href="/fitness-memo/styles-16b087770b49dc04.css" integrity="sha384-BLdGwREZsQZB9fNbi5Vy86zgh4LT1h+FvSgONX+U2h5jj/H/00riggOn1iBOcSjf"/>
 
 
 <!-- og:image の実体。クローラ専用なので stamp-sw.sh が SW のシェルから除外している -->
@@ -142,10 +142,14 @@
      ★ stamp-sw.sh が SHELL と BUILD_ID の両方から外している。
        オフラインでは図が欠け、本文（wasm 内の i18n 文字列）だけが出る -->
 
+<!-- 新機能のお知らせの図。ja / en の 2 変種（テーマはライト固定）。
+     ★ stamp-sw.sh が SHELL と BUILD_ID の両方から外している。
+       オフラインでは図が欠け、本文（wasm 内の i18n 文字列）だけが出る -->
+
 
 <script type="module">
-import init, * as bindings from '/fitness-memo/fitness-memo-33d7510633e2937f.js';
-const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-33d7510633e2937f_bg.wasm' });
+import init, * as bindings from '/fitness-memo/fitness-memo-c7b1aeccf79a009f.js';
+const wasm = await init({ module_or_path: '/fitness-memo/fitness-memo-c7b1aeccf79a009f_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -154,7 +158,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-<link rel="modulepreload" href="/fitness-memo/fitness-memo-33d7510633e2937f.js" crossorigin="anonymous" integrity="sha384-hKmNkedBCa2IQpWu1ncdf8xLQa7SvQUjF1zGcxpzGsMR25YUVkxXoK84aDKBTT1P"><link rel="preload" href="/fitness-memo/fitness-memo-33d7510633e2937f_bg.wasm" crossorigin="anonymous" integrity="sha384-rn7l3hpb9UsroScOrSVfQGGm1Bz5g1//OW3wwUCOndNMBrCh+VqIguH4gKv2lrh9" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/fitness-memo/fitness-memo-c7b1aeccf79a009f.js" crossorigin="anonymous" integrity="sha384-B5m2mKSdTnv6BPbuhkO1fQ5h3ClDMnL+jQX537diBJ6xYJyyvd/oi+cpbBOD2wOm"><link rel="preload" href="/fitness-memo/fitness-memo-c7b1aeccf79a009f_bg.wasm" crossorigin="anonymous" integrity="sha384-ML9TMvHcIrOWhZVhn1Gx7ch4tG8ZUcrdv6Mhipp2kH13tBNNktyDT9Un6YXhdTL9" as="fetch" type="application/wasm"></head>
 <body>
 <!-- CSR なので配信される HTML の body にはテキストが 1 文字も無い。Googlebot は JS を
      実行するので通常は問題にならないが、**JS を実行しないクローラ（LLM 系の多くを含む）

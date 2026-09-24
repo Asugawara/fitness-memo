@@ -26,8 +26,8 @@ use super::drag::{
 };
 use super::icon::{self, icon};
 use super::{
-    Sheet, cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, fmt_weight, grp_name, kb_blur,
-    kb_focus, keep_in_place_then_reveal, now_ms, parse_reps, parse_weight,
+    Sheet, cur_lang, ex_name, fmt_clock, fmt_date, fmt_metric, fmt_set, fmt_weight, grp_name,
+    kb_blur, kb_focus, keep_in_place_then_reveal, now_ms, parse_reps, parse_weight,
     scroll_into_view_if_needed, scroll_to_id, t, use_dates, use_db, use_drop_pct,
     use_history_count, use_kb, viewport_top,
 };
@@ -59,6 +59,9 @@ struct Row {
     ///
     /// `Row` と同じ理由で文字列で持つ（空欄と `"6."` が `f32` / `u32` で表せない）。
     drops: Vec<DropRow>,
+    /// このセットの `SetEntry::at`。素通しするだけで、ここでは打鍵・表示しない
+    /// （adr/data-model/set-at-typed-today-only.md）。
+    at: Option<i64>,
 }
 
 /// 編集中のドロップセットの 1 段。
@@ -93,6 +96,7 @@ impl Row {
             reps: String::new(),
             note: String::new(),
             drops: Vec::new(),
+            at: None,
         }
     }
 }
@@ -106,6 +110,12 @@ impl Row {
 struct PinRow {
     key: u32,
     value: String,
+}
+
+/// 日ヘッダの開始–終了の文字列。同じ分なら 1 つ、違えば `–`（U+2013、空白なし）で結ぶ。
+fn span_text(start: i64, end: i64) -> String {
+    let (s, e) = (fmt_clock(start), fmt_clock(end));
+    if s == e { s } else { format!("{s}\u{2013}{e}") }
 }
 
 fn card_dom_id(ex: ExerciseId) -> String {
@@ -393,6 +403,16 @@ pub fn DayEditor() -> impl IntoView {
     // 日付が変わったら引き直す。追跡するのは selected だけ
     Effect::new(move |_| load_cards(dates.selected.get()));
 
+    // 日ヘッダに出す開始–終了。**セットの `at` だけ**を見る（`core::day_span` の doc）。
+    // 打鍵ごとに選択日の 1 セッション分を走査する（`history` / `show_copy` と同級）。
+    let span = Memo::new(move |_| {
+        db.with(|d| {
+            d.sessions
+                .get(&core::date_key(dates.selected.get()))
+                .and_then(core::day_span)
+        })
+    });
+
     // ★ ヒーローと部位チップは「今日を始める前」の間隔を出す。
     //   今日のセッションを外した snapshot に core の関数をそのまま当てることで、
     //   1 セット入れた瞬間に「たった今」へ化けて意味を失うのを防ぐ。
@@ -575,6 +595,15 @@ pub fn DayEditor() -> impl IntoView {
     // （adr/ux/record-tab-calendar-with-day-editor.md）、h1 は上のカレンダーの月見出しが持つ。両方を h1 にすると
     // 見出しの階層が 1 画面に 2 本立ち、支援技術のアウトラインで前後関係が読めなくなる
     <h2 data-testid="today-date">{move || fmt_date(dates.selected.get(), cur_lang())}</h2>
+                    {move || {
+                        span.get().map(|(s, e)| {
+                            view! {
+                                <span class="day-span" data-testid="day-span">
+                                    {span_text(s, e)}
+                                </span>
+                            }
+                        })
+                    }}
                     {move || {
                         if dates.is_past_edit() {
                             view! {
@@ -956,6 +985,10 @@ fn ExerciseCard(
     let drop_pct = use_drop_pct();
     let history_count = use_history_count();
 
+    // このカードの選択日が今日か。`commit`（保存の `at`）とセット行の `on:input`
+    // （`stamp_set_at` の分岐）が同じ 1 本を見る（adr/data-model/set-at-typed-today-only.md）。
+    let is_today = move || dates.selected.get_untracked() == dates.today.get_untracked();
+
     // Memo にするのは「値が変わったときだけ」下流を再描画させるため。
     // 素の closure だと db が動くたびに構造ごと作り直され、入力中の文字列が消える
     let name = Memo::new(move |_| {
@@ -1059,6 +1092,7 @@ fn ExerciseCard(
                         reps: s.reps.to_string(),
                         note: s.note.clone(),
                         drops: drop_rows(s),
+                        at: s.at,
                     })
                     .collect();
                 (rows, l.note.clone())
@@ -1198,6 +1232,7 @@ fn ExerciseCard(
                                 })
                             })
                             .collect(),
+                        at: r.at,
                     })
                 })
                 .collect()
@@ -1207,7 +1242,7 @@ fn ExerciseCard(
         //   リアクティブな依存になる）
         let label = label_sel.get_untracked();
         let date = dates.selected.get_untracked();
-        let is_today = date == dates.today.get_untracked();
+        let is_today = is_today();
         // ★ 画面の並びを唯一の真実にする。`write_log` の新規枝は `logs.push` なので、
         //   **並び替えたあと「まだログの無いカード」に 1 文字目を打つと、そのログだけ
         //   末尾に生える**。書き込みのたびに揃え直すことで「`logs` の順 == `cards` の順」が
@@ -1284,6 +1319,7 @@ fn ExerciseCard(
                 //   推移から外れる**ので、勝手に入ると利用者が気づかないまま
                 //   その重量がグラフから消える
                 drops: Vec::new(),
+                at: None,
             })
         });
         focus_key.set(Some(key));
@@ -1366,6 +1402,9 @@ fn ExerciseCard(
                 //   （このボタンが出るのは保存済みのセットが空のときなので、画面上の
                 //   段は数値と一緒に置き換わってよい）
                 drops: drop_rows(s),
+                // ★ 時刻は運ばない（adr/data-model/set-at-typed-today-only.md）。
+                //   打ち直した行だけが `stamp_set_at` で新しく時刻を得る
+                at: None,
             })
             .collect();
         next_key.set(base + filled.len() as u32 + 1);
@@ -1859,6 +1898,11 @@ fn ExerciseCard(
                                     .unwrap_or_default()
                             })
                         };
+                        // `note_of` と同じ形。メモを開いたときだけセット行の右端に出す
+                        // （adr/data-model/set-at-typed-today-only.md / 「表示」設計 12）
+                        let at_of = move || {
+                            rows.with(|rs| rs.iter().find(|r| r.key == key).and_then(|r| r.at))
+                        };
                         // ★ **スナップショット (`row.drops`) を読まない。** `<For>` は
                         //   `r.key` で差分を取るので、段を足しても `key` は変わらず
                         //   `children` が再実行されない — `row` の束縛は古いまま残る。
@@ -2111,6 +2155,16 @@ fn ExerciseCard(
                                         rows.update(|rs| {
                                             if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
                                                 r.weight = v;
+                                                // ★ 重量を打った直後にも時刻を押す。回数はまだ
+                                                //   このセットのものを見る（打った側だけが判定材料
+                                                //   ではない — 回数が既に読めていれば重量だけの
+                                                //   打鍵でも「そのセットをやった」証拠になる）
+                                                r.at = core::stamp_set_at(
+                                                    r.at,
+                                                    parse_reps(&r.reps).is_some(),
+                                                    is_today(),
+                                                    now_ms(),
+                                                );
                                             }
                                         });
                                         commit();
@@ -2134,6 +2188,14 @@ fn ExerciseCard(
                                         rows.update(|rs| {
                                             if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
                                                 r.reps = v;
+                                                // ★ 回数が読めた最初の打鍵で時刻を押す
+                                                //   （adr/data-model/set-at-typed-today-only.md）
+                                                r.at = core::stamp_set_at(
+                                                    r.at,
+                                                    parse_reps(&r.reps).is_some(),
+                                                    is_today(),
+                                                    now_ms(),
+                                                );
                                             }
                                         });
                                         commit();
@@ -2220,6 +2282,15 @@ fn ExerciseCard(
                                                     commit();
                                                 }
                                             />
+                                            // ★ 打った時刻。**閉じているときは出さない**
+                                            //   （静止時に隠してよい — 利用者が書いた
+                                            //   文字ではないので `set-note-read` の薄字とは
+                                            //   前提が違う。adr/data-model/set-at-typed-today-only.md）。
+                                            //   `None` でも空の span を出す（行ごとにメモ欄の
+                                            //   幅を揃えるため。CSS の `.set-at` が幅を持つ）
+                                            <span class="set-at" data-testid="set-at">
+                                                {move || at_of().map(fmt_clock).unwrap_or_default()}
+                                            </span>
                                         }
                                             .into_any()
                                     } else {

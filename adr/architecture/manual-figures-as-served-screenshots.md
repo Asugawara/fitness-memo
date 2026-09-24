@@ -5,6 +5,18 @@
 - **カテゴリ**: architecture
 - **関連**: [ヘルプの図を `assets/` の SVG に置き `include_str!` + `inner_html` で挿す](help-figures-as-included-svg.md), [使い方マニュアルを設定タブの節にし、章は 1 つだけ開く](../ux/manual-as-a-settings-section-with-one-open-chapter.md), [UI 関連パスを触ったコミットでだけスクリーンショットを撮り直す](../deploy/screenshots-in-pre-commit-on-ui-paths.md), [Service Worker はシェル全体を BUILD_ID で原子的に入れ替える](../pwa/sw-atomic-shell-swap.md), [クローラ向けメタデータを本番 URL のハードコードで持ち、オフラインシェルから外す](../seo/crawler-metadata-and-hardcoded-origin.md), [i18n crate を入れず、`src/i18n.rs` の struct + `const` 2 枚で文言を持つ](i18n-hand-rolled-string-table.md)
 
+> **追記（2026-09-22。被写体がもう 1 つ増えた）**
+> [新機能のお知らせは「利用者の便益になる機能」だけを書き、画面に現れるものには図を付ける](../ux/whats-new-notes-are-user-facing-features-with-figures.md)
+> で、決定の表の「被写体」「置き場」に `public/whatsnew/{ja,en}/*.webp`（お知らせの
+> 図）が加わった。**5 つの付随決定（要素単位のクリップ / dsf 2 + q90 / ja・en 2 変種 /
+> 宣言寸法を `<img width height>` に出す / 寸法は言語別）はそのまま適用される。**
+> 撮影は別コンテキスト（マニュアルの `FIGS` は順序依存のため）、alt の上限は
+> ja 16 / en 33（マニュアルの 20/45 より厳しい）と、こちらだけ異なる点は上記 ADR に
+> 書いてある。SW 除外の 5 条件への 2 つ目の適用先であることは
+> [Service Worker はシェル全体を BUILD_ID で原子的に入れ替える](../pwa/sw-atomic-shell-swap.md)
+> と [クローラ向けメタデータを本番 URL のハードコードで持ち、オフラインシェルから外す](../seo/crawler-metadata-and-hardcoded-origin.md)
+> への追記に書いた。
+
 ## 背景
 
 [使い方マニュアルを設定タブの節にし、章は 1 つだけ開く](../ux/manual-as-a-settings-section-with-one-open-chapter.md) で、気づきにくい機能を説明する 12 章のマニュアルを設定タブに置いた。当初はそのうち 6 章について図を置いた。**どこに何があるか**が主題で、文章だけでは伝わらないと判断したからである。「グラフの下の読み取り欄」「カードのフッタにある ＋ メモ」「空の日にだけ出る候補リスト」「回数欄のすぐ右にある文字ラベルの無いドロップセットの足す口」はいずれも位置の話で、図が要ると考えた。のちに利用者の指示で、**12 章すべてに図を持たせる**ことにした。「位置が文章で特定できない章にだけ図を置く」というこの基準は一部の章にしか当てはまらず、全章に図を置く方針に切り替えた以上、もう判断基準としては使わない。

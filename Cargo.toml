@@ -57,6 +57,8 @@ web-sys = { version = "0.3", features = [
     "FileList",
     "FileReader",          # 選んだファイルの読み出し
     "Clipboard",           # Navigator::clipboard → writeText（unstable フラグ不要）
+    # ── お知らせの図（views::whatsnew）──
+    "ErrorEvent",          # tachys 経由で偶然有効だが方針に従い明示。<img on:error> の型
 ] }
 
 [profile.release]

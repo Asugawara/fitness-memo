@@ -451,8 +451,12 @@ pub fn fmt_set(s: &SetEntry, d: crate::core::Drops) -> String {
     out
 }
 
-/// 有酸素の 1 区間の表記。`30分 4.8km/h 12%` のように入っている欄だけを空白で並べる。
+/// 有酸素の 1 区間の表記。`30分·4.8km/h·12%` のように入っている欄だけを中黒でつなぐ。
 /// 並びは機種に依らず固定（時間 → 速度 → 傾斜 → レベル → 距離）。
+///
+/// ★ **区間の中を空白でつながない。** 区間同士は 2 スペースで区切るが、HTML では
+/// 空白が 1 つに潰れるので、空白でつなぐと「区間の中」と「区間の間」が見分けられなくなる
+/// （`fmt_set` の段と同じ理屈）。
 pub fn fmt_cardio(c: &crate::model::Cardio) -> String {
     use crate::core::{fmt_km, fmt_minutes, fmt_weight};
     let mut parts: Vec<String> = Vec::new();
@@ -475,7 +479,7 @@ pub fn fmt_cardio(c: &crate::model::Cardio) -> String {
     if let Some(m) = c.m {
         parts.push(format!("{}km", fmt_km(m)));
     }
-    parts.join(" ")
+    parts.join("·")
 }
 
 // ── DOM ヘルパ ──────────────────────────────────────────────────────────────

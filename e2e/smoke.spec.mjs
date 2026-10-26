@@ -3082,7 +3082,8 @@ test('★ 設定タブの入口は節の一覧で、中身は入るまで出な�
   // 体重の線 / ホーム画面 / 活用方法 / 言語）。
   // 種目もメニューも 1 件も出ていない
   // （`.row` で数える。手順シートの <dialog> も同じ親に出るので `> *` だと 1 多くなる）
-  await expect(page.getByTestId('settings-rows').locator('.row')).toHaveCount(9);
+  // ★ 10 行: 「± ボタン」の行が種目の直後に増えた（adr/ux/tap-clears-the-number-and-steps-above-the-field.md）
+  await expect(page.getByTestId('settings-rows').locator('.row')).toHaveCount(10);
   await expect(page.getByTestId('group-item')).toHaveCount(0);
   await expect(page.getByTestId('routine-item')).toHaveCount(0);
   await expect(page.getByTestId('settings-add-group')).toHaveCount(0);

@@ -329,6 +329,21 @@ pub struct Exercise {
     /// 利用者の JSON は**今までとバイト単位で同一**のままになる。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<Label>,
+    /// ± ボタンの重量の幅（kg）。**空なら全体の既定に従う**（`core::weight_steps_for`）。
+    ///
+    /// ★ 最大 3 本（`core::MAX_STEPS`）。並びは入れた順のままでよい。箱に並べるときに
+    ///   昇順にする（`core::active_steps`）。
+    ///
+    /// ★ [`Exercise::pins`] / [`Exercise::interval_sec`] と同じ「種目に貼り付く」棚。
+    ///   ダンベルは 1 / 2、マシンは 5 のように、刻みは種目で変わる。
+    ///
+    /// ★ TSV に載せない。TSV は記録の書き出しで、UI の刻みは記録ではない
+    ///   （JSON バックアップには入る）。
+    ///
+    /// ★ `skip_serializing_if` は [`Exercise::pins`] と同じ理由。使わない利用者の JSON は
+    ///   **今までとバイト単位で同一**のままになる。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub weight_steps: Vec<f32>,
 }
 
 /// 1 種目が持てるピンの本数。
@@ -966,6 +981,7 @@ mod tests {
             pins,
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         }
     }
 
@@ -998,6 +1014,29 @@ mod tests {
         )
         .expect("ピン以前の形も読める");
         assert!(ex.pins.is_empty());
+    }
+
+    #[test]
+    fn exercise_writes_weight_steps_when_there_are_any() {
+        let mut ex = ex_of(Vec::new());
+        ex.weight_steps = vec![1.0, 2.0];
+        let json = serde_json::to_string(&ex).expect("直列化できる");
+        assert!(json.ends_with(r#","weight_steps":[1.0,2.0]}"#), "{json}");
+    }
+
+    #[test]
+    fn exercise_reads_weight_steps_and_json_without_them() {
+        let with: Exercise = serde_json::from_str(
+            r#"{"id":"000000000001","name":"ベンチプレス","group_id":"000000000002","order":0,"archived":false,"weight_steps":[1.0,2.0]}"#,
+        )
+        .expect("読める");
+        assert_eq!(with.weight_steps, vec![1.0, 2.0]);
+
+        let without: Exercise = serde_json::from_str(
+            r#"{"id":"000000000001","name":"ベンチプレス","group_id":"000000000002","order":0,"archived":false}"#,
+        )
+        .expect("読める");
+        assert!(without.weight_steps.is_empty());
     }
 
     // ── インターバル（adr/ux/interval-seconds-on-the-exercise.md）──────────────

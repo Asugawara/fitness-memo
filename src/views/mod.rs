@@ -141,6 +141,7 @@ pub enum SettingsPage {
     Exercises,
     History,
     DropSets,
+    Steps,
     WeightLine,
     Manual,
     Language,
@@ -258,6 +259,56 @@ pub fn use_drop_pct() -> RwSignal<f32> {
     use_context::<DropPctCtx>()
         .expect("DropPctCtx が provide されていない")
         .0
+}
+
+/// ± ボタンの全体の幅（重量 3 枠・回数 3 枠）。設定タブが書き、種目カードが読む。
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Steps {
+    pub weight: [Option<f32>; crate::core::MAX_STEPS],
+    pub reps: [Option<u32>; crate::core::MAX_STEPS],
+}
+
+/// [`Steps`] を文脈に載せる。`DropPctCtx` と同じ理由で、種目カードの枚数ぶん読まれる。
+#[derive(Clone, Copy)]
+pub struct StepsCtx(pub RwSignal<Steps>);
+
+pub fn use_steps() -> RwSignal<Steps> {
+    use_context::<StepsCtx>()
+        .expect("StepsCtx が provide されていない")
+        .0
+}
+
+/// 欄にフォーカスが入ったとき。値があれば薄字（placeholder）に移して欄を空にする。
+/// そのまま打てば置き換わり、何も打たずに離れれば [`ghost_out`] で戻す。
+///
+/// ★ 判定は DOM ではなく signal（呼び側が渡す保存値）で行う。打って全部消した欄は
+///   `on:input` が signal も空にしているので、離れても戻らない（＝空のまま残る）。
+pub fn ghost_in(ev: &web_sys::Event) {
+    let Some(input) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+    else {
+        return;
+    };
+    let v = input.value();
+    if !v.is_empty() {
+        input.set_placeholder(&v);
+        input.set_value("");
+    }
+}
+
+/// 欄からフォーカスが外れたとき。DOM が空で、保存値（`saved`）が空でなければ値を戻す。
+pub fn ghost_out(ev: &web_sys::Event, saved: &str) {
+    let Some(input) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+    else {
+        return;
+    };
+    if input.value().is_empty() && !saved.is_empty() {
+        input.set_value(saved);
+    }
+    input.set_placeholder("");
 }
 
 thread_local! {
@@ -865,6 +916,10 @@ pub fn App() -> impl IntoView {
     provide_context(HistoryCtx(RwSignal::new(storage::history_count())));
     provide_context(DropsCtx(RwSignal::new(storage::drops())));
     provide_context(DropPctCtx(RwSignal::new(storage::drop_pct())));
+    provide_context(StepsCtx(RwSignal::new(Steps {
+        weight: storage::weight_steps(),
+        reps: storage::reps_steps(),
+    })));
     provide_context(WeightLinesCtx(RwSignal::new(storage::weight_lines())));
     // ★ 起動時に 1 回だけ評価する（上の HistoryCtx と同じ位置・同じ理由）。既読を
     //   まだ記録していなければここで基準値を書く（`whatsnew::bootstrap` の doc を参照）。

@@ -386,6 +386,19 @@ pub struct Settings {
     /// 削除の確認。**「同じ名前で作り直しても戻らない」を必ず含める** —
     /// 参照は ID なので、消すと過去の記録はそのラベルから永久に外れる（本物の罠）
     pub delete_label_confirm: &'static str,
+    /// 設定タブの「± ボタン」の行名。
+    pub row_steps: &'static str,
+    /// 節の注記。何のための箱かと、空欄の扱いを書く。
+    pub steps_note: &'static str,
+    /// 節の枠の行の見出し（重量 / 回数）。
+    pub steps_weight: &'static str,
+    pub steps_reps: &'static str,
+    /// 全部空のときの行の右端。
+    pub steps_none: &'static str,
+    /// 節の注記。種目ごとの幅の場所を書く。
+    pub steps_exercise_note: &'static str,
+    /// 種目の編集シートの欄名。
+    pub field_steps: &'static str,
 }
 
 const JA_SETTINGS: Settings = Settings {
@@ -444,6 +457,13 @@ const JA_SETTINGS: Settings = Settings {
     label_add: "ラベルを追加",
     duplicate_label: "同じ名前のラベルがあります",
     delete_label_confirm: "このラベルを削除します。過去の記録は消えませんが、同じ名前で作り直しても過去の記録には戻りません",
+    row_steps: "± ボタン",
+    steps_note: "欄をタップすると、欄の上に − / ＋ が出ます。その幅をここで決めます。重量と回数はそれぞれ 3 つまで。空欄の枠は出しません。全部空にすると、その欄には − / ＋ が出なくなります（タップで空になる動きは残ります）",
+    steps_weight: "重量",
+    steps_reps: "回数",
+    steps_none: "なし",
+    steps_exercise_note: "種目ごとの重量の幅は、種目 › 編集 で変えられます",
+    field_steps: "± の幅 (kg)",
 };
 
 const EN_SETTINGS: Settings = Settings {
@@ -502,6 +522,13 @@ const EN_SETTINGS: Settings = Settings {
     label_add: "Add a label",
     duplicate_label: "A label with that name already exists.",
     delete_label_confirm: "Delete this label? Your records stay, but making a label with the same name again will not bring them back to it.",
+    row_steps: "± buttons",
+    steps_note: "Tap a field and − / + appear above it. Set their steps here: up to three each for weight and reps. Blank slots are not shown; if all are blank, that field shows no − / +. Tapping still clears the field.",
+    steps_weight: "Weight",
+    steps_reps: "Reps",
+    steps_none: "None",
+    steps_exercise_note: "Weight steps for each exercise can be set under Exercises › Edit.",
+    field_steps: "± step (kg)",
 };
 
 // ── core.rs ─────────────────────────────────────────────────────────────────
@@ -1119,6 +1146,7 @@ const JA_MANUAL: Manual = Manual {
                 "セットメモは今日その行に書いた内容が優先。空の行にだけ前回のメモが入ります。",
                 "体重とその日の体調メモは持ち込みません。",
                 "コピーで入ったセットには時刻が付きません。重量か回数を打ち直した行にだけ、その時刻が入ります。",
+                "直すときは欄をタップすると空になるので、そのまま打てます。何も打たずに離れれば元に戻ります。欄の上に出る − / ＋ の幅は設定タブの『± ボタン』で、種目ごとには種目の編集で変えられます。",
             ],
             fig_alt: "空のカードと「前回をコピー」",
             fig: Some((762, 618)),
@@ -1338,6 +1366,7 @@ const EN_MANUAL: Manual = Manual {
                 "A set's note keeps what you typed today; the previous note fills only empty rows.",
                 "Body weight and the day's condition note are never copied.",
                 "Copied sets carry no time. Only a row whose weight or reps you retype gets the time you typed it.",
+                "To fix a value, tap the field: it clears, so you can type straight over it. Leave it without typing and the value comes back. The − / + steps above the field are set under Settings › ± buttons, and per exercise under Exercises › Edit.",
             ],
             fig_alt: "An empty card with Copy last time",
             fig: Some((762, 618)),
@@ -2111,6 +2140,28 @@ impl Lang {
                 "{n} archived {} do not appear on the Record tab",
                 plural(n, "exercise", "exercises")
             ),
+        }
+    }
+
+    /// ± ボタンの `aria-label`。`n` は幅の絶対値（"2.5" / "1"）、`up` は増やす側か。
+    pub fn step_aria(self, n: &str, up: bool, weight: bool) -> String {
+        match (self, weight, up) {
+            (Lang::Ja, true, true) => format!("重量を{n}kg増やす"),
+            (Lang::Ja, true, false) => format!("重量を{n}kg減らす"),
+            (Lang::Ja, false, true) => format!("回数を{n}増やす"),
+            (Lang::Ja, false, false) => format!("回数を{n}減らす"),
+            (Lang::En, true, true) => format!("Add {n} kg"),
+            (Lang::En, true, false) => format!("Subtract {n} kg"),
+            (Lang::En, false, true) => format!("Add {n} to reps"),
+            (Lang::En, false, false) => format!("Subtract {n} from reps"),
+        }
+    }
+
+    /// 種目の編集シートの「± の幅」欄の注記。空欄のときに使われる全体の幅を括弧で見せる。
+    pub fn exercise_steps_note(self, global: &str) -> String {
+        match self {
+            Lang::Ja => format!("空欄なら全体の幅（{global}）を使います"),
+            Lang::En => format!("Blank uses the overall steps ({global})."),
         }
     }
 

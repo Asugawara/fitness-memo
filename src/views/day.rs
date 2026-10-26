@@ -28,10 +28,10 @@ use super::drag::{
 };
 use super::icon::{self, icon};
 use super::{
-    Sheet, cur_lang, ex_name, fmt_clock, fmt_date, fmt_metric, fmt_set, fmt_weight, grp_name,
-    kb_blur, kb_focus, keep_in_place_then_reveal, now_ms, parse_reps, parse_weight,
-    scroll_into_view_if_needed, scroll_to_id, t, use_dates, use_db, use_drop_pct,
-    use_history_count, use_kb, viewport_top,
+    Sheet, cur_lang, ex_name, fmt_clock, fmt_date, fmt_metric, fmt_set, fmt_weight, ghost_in,
+    ghost_out, grp_name, kb_blur, kb_focus, keep_in_place_then_reveal, now_ms, parse_reps,
+    parse_weight, scroll_into_view_if_needed, scroll_to_id, t, use_dates, use_db, use_drop_pct,
+    use_history_count, use_kb, use_steps, viewport_top,
 };
 
 /// 選択日に並べているカード 1 枚。
@@ -203,6 +203,64 @@ fn field_testid(f: CardioField) -> &'static str {
 struct PinRow {
     key: u32,
     value: String,
+}
+
+/// 欄の値を DOM にも書く。`value=` は初期値を 1 度読むだけなので、signal を書き換えても
+/// 入力欄は古いまま残る。直さないと次の打鍵で古い値に戻る（`copy_last` の `ex_note_ref`
+/// と同じ罠）。薄字（placeholder）が残っていれば外す。
+fn show_value(node: NodeRef<leptos::html::Input>, text: &str) {
+    if let Some(el) = node.get_untracked() {
+        el.set_value(text);
+        el.set_placeholder("");
+    }
+}
+
+/// 欄の上に浮く ± の箱（`.stepper`）。
+///
+/// − は大きい順、＋ は小さい順に並べる。内側ほど小さい幅になるので、指が近いほど細かく動く。
+/// `steps` は [`core::active_steps`] の昇順で受ける。空なら箱ごと出さない。
+///
+/// ★ ボタンは `tabindex="-1"` にして、`mousedown` の既定動作を止める。フォーカスを奪うと
+///   入力欄が blur して、キーボードが閉じてしまう。
+/// ★ 表示は CSS（`.num-wrap:focus-within`）に任せる。普段の画面には出ない。
+fn stepper(steps: &[f32], weight: bool, on_step: impl Fn(f32) + Copy + 'static) -> AnyView {
+    if steps.is_empty() {
+        return ().into_any();
+    }
+    let button = |v: f32, up: bool| {
+        let delta = if up { v } else { -v };
+        let n = fmt_weight(v);
+        let mark = if up { "+" } else { "−" };
+        let aria = cur_lang().step_aria(&n, up, weight);
+        view! {
+            <button
+                type="button"
+                class="step-btn"
+                tabindex="-1"
+                data-testid="step-btn"
+                data-delta=format!("{delta:+}")
+                aria-label=aria
+                on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
+                on:click=move |_| on_step(delta)
+            >
+                {format!("{mark}{n}")}
+            </button>
+        }
+    };
+    let minus: Vec<AnyView> = steps
+        .iter()
+        .rev()
+        .map(|v| button(*v, false).into_any())
+        .collect();
+    let plus: Vec<AnyView> = steps.iter().map(|v| button(*v, true).into_any()).collect();
+    view! {
+        <div class="stepper" class:stepper-reps=!weight data-testid="stepper">
+            {minus}
+            <span class="stepper-div" aria-hidden="true"></span>
+            {plus}
+        </div>
+    }
+    .into_any()
 }
 
 /// 日ヘッダの開始–終了の文字列。同じ分なら 1 つ、違えば `–`（U+2013、空白なし）で結ぶ。
@@ -1269,6 +1327,23 @@ fn ExerciseCard(
     // 閉じているときに薄字で出す値。**保存済みのものだけ**なので `db` から引く
     let interval = Memo::new(move |_| db.with(|d| d.exercise(ex).and_then(|e| e.interval_sec)));
 
+    // ── ± ボタンの幅（adr/ux/tap-clears-the-number-and-steps-above-the-field.md）──
+    //
+    // ★ 重量は種目の幅が勝ち、空なら全体（`weight_steps_for`）。回数は全体だけ。
+    //   どちらも `Memo` にして、設定や種目の編集が閉じた後も箱が追従するようにする。
+    let steps = use_steps();
+    let weight_steps = Memo::new(move |_| {
+        steps.with(|s| db.with(|d| core::weight_steps_for(d.exercise(ex), &s.weight)))
+    });
+    let reps_steps = Memo::new(move |_| {
+        steps.with(|s| {
+            core::active_steps(&s.reps)
+                .into_iter()
+                .map(|r| r as f32)
+                .collect::<Vec<f32>>()
+        })
+    });
+
     // ★ この種目が普段「重量を使う」種目かを**実データから**判定する。
     //
     // 旧実装は `Kind::Weighted` で判定していたが `Kind` は無くなった。単に
@@ -2225,6 +2300,68 @@ fn ExerciseCard(
                             let len = rows.with_untracked(Vec::len);
                             move_row(from, reorder::neighbor(from, up, len));
                         };
+                        // ± の箱。押した基準は欄の値（薄字のまま押したときは保存値）。
+                        // ★ 押したあともフォーカスは入力欄に残す（`mousedown` で止めている）
+                        let weight_ref = NodeRef::<leptos::html::Input>::new();
+                        let weight_saved = move || {
+                            rows.with_untracked(|rs| {
+                                rs.iter()
+                                    .find(|r| r.key == key)
+                                    .map(|r| r.weight.clone())
+                                    .unwrap_or_default()
+                            })
+                        };
+                        let reps_saved = move || {
+                            rows.with_untracked(|rs| {
+                                rs.iter()
+                                    .find(|r| r.key == key)
+                                    .map(|r| r.reps.clone())
+                                    .unwrap_or_default()
+                            })
+                        };
+                        let nudge_weight = move |delta: f32| {
+                            let next = rows.with_untracked(|rs| {
+                                rs.iter()
+                                    .find(|r| r.key == key)
+                                    .map(|r| core::step_weight(&r.weight, delta))
+                            });
+                            let Some(next) = next else { return };
+                            rows.update(|rs| {
+                                if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                                    r.weight = next.clone();
+                                    // ★ `on:input` と同じ規則で時刻を押す（箱も打鍵と同じ扱い）
+                                    r.at = core::stamp_set_at(
+                                        r.at,
+                                        parse_reps(&r.reps).is_some(),
+                                        is_today(),
+                                        now_ms(),
+                                    );
+                                }
+                            });
+                            commit();
+                            show_value(weight_ref, &next);
+                        };
+                        let nudge_reps = move |delta: f32| {
+                            let next = rows.with_untracked(|rs| {
+                                rs.iter()
+                                    .find(|r| r.key == key)
+                                    .map(|r| core::step_reps(&r.reps, delta as i32))
+                            });
+                            let Some(next) = next else { return };
+                            rows.update(|rs| {
+                                if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                                    r.reps = next.clone();
+                                    r.at = core::stamp_set_at(
+                                        r.at,
+                                        parse_reps(&r.reps).is_some(),
+                                        is_today(),
+                                        now_ms(),
+                                    );
+                                }
+                            });
+                            commit();
+                            show_value(reps_ref, &next);
+                        };
                         // 段を足すボタン。**絵だけが違う** — メインセット行は
                         // `arrow-down-wide-narrow`（ドロップを始める）、段の行は `plus`
                         // （同じドロップに段を継ぎ足す）。押した結果は同じなので
@@ -2306,8 +2443,22 @@ fn ExerciseCard(
                                                     aria-label=field_label(f)
                                                     data-testid=field_testid(f)
                                                     on:keydown=nudge_row
-                                                    on:focusin=move |_| kb_focus(kb)
-                                                    on:focusout=move |_| kb_blur(kb)
+                                                    // ★ 筋トレの欄と同じく、タップで空にして元の値を薄字で残す
+                                                    //   （同じカードの中で欄ごとに振る舞いを変えない）
+                                                    on:focusin=move |ev| {
+                                                        ghost_in(&ev);
+                                                        kb_focus(kb)
+                                                    }
+                                                    on:focusout=move |ev| {
+                                                        let saved = rows.with_untracked(|rs| {
+                                                            rs.iter()
+                                                                .find(|r| r.key == key)
+                                                                .map(|r| r.cf[i].clone())
+                                                                .unwrap_or_default()
+                                                        });
+                                                        ghost_out(&ev, &saved);
+                                                        kb_blur(kb)
+                                                    }
                                                     on:input=move |ev| {
                                                         let v = event_target_value(&ev);
                                                         rows.update(|rs| {
@@ -2340,6 +2491,9 @@ fn ExerciseCard(
                                     view! {
                                     // 重量欄は常に出す。空のままなら重量 1 として数えられるので、
                                     // 自重種目でも時間種目でも「入れなければよい」で成立する
+                                    // ★ 欄を `.num-wrap` で包む。± の箱を欄の真上に浮かせるため
+                                    //   （`.num-wrap:focus-within .stepper` で出す）
+                                    <span class="num-wrap">
                                     <input
                                         class="num"
                                         type="text"
@@ -2348,9 +2502,16 @@ fn ExerciseCard(
                                         value=row.weight.clone()
                                         aria-label=t().day.weight
                                         data-testid="set-weight"
+                                        node_ref=weight_ref
                                         on:keydown=nudge_row
-                                        on:focusin=move |_| kb_focus(kb)
-                                        on:focusout=move |_| kb_blur(kb)
+                                        on:focusin=move |ev| {
+                                            ghost_in(&ev);
+                                            kb_focus(kb)
+                                        }
+                                        on:focusout=move |ev| {
+                                            ghost_out(&ev, &weight_saved());
+                                            kb_blur(kb)
+                                        }
                                         on:input=move |ev| {
                                             let v = event_target_value(&ev);
                                             rows.update(|rs| {
@@ -2371,8 +2532,11 @@ fn ExerciseCard(
                                             commit();
                                         }
                                     />
+                                    {move || stepper(&weight_steps.get(), true, nudge_weight)}
+                                    </span>
                                     <span class="unit">"kg"</span>
                                     <span class="times">"×"</span>
+                                    <span class="num-wrap">
                                     <input
                                         class="num"
                                         type="text"
@@ -2382,8 +2546,14 @@ fn ExerciseCard(
                                         data-testid="set-reps"
                                         node_ref=reps_ref
                                         on:keydown=nudge_row
-                                        on:focusin=move |_| kb_focus(kb)
-                                        on:focusout=move |_| kb_blur(kb)
+                                        on:focusin=move |ev| {
+                                            ghost_in(&ev);
+                                            kb_focus(kb)
+                                        }
+                                        on:focusout=move |ev| {
+                                            ghost_out(&ev, &reps_saved());
+                                            kb_blur(kb)
+                                        }
                                         on:input=move |ev| {
                                             let v = event_target_value(&ev);
                                             rows.update(|rs| {
@@ -2402,6 +2572,8 @@ fn ExerciseCard(
                                             commit();
                                         }
                                     />
+                                    {move || stepper(&reps_steps.get(), false, nudge_reps)}
+                                    </span>
                                     // 回数欄に単位は添えない。プランクの 60 に「回」と付くほうが
                                     // 嘘になるし、それが秒だと分かるのは種目名からで表記からではない
                                     //
@@ -2545,8 +2717,45 @@ fn ExerciseCard(
                                             });
                                             commit();
                                         };
+                                        // ± の箱（段の欄）。基準は段の値で、無ければ保存値（薄字）と同じ。
+                                        let dweight_ref = NodeRef::<leptos::html::Input>::new();
+                                        let dreps_ref = NodeRef::<leptos::html::Input>::new();
+                                        let stage_value = move |pick: fn(&DropRow) -> String| {
+                                            rows.with_untracked(|rs| {
+                                                rs.iter()
+                                                    .find(|r| r.key == key)
+                                                    .and_then(|r| r.drops.iter().find(|d| d.key == dkey))
+                                                    .map(pick)
+                                                    .unwrap_or_default()
+                                            })
+                                        };
+                                        let drop_saved_weight = move || stage_value(|d| d.weight.clone());
+                                        let drop_saved_reps = move || stage_value(|d| d.reps.clone());
+                                        let nudge_drop_weight = move |delta: f32| {
+                                            let next = rows.with_untracked(|rs| {
+                                                rs.iter()
+                                                    .find(|r| r.key == key)
+                                                    .and_then(|r| r.drops.iter().find(|d| d.key == dkey))
+                                                    .map(|d| core::step_weight(&d.weight, delta))
+                                            });
+                                            let Some(next) = next else { return };
+                                            update_stage(|d, v| d.weight = v, next.clone());
+                                            show_value(dweight_ref, &next);
+                                        };
+                                        let nudge_drop_reps = move |delta: f32| {
+                                            let next = rows.with_untracked(|rs| {
+                                                rs.iter()
+                                                    .find(|r| r.key == key)
+                                                    .and_then(|r| r.drops.iter().find(|d| d.key == dkey))
+                                                    .map(|d| core::step_reps(&d.reps, delta as i32))
+                                            });
+                                            let Some(next) = next else { return };
+                                            update_stage(|d, v| d.reps = v, next.clone());
+                                            show_value(dreps_ref, &next);
+                                        };
                                         view! {
                                             <div class="drop-row" data-testid="drop-row">
+                                                <span class="num-wrap">
                                                 <input
                                                     class="num"
                                                     type="text"
@@ -2555,9 +2764,16 @@ fn ExerciseCard(
                                                     value=stage.weight.clone()
                                                     aria-label=t().day.drop_weight
                                                     data-testid="drop-weight"
+                                                    node_ref=dweight_ref
                                                     on:keydown=nudge_row
-                                                    on:focusin=move |_| kb_focus(kb)
-                                                    on:focusout=move |_| kb_blur(kb)
+                                                    on:focusin=move |ev| {
+                                                        ghost_in(&ev);
+                                                        kb_focus(kb)
+                                                    }
+                                                    on:focusout=move |ev| {
+                                                        ghost_out(&ev, &drop_saved_weight());
+                                                        kb_blur(kb)
+                                                    }
                                                     on:input=move |ev| {
                                                         update_stage(
                                                             |d, v| d.weight = v,
@@ -2565,8 +2781,11 @@ fn ExerciseCard(
                                                         );
                                                     }
                                                 />
+                                                {move || stepper(&weight_steps.get(), true, nudge_drop_weight)}
+                                                </span>
                                                 <span class="unit">"kg"</span>
                                                 <span class="times">"×"</span>
+                                                <span class="num-wrap">
                                                 <input
                                                     class="num"
                                                     type="text"
@@ -2574,9 +2793,16 @@ fn ExerciseCard(
                                                     value=stage.reps.clone()
                                                     aria-label=t().day.drop_reps
                                                     data-testid="drop-reps"
+                                                    node_ref=dreps_ref
                                                     on:keydown=nudge_row
-                                                    on:focusin=move |_| kb_focus(kb)
-                                                    on:focusout=move |_| kb_blur(kb)
+                                                    on:focusin=move |ev| {
+                                                        ghost_in(&ev);
+                                                        kb_focus(kb)
+                                                    }
+                                                    on:focusout=move |ev| {
+                                                        ghost_out(&ev, &drop_saved_reps());
+                                                        kb_blur(kb)
+                                                    }
                                                     on:input=move |ev| {
                                                         update_stage(
                                                             |d, v| d.reps = v,
@@ -2584,6 +2810,8 @@ fn ExerciseCard(
                                                         );
                                                     }
                                                 />
+                                                {move || stepper(&reps_steps.get(), false, nudge_drop_reps)}
+                                                </span>
                                                 // ★ 段の行にも足す口を置く。位置は
                                                 //   メインセット行と同じ（回数欄の隣）だが、
                                                 //   **絵は ＋ にする** — こちらは「同じ

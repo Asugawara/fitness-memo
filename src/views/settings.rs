@@ -26,7 +26,7 @@
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
-use crate::core::{Drops, WeightLine, WeightLines};
+use crate::core::{self, Drops, WeightLine, WeightLines};
 use crate::i18n::Lang;
 use crate::model::{
     Db, Exercise, ExerciseId, Group, GroupId, Label, LabelId, MAX_LABEL_LEN, MAX_LABELS, RoutineId,
@@ -40,7 +40,7 @@ use super::routine::{RoutineEditor, routine_exercise_names};
 use super::{
     SettingsPage, Sheet, cur_lang, ex_name, fmt_weight, grp_name, kb_blur, kb_focus, parse_weight,
     scroll_into_view_if_needed, t, use_db, use_drop_pct, use_drops, use_history_count, use_kb,
-    use_lang, use_open_group, use_settings_page, use_weight_lines,
+    use_lang, use_open_group, use_settings_page, use_steps, use_weight_lines,
 };
 
 /// 部位を追加するときの既定色。プリセットの 6 色を順に回す。
@@ -168,6 +168,7 @@ fn add_exercise(db: &mut Db, id: ExerciseId, group: GroupId, name: String) {
         pins: Vec::new(),
         interval_sec: None,
         labels: Vec::new(),
+        weight_steps: Vec::new(),
     });
 }
 
@@ -297,6 +298,7 @@ pub fn Settings() -> impl IntoView {
     let hist = use_history_count();
     let drops = use_drops();
     let drop_pct = use_drop_pct();
+    let steps = use_steps();
     let lines = use_weight_lines();
     // ★ 落とし幅の入力欄のため。キーボードが開くとタブ帯を隠す仕組みに乗せる
     //   （adr/pwa/hide-tabs-when-keyboard-open.md）
@@ -385,6 +387,25 @@ pub fn Settings() -> impl IntoView {
                                 ),
                                 "settings-row-exercises",
                                 move || go(SettingsPage::Exercises),
+                            )}
+                            // ★ 種目の直後。種目の編集シートにも同じ幅の欄があるので、
+                            //   「種目の刻み」を探す導線が隣り合う。右端は全体の重量の幅
+                            {section_row(
+                                t.settings.row_steps,
+                                Some(
+                                    Signal::derive(move || {
+                                        let w = steps.with(|s| core::active_steps(&s.weight));
+                                        if w.is_empty() {
+                                            t.settings.steps_none.to_string()
+                                        } else {
+                                            let list: Vec<String> =
+                                                w.iter().map(|v| fmt_weight(*v)).collect();
+                                            format!("{} kg", list.join(" / "))
+                                        }
+                                    }),
+                                ),
+                                "settings-row-steps",
+                                move || go(SettingsPage::Steps),
                             )}
                             // ★ 表示の好みなので、データ（メニュー / 種目）の後・
                             //   常設導線（ホーム画面追加）と言語の前。並びは探しに来る頻度順で、
@@ -644,6 +665,91 @@ pub fn Settings() -> impl IntoView {
 
                         <p class="settings-note muted" data-testid="drop-pct-note">
                             {t.settings.drop_pct_note}
+                        </p>
+                    }
+                        .into_any()
+                }
+                SettingsPage::Steps => {
+                    // ── ± ボタンの幅（adr/ux/tap-clears-the-number-and-steps-above-the-field.md）──
+                    //
+                    // ★ 枠は打った順のまま持つ（`"1.25,,5"` の空欄も位置を保つ）。並べ替えは
+                    //   箱を作るときだけ（`core::active_steps`）。打っている最中に枠の中身が
+                    //   入れ替わると、今打っている欄が別の枠へ飛ぶため。
+                    // ★ `on:change` で保存する（落とし幅と同じ理由。打鍵ごとに localStorage
+                    //   へ書かない）。
+                    let weight_slots = (0..core::MAX_STEPS)
+                        .map(|i| {
+                            let text = steps.with_untracked(|s| {
+                                s.weight[i].map(fmt_weight).unwrap_or_default()
+                            });
+                            view! {
+                                <input
+                                    class="num"
+                                    type="text"
+                                    // ★ 数字キーパッドに倒す。小数点は `inputmode=decimal`
+                                    inputmode="decimal"
+                                    pattern="[0-9]*([.,][0-9]*)?"
+                                    value=text
+                                    aria-label=t.settings.steps_weight
+                                    data-testid="steps-weight-input"
+                                    on:focusin=move |_| kb_focus(kb)
+                                    on:focusout=move |_| kb_blur(kb)
+                                    on:change=move |ev| {
+                                        let next = core::parse_weight_step(&event_target_value(&ev));
+                                        steps.update(|s| s.weight[i] = next);
+                                        storage::save_weight_steps(
+                                            &steps.with_untracked(|s| s.weight),
+                                        );
+                                    }
+                                />
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    let reps_slots = (0..core::MAX_STEPS)
+                        .map(|i| {
+                            let text = steps.with_untracked(|s| {
+                                s.reps[i].map(|r| r.to_string()).unwrap_or_default()
+                            });
+                            view! {
+                                <input
+                                    class="num"
+                                    type="text"
+                                    inputmode="numeric"
+                                    value=text
+                                    aria-label=t.settings.steps_reps
+                                    data-testid="steps-reps-input"
+                                    on:focusin=move |_| kb_focus(kb)
+                                    on:focusout=move |_| kb_blur(kb)
+                                    on:change=move |ev| {
+                                        let next = core::parse_reps_step(&event_target_value(&ev));
+                                        steps.update(|s| s.reps[i] = next);
+                                        storage::save_reps_steps(
+                                            &steps.with_untracked(|s| s.reps),
+                                        );
+                                    }
+                                />
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    view! {
+                        {back_head(t.settings.row_steps, move || go(SettingsPage::Root))}
+
+                        <p class="settings-note muted" data-testid="steps-note">
+                            {t.settings.steps_note}
+                        </p>
+
+                        <div class="pct-box" data-testid="steps-weight-box">
+                            <span class="pct-label">{t.settings.steps_weight}</span>
+                            {weight_slots}
+                        </div>
+
+                        <div class="pct-box" data-testid="steps-reps-box">
+                            <span class="pct-label">{t.settings.steps_reps}</span>
+                            {reps_slots}
+                        </div>
+
+                        <p class="settings-note muted" data-testid="steps-exercise-note">
+                            {t.settings.steps_exercise_note}
                         </p>
                     }
                         .into_any()
@@ -1369,6 +1475,7 @@ fn ExerciseEditor(
 ) -> impl IntoView {
     let db = use_db();
     let kb = use_kb();
+    let steps = use_steps();
 
     let name0 = db
         .with_untracked(|d| d.exercise(id).map(|e| ex_name(e).to_string()))
@@ -1381,6 +1488,35 @@ fn ExerciseEditor(
             .collect()
     });
     let name = RwSignal::new(name0.clone());
+
+    // ── 種目ごとの重量の幅（adr/ux/tap-clears-the-number-and-steps-above-the-field.md）──
+    //
+    // ★ 3 枠とも空なら全体に従う。入っている値は前から詰めて出す。
+    // ★ `on:change` で 3 枠ぶんまとめて書く。どの枠が変わっても全部を読み直す。
+    let step_refs: [NodeRef<leptos::html::Input>; core::MAX_STEPS] =
+        std::array::from_fn(|_| NodeRef::new());
+    let steps0: Vec<f32> = db.with_untracked(|d| {
+        d.exercise(id)
+            .map(|e| e.weight_steps.clone())
+            .unwrap_or_default()
+    });
+    let commit_steps = move || {
+        let values: Vec<f32> = step_refs
+            .iter()
+            .filter_map(|r| r.get_untracked())
+            .filter_map(|el| core::parse_weight_step(&el.value()))
+            .collect();
+        db.update(move |d| core::set_weight_steps(d, id, values));
+    };
+    let global_text = steps.with_untracked(|s| {
+        let w = core::active_steps(&s.weight);
+        if w.is_empty() {
+            t().settings.steps_none.to_string()
+        } else {
+            let list: Vec<String> = w.iter().map(|v| fmt_weight(*v)).collect();
+            format!("{} kg", list.join(" / "))
+        }
+    });
 
     let group = Memo::new(move |_| {
         db.with(|d| d.exercise(id).map(|e| e.group_id))
@@ -1626,6 +1762,37 @@ fn ExerciseEditor(
                     })
                     .collect::<Vec<_>>()}
             </div>
+        </div>
+
+        <div class="field" data-testid="exercise-steps">
+            <span>{t().settings.field_steps}</span>
+            <div class="pct-box">
+                {step_refs
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, node)| {
+                        let text = steps0.get(i).map(|w| fmt_weight(*w)).unwrap_or_default();
+                        view! {
+                            <input
+                                class="num"
+                                type="text"
+                                inputmode="decimal"
+                                pattern="[0-9]*([.,][0-9]*)?"
+                                value=text
+                                node_ref=node
+                                aria-label=t().settings.field_steps
+                                data-testid="ex-step-input"
+                                on:focusin=move |_| kb_focus(kb)
+                                on:focusout=move |_| kb_blur(kb)
+                                on:change=move |_| commit_steps()
+                            />
+                        }
+                    })
+                    .collect::<Vec<_>>()}
+            </div>
+            <p class="settings-note muted" data-testid="ex-steps-note">
+                {cur_lang().exercise_steps_note(&global_text)}
+            </p>
         </div>
 
         <div class="field">

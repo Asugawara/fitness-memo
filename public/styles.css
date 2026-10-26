@@ -1000,6 +1000,76 @@ h3 {
   margin-top: 4px;
 }
 
+/* ── ± ボタン（adr/ux/tap-clears-the-number-and-steps-above-the-field.md）────────
+   欄にフォーカスが入っているあいだだけ、欄の真上に浮く。普段の画面は 1px も動かない。
+   ★ 箱は欄より広い（6 個で約 309px）。`.num-wrap` は欄の幅のままにして、箱だけを
+     `position:absolute` で外へ出す。重量は欄の左端から右へ、回数は欄の中央に寄せる。 */
+.num-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+/* 薄字（保存値）。欄が空のときに値の代わりに見せる */
+.num::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.stepper {
+  display: none;
+  position: absolute;
+  left: 0;
+  bottom: calc(100% - 2px);
+  z-index: 2;
+  width: max-content;
+  align-items: center;
+  gap: 6px;
+  padding: 3px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.stepper.stepper-reps {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.num-wrap:focus-within .stepper {
+  display: flex;
+}
+
+.stepper-div {
+  align-self: stretch;
+  width: 1px;
+  background: var(--line);
+}
+
+/* ★ 44px 角はタップ標的の規約（44pt / 48dp 以上）。− は --muted、＋ は --accent で
+     色だけ分ける。ダークでも読めるよう、色はトークンだけで組む */
+.step-btn {
+  flex: 0 0 44px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.step-btn[data-delta^="+"] {
+  color: var(--accent);
+}
+
+/* 設定の枠の行。落とし幅（`.pct-box`）と同じ 1 行に 3 枠が入る */
+.pct-box .num + .num {
+  margin-left: 4px;
+}
+
 /* ── 種目メモ ─────────────────────────────────────────────────────────────────
    ★ セット行群の**下**に置く。.last-row（前回の記録）の直下に置くと 12px --muted の
      行が 2 本続き「前回の記録の続き」に読める（--muted は 1 つしか無いので色で

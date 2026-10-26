@@ -344,6 +344,7 @@ fn seed_group(db: &mut Db, preset: &PresetGroup, lang: Lang) {
             interval_sec: None,
             // ★ プリセットにラベルを配らない（`Exercise::labels` の doc）
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
     }
 }

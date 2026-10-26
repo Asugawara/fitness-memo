@@ -107,6 +107,39 @@ fn store() -> Option<web_sys::Storage> {
 ///   `App` が `LangCtx` を provide する前に決めた値をそのまま渡す
 ///   （adr/storage/preset-names-are-user-data-seeded-once.md）。
 pub fn load(lang: Lang) -> (Db, Option<String>) {
+    let (mut db, note) = load_raw(lang);
+    // ★ 退避できていない原本が現行キーに残っているときは触らない（`save` が上書きする）。
+    //   印も書かないので、次の起動でやり直す
+    if note.as_deref() != Some(lang.strings().boot.rescue_failed) {
+        add_cardio_group_once(&mut db, lang);
+    }
+    (db, note)
+}
+
+/// 既存の利用者にも部位「有酸素」を**1 回だけ**足す。
+///
+/// ★ 印は `Db` ではなく `UiState::cardio_group_added` に置く。部位の削除は物理削除
+///   （`views::settings::delete_group`）なので、「部位が無い」だけでは「消した」と
+///   「まだ足していない」を区別できない。`Db` に印を持たせると、(1) 有酸素を使わない
+///   利用者の JSON まで 1 キー増えてバイト一致が崩れ、(2) `merge_db` に印の合流規則が
+///   要り、(3) 印の無い古いバックアップを復元した瞬間に消した部位が復活する。
+///   UI 設定なら端末ごとに 1 回で、復元・取り込みで巻き戻らない。
+///
+/// ★ 初回起動（`seeded_db` が最初から持っている）でも印を書く。書かないと、その人が
+///   部位を消した次の起動で足し直してしまう。
+fn add_cardio_group_once(db: &mut Db, lang: Lang) {
+    if ui_state().cardio_group_added {
+        return;
+    }
+    // ★ 足したなら**その場で保存する**。印だけ書いて `Db` が次の編集まで保存されないと、
+    //   その間に閉じた人は「印はあるのに部位が無い」状態になり、二度と足されない
+    if presets::seed_cardio(db, lang) {
+        save(db);
+    }
+    update_ui(|u| u.cardio_group_added = true);
+}
+
+fn load_raw(lang: Lang) -> (Db, Option<String>) {
     let Some(store) = store() else {
         return (
             presets::seeded_db(lang),
@@ -459,6 +492,10 @@ struct UiState {
     ///   届く側）に任せる。
     #[serde(default)]
     release_seen: Option<i64>,
+    /// 部位「有酸素」を既存の利用者に足し終えたか（[`add_cardio_group_once`]）。
+    /// 一度 `true` になったら、部位を消されても二度と足さない。
+    #[serde(default)]
+    cardio_group_added: bool,
 }
 
 fn ui_state() -> UiState {

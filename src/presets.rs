@@ -1,11 +1,11 @@
-//! 初期投入するプリセット（部位 6 種 + 種目 28 種）。
+//! 初期投入するプリセット（部位 7 種 + 種目 34 種）。
 //!
 //! **ID は全端末で同じ固定値**（[`crate::model::RESERVED_MAX`] 未満の予約領域）。
 //! これがあるので、別々に初期化された 2 台のデータをマージしても「ベンチプレス」は
 //! 1 本にまとまる。改名されていても ID で追跡できる。
 //!
 //! 割り当ては部位ごとに 16 個ずつのブロック: 部位 N が `0xN0`、その種目が `0xN1..`。
-//! 上限は `0x64` なので予約領域（1024）に余裕で収まる。
+//! 上限は `0x76` なので予約領域（1024）に余裕で収まる。
 
 use crate::i18n::Lang;
 use crate::model::{Db, Exercise, ExerciseId, Group, GroupId};
@@ -54,7 +54,11 @@ pub struct PresetGroup {
     pub exercises: &'static [(ExerciseId, Names)],
 }
 
-/// 部位 6 種。`order` は宣言順。
+/// 部位「有酸素」の固定 ID。**有酸素のカードにするかは種目の部位がこれかどうかで決める**
+/// （`Exercise` に種類を持たせない。adr/data-model/metric-is-a-view-setting.md）。
+pub const CARDIO_GROUP: GroupId = GroupId::from_bits(0x70);
+
+/// 部位 7 種。`order` は宣言順。
 pub const PRESETS: &[PresetGroup] = &[
     PresetGroup {
         id: GroupId::from_bits(0x10),
@@ -195,7 +199,87 @@ pub const PRESETS: &[PresetGroup] = &[
             ),
         ],
     },
+    PresetGroup {
+        id: CARDIO_GROUP,
+        name: names("有酸素", "Cardio"),
+        color: "#d4569b",
+        exercises: &[
+            (
+                ExerciseId::from_bits(0x71),
+                names("トレッドミル", "Treadmill"),
+            ),
+            (
+                ExerciseId::from_bits(0x72),
+                names("エアロバイク", "Stationary Bike"),
+            ),
+            (
+                ExerciseId::from_bits(0x73),
+                names("クロストレーナー", "Cross Trainer"),
+            ),
+            (ExerciseId::from_bits(0x74), names("ローイング", "Rowing")),
+            (
+                ExerciseId::from_bits(0x75),
+                names("ステアクライマー", "Stair Climber"),
+            ),
+            (
+                ExerciseId::from_bits(0x76),
+                names("ラン・ウォーク（屋外）", "Run / Walk (outdoor)"),
+            ),
+        ],
+    },
 ];
+
+/// 有酸素の行に出す入力欄の 1 つ。**欄は機種ごとに最大 3 つ**
+/// （マシンで自分が設定した値と、終わったときに表示を見て写す値だけ）。
+///
+/// ★ 保存先は [`crate::model::Cardio`] の欄で、1 対 1 ではない — [`CardioField::Km`] と
+/// [`CardioField::Meters`] はどちらも `Cardio::m`（メートル）に落ちる。画面の単位だけが違う。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CardioField {
+    /// 分（`7.5` = 7 分 30 秒）→ `Cardio::sec`
+    Min,
+    /// km → `Cardio::m`
+    Km,
+    /// m → `Cardio::m`
+    Meters,
+    /// km/h → `Cardio::kmh`
+    Kmh,
+    /// 傾斜 % → `Cardio::incline`
+    Incline,
+    /// マシンの負荷レベル → `Cardio::level`
+    Level,
+}
+
+/// 合計行に、入力から**計算して**足すもの。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CardioDerived {
+    None,
+    /// 1km あたりのペース
+    PaceKm,
+    /// 500m あたりのタイム（ローイング）
+    Pace500,
+}
+
+/// 種目の入力欄。**固定 ID の機種だけが専用の欄を持ち、自作の種目は 分 · km。**
+pub fn cardio_fields(ex: ExerciseId) -> &'static [CardioField] {
+    use CardioField::{Incline, Km, Kmh, Level, Meters, Min};
+    match ex.bits() {
+        0x71 => &[Min, Kmh, Incline],
+        0x72 => &[Min, Level, Km],
+        0x73 | 0x75 => &[Min, Level],
+        0x74 => &[Min, Meters],
+        _ => &[Min, Km],
+    }
+}
+
+/// 種目の合計行に出す計算値。
+pub fn cardio_derived(ex: ExerciseId) -> CardioDerived {
+    match ex.bits() {
+        0x71..=0x73 | 0x75 => CardioDerived::None,
+        0x74 => CardioDerived::Pace500,
+        _ => CardioDerived::PaceKm,
+    }
+}
 
 /// プリセットを流し込む。**既に同じ固定 ID があればスキップする**ので、初回投入にも
 /// 再投入にもそのまま使える（何度呼んでも増殖しない）。
@@ -211,37 +295,56 @@ pub const PRESETS: &[PresetGroup] = &[
 /// 採番は一切しない（プリセットの ID は定数）。
 pub fn seed(db: &mut Db, lang: Lang) {
     for preset in PRESETS {
-        if db.group(preset.id).is_none() {
-            let order = db.groups.len() as u32;
-            db.groups.push(Group {
-                id: preset.id,
-                name: preset.name.get(lang).to_string(),
-                color: preset.color.to_string(),
-                order,
-            });
-        }
+        seed_group(db, preset, lang);
+    }
+}
 
-        for (id, name) in preset.exercises {
-            if db.exercise(*id).is_some() {
-                continue;
-            }
-            let order = db
-                .exercises
-                .iter()
-                .filter(|e| e.group_id == preset.id)
-                .count() as u32;
-            db.exercises.push(Exercise {
-                id: *id,
-                name: name.get(lang).to_string(),
-                group_id: preset.id,
-                order,
-                archived: false,
-                pins: Vec::new(),
-                interval_sec: None,
-                // ★ プリセットにラベルを配らない（`Exercise::labels` の doc）
-                labels: Vec::new(),
-            });
+/// 既存の利用者に部位「有酸素」を足す。**呼ぶかどうかの判断は呼び側**
+/// （`storage::load` が「足したことを覚える印」を見て 1 回だけ呼ぶ）。
+///
+/// ★ ここは `seed` と同じ「固定 ID が居ればスキップ」なので、何度呼んでも増殖しない。
+/// 部位を消した人に復活させないのは**印の仕事**で、この関数は知らない。
+///
+/// 戻り値は「`db` を書き換えたか」。
+pub fn seed_cardio(db: &mut Db, lang: Lang) -> bool {
+    let before = (db.groups.len(), db.exercises.len());
+    for preset in PRESETS.iter().filter(|p| p.id == CARDIO_GROUP) {
+        seed_group(db, preset, lang);
+    }
+    before != (db.groups.len(), db.exercises.len())
+}
+
+fn seed_group(db: &mut Db, preset: &PresetGroup, lang: Lang) {
+    if db.group(preset.id).is_none() {
+        let order = db.groups.len() as u32;
+        db.groups.push(Group {
+            id: preset.id,
+            name: preset.name.get(lang).to_string(),
+            color: preset.color.to_string(),
+            order,
+        });
+    }
+
+    for (id, name) in preset.exercises {
+        if db.exercise(*id).is_some() {
+            continue;
         }
+        let order = db
+            .exercises
+            .iter()
+            .filter(|e| e.group_id == preset.id)
+            .count() as u32;
+        db.exercises.push(Exercise {
+            id: *id,
+            name: name.get(lang).to_string(),
+            group_id: preset.id,
+            order,
+            archived: false,
+            pins: Vec::new(),
+            interval_sec: None,
+            // ★ プリセットにラベルを配らない（`Exercise::labels` の doc）
+            labels: Vec::new(),
+        });
     }
 }
 
@@ -342,12 +445,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn seeded_db_has_six_groups_and_all_ids_are_unique() {
+    fn seeded_db_has_seven_groups_and_all_ids_are_unique() {
         let db = seeded_db(Lang::Ja);
 
-        assert_eq!(db.groups.len(), 6);
+        assert_eq!(db.groups.len(), 7);
         let names: Vec<&str> = db.groups.iter().map(|g| g.name.as_str()).collect();
-        assert_eq!(names, ["胸", "背中", "肩", "腕", "脚", "体幹"]);
+        assert_eq!(names, ["胸", "背中", "肩", "腕", "脚", "体幹", "有酸素"]);
 
         // 各部位 4〜5 種目
         for group in &db.groups {
@@ -357,8 +460,8 @@ mod tests {
                 .filter(|e| e.group_id == group.id)
                 .count();
             assert!(
-                (4..=5).contains(&n),
-                "{} の種目数が {} 件（4〜5 件であること）",
+                (4..=6).contains(&n),
+                "{} の種目数が {} 件（4〜6 件であること）",
                 group.name,
                 n
             );
@@ -429,7 +532,7 @@ mod tests {
     /// **このテストを「合わせて直す」のは禁止**。
     #[test]
     fn preset_ids_are_frozen_for_cross_device_merges() {
-        let group_ids: Vec<u64> = vec![0x10, 0x20, 0x30, 0x40, 0x50, 0x60];
+        let group_ids: Vec<u64> = vec![0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70];
         let exercise_ids: Vec<u64> = vec![
             // 胸
             0x11, 0x12, 0x13, 0x14, 0x15, //
@@ -442,7 +545,9 @@ mod tests {
             // 脚
             0x51, 0x52, 0x53, 0x54, 0x55, //
             // 体幹
-            0x61, 0x62, 0x63, 0x64,
+            0x61, 0x62, 0x63, 0x64, //
+            // 有酸素
+            0x71, 0x72, 0x73, 0x74, 0x75, 0x76,
         ];
 
         let db = seeded_db(Lang::Ja);
@@ -473,7 +578,7 @@ mod tests {
             .find(|e| e.name == "サイドレイズ")
             .expect("再投入される");
         // 既存の「肩」に入り、新しい部位は増えない
-        assert_eq!(db.groups.len(), 6);
+        assert_eq!(db.groups.len(), 7);
         assert_eq!(
             db.group(refilled.group_id).map(|g| g.name.as_str()),
             Some("肩")
@@ -524,7 +629,7 @@ mod tests {
                 all.push(n.en);
             }
         }
-        assert_eq!(all.len(), (6 + 28) * 2);
+        assert_eq!(all.len(), (7 + 34) * 2);
 
         let mut sorted = all.clone();
         sorted.sort_unstable();
@@ -554,10 +659,21 @@ mod tests {
 
         // 名前のほうは全部違う（同じ表を 2 回投入しただけ、ではないことの確認）
         let names = |db: &Db| db.groups.iter().map(|g| g.name.clone()).collect::<Vec<_>>();
-        assert_eq!(names(&ja), ["胸", "背中", "肩", "腕", "脚", "体幹"]);
+        assert_eq!(
+            names(&ja),
+            ["胸", "背中", "肩", "腕", "脚", "体幹", "有酸素"]
+        );
         assert_eq!(
             names(&en),
-            ["Chest", "Back", "Shoulders", "Arms", "Legs", "Core"]
+            [
+                "Chest",
+                "Back",
+                "Shoulders",
+                "Arms",
+                "Legs",
+                "Core",
+                "Cardio"
+            ]
         );
     }
 
@@ -582,7 +698,7 @@ mod tests {
 
     /// 言語を変えて呼び直しても**何も起きない**（判定が固定 ID なので）。
     ///
-    /// ★ ここが崩れると、言語を切り替えるたびに 28 種目が英語名で復活して
+    /// ★ ここが崩れると、言語を切り替えるたびに 34 種目が英語名で復活して
     /// 一覧が倍になる。
     #[test]
     fn seeding_again_in_another_language_changes_nothing() {
@@ -592,7 +708,7 @@ mod tests {
         seed(&mut db, Lang::En);
 
         assert_eq!(db.exercises.len(), before);
-        assert_eq!(db.groups.len(), 6);
+        assert_eq!(db.groups.len(), 7);
         // 名前は最初に入れた言語のまま
         assert_eq!(db.groups[0].name, "胸");
     }

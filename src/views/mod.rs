@@ -393,6 +393,19 @@ pub fn fmt_date(d: NaiveDate, lang: Lang) -> String {
 }
 
 /// 指標を "1,080" の形にする（小数は落とす）。
+/// 指標の値を単位に合わせて整形する。**有酸素の分・km は小数 1 桁、それ以外は
+/// [`fmt_metric`]（整数）。** 単位だけで決めるのは、`Chart` が値と単位の文字列しか
+/// 受け取らないため（呼び側に旗を通すと 3 箇所で持ち回ることになる）。
+pub fn fmt_value(v: f64, unit: &str) -> String {
+    let c = &cur_lang().strings().core;
+    if unit == c.unit_min || unit == c.unit_km {
+        let s = format!("{v:.1}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        fmt_metric(v)
+    }
+}
+
 pub fn fmt_metric(v: f64) -> String {
     let n = v.round() as i64;
     let digits = n.abs().to_string();
@@ -425,6 +438,9 @@ pub use crate::core::{fmt_weight, parse_reps, parse_weight};
 /// `core::log_value`（段を**数える**側の既定）と逆向きの既定が 2 つ並んで読めなくなる。
 /// 呼び出し側で `Drops::Exclude` と書く。
 pub fn fmt_set(s: &SetEntry, d: crate::core::Drops) -> String {
+    if let Some(c) = &s.cardio {
+        return fmt_cardio(c);
+    }
     let mut out = crate::core::fmt_wr(s.weight, s.reps);
     if d == crate::core::Drops::Include {
         for stage in &s.drops {
@@ -433,6 +449,37 @@ pub fn fmt_set(s: &SetEntry, d: crate::core::Drops) -> String {
         }
     }
     out
+}
+
+/// 有酸素の 1 区間の表記。`30分·4.8km/h·12%` のように入っている欄だけを中黒でつなぐ。
+/// 並びは機種に依らず固定（時間 → 速度 → 傾斜 → レベル → 距離）。
+///
+/// ★ **区間の中を空白でつながない。** 区間同士は 2 スペースで区切るが、HTML では
+/// 空白が 1 つに潰れるので、空白でつなぐと「区間の中」と「区間の間」が見分けられなくなる
+/// （`fmt_set` の段と同じ理屈）。
+pub fn fmt_cardio(c: &crate::model::Cardio) -> String {
+    use crate::core::{fmt_km, fmt_minutes, fmt_weight};
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(sec) = c.sec {
+        parts.push(format!(
+            "{}{}",
+            fmt_minutes(sec),
+            cur_lang().strings().core.unit_min
+        ));
+    }
+    if let Some(v) = c.kmh {
+        parts.push(format!("{}km/h", fmt_weight(v)));
+    }
+    if let Some(v) = c.incline {
+        parts.push(format!("{}%", fmt_weight(v)));
+    }
+    if let Some(v) = c.level {
+        parts.push(format!("Lv{}", fmt_weight(v)));
+    }
+    if let Some(m) = c.m {
+        parts.push(format!("{}km", fmt_km(m)));
+    }
+    parts.join("·")
 }
 
 // ── DOM ヘルパ ──────────────────────────────────────────────────────────────

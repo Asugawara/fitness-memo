@@ -513,6 +513,11 @@ pub struct Core {
     /// 指標に添える単位。**ボリュームは重量と回数の合成量なので単位を持たない**
     pub unit_sets: &'static str,
     pub unit_reps: &'static str,
+    /// 有酸素の指標（推移タブで有酸素の種目を選んだときの 2 択）と単位
+    pub metric_time: &'static str,
+    pub metric_distance: &'static str,
+    pub unit_min: &'static str,
+    pub unit_km: &'static str,
     /// 経過表示（日粒度）
     pub today: &'static str,
     pub yesterday: &'static str,
@@ -533,6 +538,10 @@ const JA_CORE: Core = Core {
     metric_reps: "回数",
     unit_sets: "セット",
     unit_reps: "回",
+    metric_time: "時間",
+    metric_distance: "距離",
+    unit_min: "分",
+    unit_km: "km",
     today: "今日",
     yesterday: "昨日",
     just_now: "たった今",
@@ -550,6 +559,10 @@ const EN_CORE: Core = Core {
     metric_reps: "Reps",
     unit_sets: "sets",
     unit_reps: "reps",
+    metric_time: "Time",
+    metric_distance: "Distance",
+    unit_min: "min",
+    unit_km: "km",
     today: "Today",
     yesterday: "Yesterday",
     just_now: "Just now",
@@ -778,6 +791,16 @@ pub struct Day {
     pub weight_missing: &'static str,
     pub reps_missing: &'static str,
     pub add_set: &'static str,
+    /// 有酸素のカード（adr 無し: 部位「有酸素」の種目だけ）。行 = 区間
+    pub add_interval: &'static str,
+    pub cardio_missing: &'static str,
+    pub cardio_total: &'static str,
+    pub cardio_time: &'static str,
+    pub cardio_speed: &'static str,
+    pub cardio_incline: &'static str,
+    pub cardio_level: &'static str,
+    pub cardio_distance: &'static str,
+    pub delete_interval: &'static str,
     /// マシンのピン。**ラベル 1 語で種目メモと読み分ける**
     /// （adr/ux/machine-pins-on-the-exercise.md 決定 3）
     pub pins: &'static str,
@@ -832,6 +855,15 @@ const JA_DAY: Day = Day {
     weight_missing: "重量未入力",
     reps_missing: "回数を入れると保存されます",
     add_set: "+ セット",
+    add_interval: "+ 区間",
+    cardio_missing: "どれか 1 つ入れると保存されます",
+    cardio_total: "計",
+    cardio_time: "時間（分）",
+    cardio_speed: "速度（km/h）",
+    cardio_incline: "傾斜（%）",
+    cardio_level: "レベル",
+    cardio_distance: "距離",
+    delete_interval: "この区間を削除",
     pins: "ピン",
     pin_value: "ピンの番号",
     pin_delete: "このピンを削除",
@@ -876,6 +908,15 @@ const EN_DAY: Day = Day {
     weight_missing: "No weight yet",
     reps_missing: "Enter reps and this set is saved",
     add_set: "+ Set",
+    add_interval: "+ Interval",
+    cardio_missing: "Fill in any field and this interval is saved",
+    cardio_total: "Total",
+    cardio_time: "Time (min)",
+    cardio_speed: "Speed (km/h)",
+    cardio_incline: "Incline (%)",
+    cardio_level: "Level",
+    cardio_distance: "Distance",
+    delete_interval: "Delete this interval",
     pins: "Pins",
     pin_value: "Pin number",
     pin_delete: "Delete this pin",
@@ -1158,6 +1199,20 @@ const JA_MANUAL: Manual = Manual {
             fig: Some((710, 510)),
         },
         ChapterText {
+            title: "有酸素を記録する",
+            body: &[
+                "「種目を追加」で部位「有酸素」を開き、機種を選びます。カードには、その機種の欄が出ます。",
+                "1 行が 1 区間です。時間・速度・傾斜などを打つと、カードの下の合計の行に、計算できる距離やペースが出ます。",
+                "途中で速度や傾斜を変えたら「+ 区間」を押します。直前の行の値が写り、時間欄にフォーカスが移るので、変えた欄だけ打ち直せます。",
+                "時間は分で打ちます。7.5 と打てば 7 分 30 秒として保存されます。",
+                "単位は km・km/h・%・m に固定です。設定では変わりません。",
+                "有酸素の行には重量と回数が無いので、「前回をコピー」は区間をそのまま持ち込みます。",
+                "推移タブでは、有酸素の種目を時間（分）か距離（km）でグラフにします。",
+            ],
+            fig_alt: "2 区間と合計",
+            fig: Some((762, 676)),
+        },
+        ChapterText {
             title: "空の日から始める",
             body: &[
                 "候補リストは、その日にまだ1枚もカードが無いときだけ出ます。",
@@ -1363,6 +1418,20 @@ const EN_MANUAL: Manual = Manual {
             fig: Some((710, 510)),
         },
         ChapterText {
+            title: "Logging cardio",
+            body: &[
+                "Pick the Cardio group in \"+ Add exercise\", then a machine. The card shows that machine's fields.",
+                "One row is one interval. Fill in the minutes, speed, incline and so on; the total row below the card works out the distance or pace it can.",
+                "When you change the speed or incline partway through, tap \"+ Interval\". The row copies the previous values and the minutes field takes focus, so you only retype what changed.",
+                "Minutes are typed as minutes: 7.5 is saved as 7 min 30 s.",
+                "The units are fixed at km, km/h, % and m. Settings don't change them.",
+                "A cardio row has no weight or reps, so \"Copy last time\" carries the intervals across as they are.",
+                "On the Progress tab, a cardio exercise is charted by time (min) or distance (km).",
+            ],
+            fig_alt: "2 intervals and their total",
+            fig: Some((762, 676)),
+        },
+        ChapterText {
             title: "Starting from an empty day",
             body: &[
                 "The candidate list only appears on a day with no cards yet.",
@@ -1387,7 +1456,7 @@ const EN_MANUAL: Manual = Manual {
                 "\"+ Save this day as a routine\" only appears once the day has logged sets — an empty card alone isn't enough.",
             ],
             fig_alt: "The Add exercise sheet, one group open",
-            fig: Some((786, 994)),
+            fig: Some((786, 1030)),
         },
         ChapterText {
             title: "Reordering",
@@ -1674,6 +1743,21 @@ pub struct ReleaseNote {
 ///   `<slug>-<release id>`（例 `weight-line-9`）
 /// - **既存 id 1〜5 は基準より前のものなので触らない**（文言もフィールド割当も）
 pub const RELEASES: &[ReleaseNote] = &[
+    ReleaseNote {
+        id: 7,
+        date: "2026-10-27",
+        items: &[ReleaseItem {
+            ja: "有酸素を記録できるようにしました。種目を追加 → 有酸素 から機種を選ぶと、時間・速度・傾斜などを 1 行で打てます。途中で変えたら「+ 区間」で行を足せます。",
+            en: "Cardio can now be recorded. Add an exercise from the Cardio group and pick a machine, then fill in time, speed, incline and so on in one row. Changed something partway through? \"+ Interval\" adds another row.",
+            fig: Some(ReleaseFig {
+                id: "cardio-card",
+                alt_ja: "有酸素のカード",
+                alt_en: "A cardio card",
+                size_ja: (762, 676),
+                size_en: (762, 676),
+            }),
+        }],
+    },
     ReleaseNote {
         id: 6,
         date: "2026-09-22",

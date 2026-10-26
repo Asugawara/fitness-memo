@@ -471,6 +471,61 @@ pub struct SetEntry {
     /// 今までとバイト単位で同一でなければならない（e2e がキー集合を固定している）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<i64>,
+    /// **有酸素の 1 区間**（[`Cardio`]）。有酸素の行だけ `Some` で、その行の
+    /// `weight` / `reps` は `0`。有酸素かどうかは**種目の部位**が決める
+    /// （[`crate::presets::CARDIO_GROUP`]）— `Exercise` に種類を足さない
+    /// （adr/data-model/metric-is-a-view-setting.md）。
+    ///
+    /// `weight = 0` / `reps = 0` なので [`crate::core::set_volume`] の
+    /// `max(0,1) × 0 = 0` で筋トレの「合計」には自然に混ざらない。
+    ///
+    /// ★ **「同じセットか」の判定には入れる**（`note` / `drops` / `at` と逆）。
+    /// 重量も回数も 0 の有酸素では、`cardio` が唯一の中身。入れないと区間の違いが
+    /// [`crate::core::merge_db`] で黙って消える。
+    ///
+    /// ★ **`skip_serializing_if` を外してはいけない。** 有酸素を使わない利用者の JSON は
+    /// 今までとバイト単位で同一でなければならない。`SCHEMA` は上げない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cardio: Option<Cardio>,
+}
+
+/// 有酸素の 1 区間。**全欄が空でよい。** 保存単位は秒・メートルで固定し、表示で直す
+/// （重量が kg 固定なのと同じ）。
+///
+/// ★ 機種ごとに使う欄が違う（トレッドミルは `sec` / `kmh` / `incline`、バイクは
+/// `sec` / `level` / `m` …）。使わない欄は `None` のまま — 汎用の欄を別の意味に
+/// 流用しない。どの欄を出すかは [`crate::presets::cardio_fields`] が持つ。
+///
+/// ★ `SetEntry` と同じ規則: 欄を足すときは `#[serde(default, skip_serializing_if)]`
+/// を付け、`SCHEMA` は上げない。
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct Cardio {
+    /// 時間（秒）。UI は分で打つ（`7.5` = 7 分 30 秒）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sec: Option<u32>,
+    /// 距離（メートル）。UI は km（ローイングだけ m）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub m: Option<u32>,
+    /// 速度（km/h）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kmh: Option<f32>,
+    /// 傾斜（%）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incline: Option<f32>,
+    /// マシンの負荷レベル。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<f32>,
+}
+
+impl Cardio {
+    /// 全欄が空 = 保存する価値がない。
+    pub fn is_blank(&self) -> bool {
+        self.sec.is_none()
+            && self.m.is_none()
+            && self.kmh.is_none()
+            && self.incline.is_none()
+            && self.level.is_none()
+    }
 }
 
 /// ドロップセットの 1 段。**メインセット（[`SetEntry`]）にぶら下がる。**
@@ -789,6 +844,7 @@ mod tests {
             reps: 6,
             note: String::new(),
             at: None,
+            cardio: None,
             drops: vec![
                 DropStage {
                     weight: 50.0,
@@ -830,6 +886,7 @@ mod tests {
             note: String::new(),
             drops: Vec::new(),
             at: None,
+            cardio: None,
         };
         assert_eq!(
             serde_json::to_string(&set).expect("直列化できる"),
@@ -845,6 +902,7 @@ mod tests {
             note: String::new(),
             drops: Vec::new(),
             at: Some(1_700_000_000_000),
+            cardio: None,
         };
         assert_eq!(
             serde_json::to_string(&set).expect("直列化できる"),
@@ -1191,5 +1249,48 @@ mod tests {
             );
             assert!(name.chars().count() <= MAX_LABEL_LEN, "{name}");
         }
+    }
+
+    #[test]
+    fn set_entry_without_cardio_writes_no_cardio_key() {
+        // ★ バイト一致で見る。有酸素を使わない利用者の保存データが 1 バイトも変わらない
+        //   ことが、`skip_serializing_if` を外させないための唯一の歯止め
+        let set = SetEntry {
+            weight: 60.0,
+            reps: 10,
+            ..SetEntry::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&set).expect("直列化できる"),
+            r#"{"weight":60.0,"reps":10}"#
+        );
+    }
+
+    #[test]
+    fn set_entry_reads_json_written_before_cardio_existed() {
+        let set: SetEntry =
+            serde_json::from_str(r#"{"weight":60.0,"reps":10}"#).expect("有酸素以前の形も読める");
+        assert!(set.cardio.is_none());
+    }
+
+    #[test]
+    fn cardio_writes_only_the_filled_fields_and_round_trips() {
+        let set = SetEntry {
+            cardio: Some(Cardio {
+                sec: Some(900),
+                kmh: Some(4.8),
+                incline: Some(12.0),
+                ..Cardio::default()
+            }),
+            ..SetEntry::default()
+        };
+        let json = serde_json::to_string(&set).expect("直列化できる");
+        assert_eq!(
+            json,
+            r#"{"weight":0.0,"reps":0,"cardio":{"sec":900,"kmh":4.8,"incline":12.0}}"#
+        );
+        let back: SetEntry = serde_json::from_str(&json).expect("読める");
+        assert_eq!(back, set);
+        assert!(Cardio::default().is_blank());
     }
 }

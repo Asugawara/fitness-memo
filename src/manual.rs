@@ -61,6 +61,10 @@ pub const MANUAL_CHAPTERS: &[Chapter] = &[
         has_fig: true,
     },
     Chapter {
+        id: "cardio",
+        has_fig: true,
+    },
+    Chapter {
         id: "empty-day",
         has_fig: true,
     },

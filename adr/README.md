@@ -42,6 +42,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [ID を `next_id` の連番にし uuid を使わない](data-model/sequential-ids-no-uuid.md) | 置換済み → [ID を 60 bit 乱数にし、プリセットには固定 ID を与える](data-model/random-ids-for-safe-merge.md) |
 | [ID を 60 bit 乱数にし、プリセットには固定 ID を与える](data-model/random-ids-for-safe-merge.md) | 採用（合流の梯子を 1 階層下でなぞった相手は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)） |
 | [指標を種目の属性ではなくグラフの表示設定にする](data-model/metric-is-a-view-setting.md) | 採用 |
+| [有酸素の区間を SetEntry の任意フィールドとして持つ](data-model/cardio-segments-as-set-rows.md) | 採用 |
 | [経過日数をローカル暦の日差にし、時刻粒度を同じ日の中だけに閉じる](data-model/elapsed-in-local-calendar-days.md) | 採用 |
 | [テキスト取り込みは「足すだけ」に固定し、部位を増やさず `at` を書かない](data-model/text-import-is-merge-only.md) | 破棄（[取り込みごと撤去](ux/migrate-by-ocr-paste.md)） |
 | [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](data-model/notes-on-logs-and-sets.md) | 採用（決定 7 のコピーの規則は [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](ux/copy-carries-the-notes.md) で改訂。粒度の 3 つ目の軸は [ラベルの定義を種目に置き、ログには ID の印を 1 つだけ付ける](data-model/labels-on-the-exercise-and-a-mark-on-the-log.md)） |
@@ -89,6 +90,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [カレンダーの空日からも記録を追加できるようにする](ux/calendar-add-from-empty-day.md) | 採用（導線は [記録タブをカレンダー + 選択日エディタの単一画面にする](ux/record-tab-calendar-with-day-editor.md) で改訂） |
 | [記録タブをカレンダー + 選択日エディタの単一画面にする](ux/record-tab-calendar-with-day-editor.md) | 採用 |
 | [セット追加は直前行の重量をコピーして回数欄へフォーカスする](ux/set-entry-prefill-and-focus.md) | 採用（削除確認の判定は [セット削除は確認を挟まない（カード削除の確認は残す）](ux/set-delete-without-confirmation.md) で改訂） |
+| [有酸素のカードは 1 行 = 1 区間、欄は機種ごとに最大 3 つ](ux/cardio-card-fields-per-machine.md) | 採用 |
 | [1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](ux/copy-whole-day-menu.md) | 採用（候補の出所は [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) で拡張） |
 | [ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする](ux/install-guide-banner-and-sheet.md) | 採用 |
 | [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](ux/destructive-affordance-quiet-at-rest.md) | 採用 |

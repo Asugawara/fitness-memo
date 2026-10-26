@@ -10,14 +10,16 @@
 
 use chrono::NaiveDate;
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 use web_sys::PointerEvent;
 
 use crate::core;
 use crate::core::{Drops, Metric};
 use crate::model::{
-    Db, DropStage, ExerciseId, ExerciseLog, GroupId, Label, LabelId, MAX_DROPS, MAX_INTERVAL_LEN,
-    MAX_PIN_LEN, MAX_PINS, RoutineId, SetEntry,
+    Cardio, Db, DropStage, ExerciseId, ExerciseLog, GroupId, Label, LabelId, MAX_DROPS,
+    MAX_INTERVAL_LEN, MAX_PIN_LEN, MAX_PINS, RoutineId, SetEntry,
 };
+use crate::presets::{CARDIO_GROUP, CardioDerived, CardioField};
 use crate::reorder;
 
 use super::drag::{
@@ -62,6 +64,14 @@ struct Row {
     /// このセットの `SetEntry::at`。素通しするだけで、ここでは打鍵・表示しない
     /// （adr/data-model/set-at-typed-today-only.md）。
     at: Option<i64>,
+    /// 有酸素の行の各欄（`cardio_fields` の並び。最大 3 つ）。筋トレの行では空のまま。
+    ///
+    /// `weight` / `reps` を欄の流用に使わない（保存では `weight = 0` / `reps = 0` に
+    /// 固定され、集計に混ざらない）。文字列で持つ理由は `weight` と同じ。
+    cf: [String; 3],
+    /// 有酸素の行の元の区間。**画面に出ない欄の値を黙って落とさない**ための持ち回り
+    /// （[`core::cardio_from_texts`]）。
+    base: Cardio,
 }
 
 /// 編集中のドロップセットの 1 段。
@@ -97,7 +107,90 @@ impl Row {
             note: String::new(),
             drops: Vec::new(),
             at: None,
+            cf: Default::default(),
+            base: Cardio::default(),
         }
+    }
+
+    /// 保存済みのセット → 編集中の行。**キーは位置**。
+    fn from_set(key: u32, s: &SetEntry, fields: &[CardioField]) -> Self {
+        let base = s.cardio.clone().unwrap_or_default();
+        Self {
+            key,
+            weight: fmt_weight(s.weight),
+            reps: s.reps.to_string(),
+            note: s.note.clone(),
+            drops: drop_rows(s),
+            at: s.at,
+            cf: core::cardio_to_texts(fields, &base),
+            base,
+        }
+    }
+}
+
+/// 有酸素の合計行の文字列。例 `30分 · 2.4 km · 5:36 /km`。
+fn cardio_total_text(ex: ExerciseId, sets: &[SetEntry]) -> String {
+    let derived = crate::presets::cardio_derived(ex);
+    let per_m = if derived == CardioDerived::Pace500 {
+        500.0
+    } else {
+        1000.0
+    };
+    let t = core::cardio_total(sets, per_m);
+    let mut parts: Vec<String> = Vec::new();
+    if t.sec > 0 {
+        parts.push(format!(
+            "{}{}",
+            core::fmt_minutes(t.sec),
+            cur_lang().strings().core.unit_min
+        ));
+    }
+    // ローイングは距離を入力欄に打つので、合計行はペースだけ出す
+    if t.m > 0 && derived != CardioDerived::Pace500 {
+        parts.push(format!("{} km", core::fmt_km(t.m)));
+    }
+    if let (Some(p), true) = (t.pace_sec, derived != CardioDerived::None) {
+        let unit = if derived == CardioDerived::Pace500 {
+            "/500m"
+        } else {
+            "/km"
+        };
+        parts.push(format!("{} {unit}", core::fmt_pace(p)));
+    }
+    parts.join(" · ")
+}
+
+/// 欄の単位。分だけ言語で変わる。
+fn field_unit(f: CardioField) -> &'static str {
+    match f {
+        CardioField::Min => cur_lang().strings().core.unit_min,
+        CardioField::Km => "km",
+        CardioField::Meters => "m",
+        CardioField::Kmh => "km/h",
+        CardioField::Incline => "%",
+        CardioField::Level => "Lv",
+    }
+}
+
+fn field_label(f: CardioField) -> &'static str {
+    let d = &t().day;
+    match f {
+        CardioField::Min => d.cardio_time,
+        CardioField::Km | CardioField::Meters => d.cardio_distance,
+        CardioField::Kmh => d.cardio_speed,
+        CardioField::Incline => d.cardio_incline,
+        CardioField::Level => d.cardio_level,
+    }
+}
+
+fn field_testid(f: CardioField) -> &'static str {
+    match f {
+        CardioField::Min => "cardio-min",
+        CardioField::Km => "cardio-km",
+        CardioField::Meters => "cardio-m",
+        CardioField::Kmh => "cardio-kmh",
+        CardioField::Incline => "cardio-incline",
+        CardioField::Level => "cardio-level",
     }
 }
 
@@ -985,6 +1078,13 @@ fn ExerciseCard(
     let drop_pct = use_drop_pct();
     let history_count = use_history_count();
 
+    // 有酸素のカードか。**種目の部位が「有酸素」かどうかだけで決める**（種目に種類を
+    // 持たせない。adr/data-model/metric-is-a-view-setting.md）。カードを作った時点で
+    // 決め、タブを往復すれば追いつく（部位の付け替えは設定タブでしか起きない）。
+    let is_cardio =
+        db.with_untracked(|d| d.exercise(ex).is_some_and(|e| e.group_id == CARDIO_GROUP));
+    let fields = crate::presets::cardio_fields(ex);
+
     // このカードの選択日が今日か。`commit`（保存の `at`）とセット行の `on:input`
     // （`stamp_set_at` の分岐）が同じ 1 本を見る（adr/data-model/set-at-typed-today-only.md）。
     let is_today = move || dates.selected.get_untracked() == dates.today.get_untracked();
@@ -1086,14 +1186,7 @@ fn ExerciseCard(
                     .sets
                     .iter()
                     .enumerate()
-                    .map(|(i, s)| Row {
-                        key: i as u32,
-                        weight: fmt_weight(s.weight),
-                        reps: s.reps.to_string(),
-                        note: s.note.clone(),
-                        drops: drop_rows(s),
-                        at: s.at,
-                    })
+                    .map(|(i, s)| Row::from_set(i as u32, s, fields))
                     .collect();
                 (rows, l.note.clone())
             })
@@ -1209,6 +1302,19 @@ fn ExerciseCard(
         let sets: Vec<SetEntry> = rows.with_untracked(|rs| {
             rs.iter()
                 .filter_map(|r| {
+                    // ★ 有酸素の行: 全欄空なら保存しない（筋トレの「回数が空なら保存しない」
+                    //   と同じ）。`weight` / `reps` は 0 に固定する
+                    if is_cardio {
+                        let cardio = core::cardio_from_texts(fields, &r.cf, &r.base)?;
+                        return Some(SetEntry {
+                            weight: 0.0,
+                            reps: 0,
+                            note: r.note.clone(),
+                            drops: Vec::new(),
+                            at: r.at,
+                            cardio: Some(cardio),
+                        });
+                    }
                     // 空行が 0×0 として保存されコピーで複製され続けるのを防ぐ。
                     // ★ メモだけの行もここで落ちる。通すと 0×0 のゴーストセットが
                     //   生まれて指標・カレンダーのドット・コピーが全部汚染される
@@ -1233,6 +1339,7 @@ fn ExerciseCard(
                             })
                             .collect(),
                         at: r.at,
+                        cardio: None,
                     })
                 })
                 .collect()
@@ -1306,10 +1413,23 @@ fn ExerciseCard(
         let key = fresh_key();
         let weight =
             rows.with_untracked(|rs| rs.last().map(|r| r.weight.clone()).unwrap_or_default());
+        // ★ 有酸素は「+ 区間」。直前の行の全欄を写して時間欄へフォーカスする
+        //   （「+ セット」が重量を写して回数欄へ行くのと同じ仕組み。変えた欄だけ打ち直す）
+        let (cf, base) = if is_cardio {
+            rows.with_untracked(|rs| {
+                rs.last()
+                    .map(|r| (r.cf.clone(), r.base.clone()))
+                    .unwrap_or_default()
+            })
+        } else {
+            Default::default()
+        };
         rows.update(|rs| {
             rs.push(Row {
                 key,
                 weight,
+                cf,
+                base,
                 reps: String::new(),
                 // ★ メモはプリフィルしない。ここが作るのは**まだ起きていない次のセット**で、
                 //   重量はその計画値だが、書くべき観測はまだ存在しない。過去のログを再現する
@@ -1389,22 +1509,19 @@ fn ExerciseCard(
             .iter()
             .enumerate()
             .map(|(i, s)| Row {
-                key: base + i as u32,
-                weight: fmt_weight(s.weight),
-                reps: s.reps.to_string(),
                 // ★ セットメモも運ぶ。core::copy_day / apply_routine と同じ規則
                 //   （adr/ux/copy-carries-the-notes.md）
                 note: match typed.get(i) {
                     Some(mine) if !mine.trim().is_empty() => mine.clone(),
                     _ => s.note.clone(),
                 },
-                // ★ 段も運ぶ。メモと違って「今日打ってあるもの」を守る必要が無い
-                //   （このボタンが出るのは保存済みのセットが空のときなので、画面上の
-                //   段は数値と一緒に置き換わってよい）
-                drops: drop_rows(s),
                 // ★ 時刻は運ばない（adr/data-model/set-at-typed-today-only.md）。
                 //   打ち直した行だけが `stamp_set_at` で新しく時刻を得る
                 at: None,
+                // ★ 段も区間の欄も運ぶ。メモと違って「今日打ってあるもの」を守る必要が無い
+                //   （このボタンが出るのは保存済みのセットが空のときなので、画面上の
+                //   値は一緒に置き換わってよい）
+                ..Row::from_set(base + i as u32, s, fields)
             })
             .collect();
         next_key.set(base + filled.len() as u32 + 1);
@@ -1491,6 +1608,16 @@ fn ExerciseCard(
         scroll_into_view_if_needed(confirm_dom_id(ex));
     };
 
+    // 有酸素のカードの「今日」は分の合計（ボリュームは 0 になる）
+    let today_cardio_min = move || {
+        let key = core::date_key(dates.selected.get());
+        db.with(|d| {
+            d.sessions
+                .get(&key)
+                .and_then(|s| s.log_of(ex))
+                .map_or(0.0, |l| core::log_value(Metric::Time, l))
+        })
+    };
     let today_metric = move || {
         let key = core::date_key(dates.selected.get());
         db.with(|d| {
@@ -1790,7 +1917,11 @@ fn ExerciseCard(
                                 .map(|s| fmt_set(s, Drops::Exclude))
                                 .collect::<Vec<_>>()
                                 .join("  ");
-                            let metric = fmt_metric(core::log_value(Metric::Volume, &log));
+                            let metric = if is_cardio {
+                                cardio_total_text(ex, &log.sets)
+                            } else {
+                                fmt_metric(core::log_value(Metric::Volume, &log))
+                            };
                             // ★ ラベル名は `labels` Memo から引く（行の中で `db` を
                             //   読むと 1 打鍵で全カードの履歴行が作り直される）
                             let label_name = log
@@ -1880,7 +2011,8 @@ fn ExerciseCard(
                         // 重量を使う種目で reps だけ入っている行は「入力忘れ」の可能性が高い。
                         // 黙って指標を変えず、行にヒントを出して保持する
                         let weight_missing = move || {
-                            uses_weight.get()
+                            !is_cardio
+                                && uses_weight.get()
                                 && rows.with(|rs| {
                                     rs.iter()
                                         .find(|r| r.key == key)
@@ -1993,6 +2125,12 @@ fn ExerciseCard(
                                 rs.iter()
                                     .find(|r| r.key == key)
                                     .is_some_and(|r| {
+                                        if is_cardio {
+                                            // 全欄空でメモだけ = commit で落ちる行
+                                            return !r.note.trim().is_empty()
+                                                && core::cardio_from_texts(fields, &r.cf, &r.base)
+                                                    .is_none();
+                                        }
                                         (!r.note.trim().is_empty() || !r.drops.is_empty())
                                             && parse_reps(&r.reps).is_none()
                                     })
@@ -2004,10 +2142,21 @@ fn ExerciseCard(
                         //   完結させる。仮に開かなくても重量はプリフィル済みなので
                         //   タップ 1 回で回数を打てる
                         let reps_ref = NodeRef::<leptos::html::Input>::new();
+                        // 有酸素の行は先頭の欄（時間）へ。行の div から引く
+                        let row_ref = NodeRef::<leptos::html::Div>::new();
                         Effect::new(move |_| {
-                            if focus_key.get() == Some(key)
-                                && let Some(el) = reps_ref.get()
-                            {
+                            if focus_key.get() != Some(key) {
+                                return;
+                            }
+                            if is_cardio {
+                                if let Some(div) = row_ref.get()
+                                    && let Ok(Some(el)) = div.query_selector("input.cnum")
+                                    && let Ok(el) = el.dyn_into::<web_sys::HtmlElement>()
+                                {
+                                    let _ = el.focus();
+                                    focus_key.set(None);
+                                }
+                            } else if let Some(el) = reps_ref.get() {
                                 let _ = el.focus();
                                 focus_key.set(None);
                             }
@@ -2114,6 +2263,8 @@ fn ExerciseCard(
                         view! {
                             <div
                                 class="set-row"
+                                class:cardio=is_cardio
+                                node_ref=row_ref
                                 id=set_dom_id(ex, key)
                                 data-testid="set-row"
                                 data-drag=move || {
@@ -2137,86 +2288,139 @@ fn ExerciseCard(
                                 >
                                     {index}
                                 </span>
-                                // 重量欄は常に出す。空のままなら重量 1 として数えられるので、
-                                // 自重種目でも時間種目でも「入れなければよい」で成立する
-                                <input
-                                    class="num"
-                                    type="text"
-                                    inputmode="decimal"
-                                    pattern="[0-9]*([.,][0-9]*)?"
-                                    value=row.weight.clone()
-                                    aria-label=t().day.weight
-                                    data-testid="set-weight"
-                                    on:keydown=nudge_row
-                                    on:focusin=move |_| kb_focus(kb)
-                                    on:focusout=move |_| kb_blur(kb)
-                                    on:input=move |ev| {
-                                        let v = event_target_value(&ev);
-                                        rows.update(|rs| {
-                                            if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
-                                                r.weight = v;
-                                                // ★ 重量を打った直後にも時刻を押す。回数はまだ
-                                                //   このセットのものを見る（打った側だけが判定材料
-                                                //   ではない — 回数が既に読めていれば重量だけの
-                                                //   打鍵でも「そのセットをやった」証拠になる）
-                                                r.at = core::stamp_set_at(
-                                                    r.at,
-                                                    parse_reps(&r.reps).is_some(),
-                                                    is_today(),
-                                                    now_ms(),
-                                                );
+                                // ★ 有酸素の行: 欄は機種ごとに最大 3 つ。入力欄は `.num` より狭い `.cnum`
+                                //   （375px 幅で 3 欄と ✕ が 1 行に収まる）。ドロップの口は出さない
+                                {if is_cardio {
+                                    fields
+                                        .iter()
+                                        .copied()
+                                        .enumerate()
+                                        .map(|(i, f)| {
+                                            view! {
+                                                <input
+                                                    class="num cnum"
+                                                    type="text"
+                                                    inputmode="decimal"
+                                                    pattern="[0-9]*([.,][0-9]*)?"
+                                                    value=row.cf[i].clone()
+                                                    aria-label=field_label(f)
+                                                    data-testid=field_testid(f)
+                                                    on:keydown=nudge_row
+                                                    on:focusin=move |_| kb_focus(kb)
+                                                    on:focusout=move |_| kb_blur(kb)
+                                                    on:input=move |ev| {
+                                                        let v = event_target_value(&ev);
+                                                        rows.update(|rs| {
+                                                            if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                                                                r.cf[i] = v;
+                                                                // ★ どれか 1 欄が読めた最初の打鍵で時刻を押す
+                                                                let readable = core::cardio_from_texts(
+                                                                        fields,
+                                                                        &r.cf,
+                                                                        &r.base,
+                                                                    )
+                                                                    .is_some();
+                                                                r.at = core::stamp_set_at(
+                                                                    r.at,
+                                                                    readable,
+                                                                    is_today(),
+                                                                    now_ms(),
+                                                                );
+                                                            }
+                                                        });
+                                                        commit();
+                                                    }
+                                                />
+                                                <span class="unit cunit">{field_unit(f)}</span>
                                             }
-                                        });
-                                        commit();
+                                        })
+                                        .collect_view()
+                                        .into_any()
+                                } else {
+                                    view! {
+                                    // 重量欄は常に出す。空のままなら重量 1 として数えられるので、
+                                    // 自重種目でも時間種目でも「入れなければよい」で成立する
+                                    <input
+                                        class="num"
+                                        type="text"
+                                        inputmode="decimal"
+                                        pattern="[0-9]*([.,][0-9]*)?"
+                                        value=row.weight.clone()
+                                        aria-label=t().day.weight
+                                        data-testid="set-weight"
+                                        on:keydown=nudge_row
+                                        on:focusin=move |_| kb_focus(kb)
+                                        on:focusout=move |_| kb_blur(kb)
+                                        on:input=move |ev| {
+                                            let v = event_target_value(&ev);
+                                            rows.update(|rs| {
+                                                if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                                                    r.weight = v;
+                                                    // ★ 重量を打った直後にも時刻を押す。回数はまだ
+                                                    //   このセットのものを見る（打った側だけが判定材料
+                                                    //   ではない — 回数が既に読めていれば重量だけの
+                                                    //   打鍵でも「そのセットをやった」証拠になる）
+                                                    r.at = core::stamp_set_at(
+                                                        r.at,
+                                                        parse_reps(&r.reps).is_some(),
+                                                        is_today(),
+                                                        now_ms(),
+                                                    );
+                                                }
+                                            });
+                                            commit();
+                                        }
+                                    />
+                                    <span class="unit">"kg"</span>
+                                    <span class="times">"×"</span>
+                                    <input
+                                        class="num"
+                                        type="text"
+                                        inputmode="numeric"
+                                        value=row.reps.clone()
+                                        aria-label=t().day.reps
+                                        data-testid="set-reps"
+                                        node_ref=reps_ref
+                                        on:keydown=nudge_row
+                                        on:focusin=move |_| kb_focus(kb)
+                                        on:focusout=move |_| kb_blur(kb)
+                                        on:input=move |ev| {
+                                            let v = event_target_value(&ev);
+                                            rows.update(|rs| {
+                                                if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
+                                                    r.reps = v;
+                                                    // ★ 回数が読めた最初の打鍵で時刻を押す
+                                                    //   （adr/data-model/set-at-typed-today-only.md）
+                                                    r.at = core::stamp_set_at(
+                                                        r.at,
+                                                        parse_reps(&r.reps).is_some(),
+                                                        is_today(),
+                                                        now_ms(),
+                                                    );
+                                                }
+                                            });
+                                            commit();
+                                        }
+                                    />
+                                    // 回数欄に単位は添えない。プランクの 60 に「回」と付くほうが
+                                    // 嘘になるし、それが秒だと分かるのは種目名からで表記からではない
+                                    //
+                                    // ★ 確認を挟まないので、離す設計が唯一の事故対策になった。
+                                    //   削除は入力欄と地続きにしない。margin-left:auto で右端へ寄せた上に
+                                    //   区切り線と内側余白で離す（auto を外すと回数欄の直後に来て
+                                    //   今より押しやすくなる）
+                                    // ★ ドロップを始める口。**回数欄の隣**に置く
+                                    //   （adr/ux/drop-sets-as-a-box-under-the-main-set.md 決定 1）。
+                                    //   メモを開かずに段を足せる必要があるので `note_open` に
+                                    //   相乗りさせられない。44px の標的を 1 つ増やすが、
+                                    //   **1 行目の余白に入るので縦は 1px も増えない**
+                                    //   （iPhone 幅で ✕ の左に 94px 空いている）
+                                    // ★ 絵は `arrow-down-wide-narrow`。段の行の ＋ と分けるのは
+                                    //   役割が違うから（こちらは「ドロップを始める」）
+                                    {drop_add_btn(icon::ARROW_DOWN_WIDE_NARROW)}
                                     }
-                                />
-                                <span class="unit">"kg"</span>
-                                <span class="times">"×"</span>
-                                <input
-                                    class="num"
-                                    type="text"
-                                    inputmode="numeric"
-                                    value=row.reps.clone()
-                                    aria-label=t().day.reps
-                                    data-testid="set-reps"
-                                    node_ref=reps_ref
-                                    on:keydown=nudge_row
-                                    on:focusin=move |_| kb_focus(kb)
-                                    on:focusout=move |_| kb_blur(kb)
-                                    on:input=move |ev| {
-                                        let v = event_target_value(&ev);
-                                        rows.update(|rs| {
-                                            if let Some(r) = rs.iter_mut().find(|r| r.key == key) {
-                                                r.reps = v;
-                                                // ★ 回数が読めた最初の打鍵で時刻を押す
-                                                //   （adr/data-model/set-at-typed-today-only.md）
-                                                r.at = core::stamp_set_at(
-                                                    r.at,
-                                                    parse_reps(&r.reps).is_some(),
-                                                    is_today(),
-                                                    now_ms(),
-                                                );
-                                            }
-                                        });
-                                        commit();
-                                    }
-                                />
-                                // 回数欄に単位は添えない。プランクの 60 に「回」と付くほうが
-                                // 嘘になるし、それが秒だと分かるのは種目名からで表記からではない
-                                //
-                                // ★ 確認を挟まないので、離す設計が唯一の事故対策になった。
-                                //   削除は入力欄と地続きにしない。margin-left:auto で右端へ寄せた上に
-                                //   区切り線と内側余白で離す（auto を外すと回数欄の直後に来て
-                                //   今より押しやすくなる）
-                                // ★ ドロップを始める口。**回数欄の隣**に置く
-                                //   （adr/ux/drop-sets-as-a-box-under-the-main-set.md 決定 1）。
-                                //   メモを開かずに段を足せる必要があるので `note_open` に
-                                //   相乗りさせられない。44px の標的を 1 つ増やすが、
-                                //   **1 行目の余白に入るので縦は 1px も増えない**
-                                //   （iPhone 幅で ✕ の左に 94px 空いている）
-                                // ★ 絵は `arrow-down-wide-narrow`。段の行の ＋ と分けるのは
-                                //   役割が違うから（こちらは「ドロップを始める」）
-                                {drop_add_btn(icon::ARROW_DOWN_WIDE_NARROW)}
+                                        .into_any()
+                                }}
                                 <button
                                     class="icon-btn"
                                     aria-label=t().day.delete_set
@@ -2243,7 +2447,7 @@ fn ExerciseCard(
                                         .then(|| {
                                             view! {
                                                 <span class="warn" data-testid="note-orphan">
-                                                    {t().day.reps_missing}
+                                                    {if is_cardio { t().day.cardio_missing } else { t().day.reps_missing }}
                                                 </span>
                                             }
                                         })
@@ -2404,9 +2608,37 @@ fn ExerciseCard(
                 />
                 <div class="add-set-wrap">
                     <button class="secondary" data-testid="add-set" on:click=add_row>
-                        {t().day.add_set}
+                        {if is_cardio { t().day.add_interval } else { t().day.add_set }}
                     </button>
                 </div>
+                // 区間が 1 行以上あれば合計行。保存と同じ読み方（`cardio_from_texts`）で数える
+                {move || {
+                    is_cardio
+                        .then(|| {
+                            let sets: Vec<SetEntry> = rows
+                                .with(|rs| {
+                                    rs.iter()
+                                        .filter_map(|r| {
+                                            core::cardio_from_texts(fields, &r.cf, &r.base)
+                                                .map(|c| SetEntry {
+                                                    cardio: Some(c),
+                                                    ..SetEntry::default()
+                                                })
+                                        })
+                                        .collect()
+                                });
+                            (!sets.is_empty())
+                                .then(|| {
+                                    view! {
+                                        <p class="cardio-total" data-testid="cardio-total">
+                                            <span>{t().day.cardio_total}</span>
+                                            <strong>{cardio_total_text(ex, &sets)}</strong>
+                                        </p>
+                                    }
+                                })
+                        })
+                        .flatten()
+                }}
             </div>
 
             // ── マシンのピン ──────────────────────────────────────────────────
@@ -2668,7 +2900,19 @@ fn ExerciseCard(
                 </button>
                 <span class="foot-total">
                     <span>{t().day.today_badge}</span>
-                    <strong data-testid="today-metric">{move || fmt_metric(today_metric())}</strong>
+                    <strong data-testid="today-metric">
+                        {move || {
+                            if is_cardio {
+                                format!(
+                                    "{}{}",
+                                    fmt_metric(today_cardio_min()),
+                                    t().core.unit_min,
+                                )
+                            } else {
+                                fmt_metric(today_metric())
+                            }
+                        }}
+                    </strong>
                 </span>
             </footer>
 

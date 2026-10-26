@@ -958,6 +958,42 @@ h3 {
   padding: 4px 6px;
 }
 
+/* ── 有酸素の行（区間カード）──────────────────────────────────────────────
+   ★ 欄は機種ごとに最大 3 つ。`.set-row .num`（4.2em）のままだと 375px 幅で
+   3 欄 + 単位 + ✕ が 1 行に収まらないので、入力欄だけ狭くする（枠・高さ・地色は
+   `.set-row .num` を継ぐ）。 */
+.set-row.cardio {
+  gap: 2px 4px;
+}
+
+.set-row .num.cnum {
+  width: 2.9em;
+  min-width: 0;
+  padding: 4px 4px;
+}
+
+.set-row .unit.cunit {
+  font-size: 12px;
+  margin-right: 2px;
+}
+
+/* 合計行。点線で区切り、右寄せ。数字は太字（`.foot-total` と同じ流儀） */
+.cardio-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 6px 0 0;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cardio-total strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
 .add-set-wrap {
   display: flex;
   justify-content: flex-end;

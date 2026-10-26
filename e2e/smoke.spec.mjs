@@ -225,9 +225,9 @@ test('1. 初回起動でプリセットが投入され記録タブが出る', as
   await expect(page.getByTestId('screen-record')).toBeVisible();
   await expect(page.getByTestId('tab-record')).toHaveClass(/active/);
 
-  // まだ何も記録していないので経過時間は「—」、部位チップは6部位分
+  // まだ何も記録していないので経過時間は「—」、部位チップは7部位分
   await expect(page.getByTestId('elapsed')).toHaveText('—');
-  await expect(page.getByTestId('group-chip')).toHaveCount(6);
+  await expect(page.getByTestId('group-chip')).toHaveCount(7);
 
   // プリセットが投入されている（胸=ベンチプレス、背中=懸垂）ことをシートで確認。
   // ★ 同時に開けるのは 1 つなので、2 つの部位を続けて開いて 1 つずつ見る
@@ -235,7 +235,7 @@ test('1. 初回起動でプリセットが投入され記録タブが出る', as
   await page.getByTestId('add-exercise').click();
   const sheet = page.getByTestId('add-sheet');
   await expect(sheet).toBeVisible();
-  await expect(sheet.getByTestId('pick-group')).toHaveCount(6);
+  await expect(sheet.getByTestId('pick-group')).toHaveCount(7);
   const chest = await openPickGroupFor(page, 'ベンチプレス');
   await expect(chest.pick).toBeVisible();
   await expect(chest.group.getByTestId('pick-group-name')).toHaveText('胸');
@@ -554,7 +554,7 @@ test('推移タブの候補には記録のある種目だけが出る', async ({
   const exercises = page.getByTestId('exercise-select').locator('option');
 
   await expect(exercises.filter({ hasText: exactText('ベンチプレス') })).toHaveCount(1);
-  // プリセットは 28 種目あるが、使っていないものは並べない
+  // プリセットは 34 種目あるが、使っていないものは並べない
   await expect(exercises.filter({ hasText: exactText('スクワット') })).toHaveCount(0);
   await expect(exercises.filter({ hasText: exactText('プランク') })).toHaveCount(0);
   // 記録のある種目を持たない部位も出ない
@@ -958,9 +958,9 @@ test('11. 設定タブでの改名・部位変更・新規追加が記録タブ�
 test('設定タブは部位だけを並べ、部位を開くとその部位の種目が出る（1 つだけ開く）', async ({ page }) => {
   await openSettingsSection(page, 'exercises');
 
-  // ★ 改修の本体。既定で種目は 1 つも出ていない。6 部位 28 種目が全部並ぶと、
+  // ★ 改修の本体。既定で種目は 1 つも出ていない。7 部位 34 種目が全部並ぶと、
   //   どの部位があるかを見るだけで長いスクロールが要る（adr/ux/menu-groups-as-single-open-accordion.md）
-  await expect(page.getByTestId('group-item')).toHaveCount(6);
+  await expect(page.getByTestId('group-item')).toHaveCount(7);
   await expect(page.getByTestId('exercise-item')).toHaveCount(0);
   await expect(page.getByTestId('settings-add-exercise')).toHaveCount(0);
 
@@ -1049,9 +1049,9 @@ test('自動で開いた部位は画面の中に入る（新規作成・部位�
   // 新規部位は一覧の末尾に作られる。開くだけでスクロールしないと sticky な
   // .add-wrap の裏か fold の下に隠れて、「＋ 種目を追加」に到達できない
   await page.getByTestId('settings-add-group').click();
-  await page.getByTestId('new-group-name').fill('有酸素');
+  await page.getByTestId('new-group-name').fill('ストレッチ');
   await page.getByTestId('new-group-submit').click();
-  const cardio = groupItem(page, '有酸素');
+  const cardio = groupItem(page, 'ストレッチ');
   await expect(cardio.getByTestId('group-toggle')).toHaveAttribute('aria-expanded', 'true');
   await expect(cardio).toBeInViewport();
   await expect(cardio.getByTestId('settings-add-exercise')).toBeInViewport();
@@ -1063,7 +1063,7 @@ test('自動で開いた部位は画面の中に入る（新規作成・部位�
   await page
     .getByTestId('exercise-groups')
     .getByTestId('group-option')
-    .filter({ hasText: exactText('有酸素') })
+    .filter({ hasText: exactText('ストレッチ') })
     .click();
   await page.getByTestId('settings-sheet-close').click();
   await expect(cardio.getByTestId('group-toggle')).toHaveAttribute('aria-expanded', 'true');
@@ -1093,7 +1093,7 @@ test('開いていた部位を削除するとアコーディオンが閉じる',
 
   // 消えた GroupId をシグナルに残さない。残っていても表示は壊れないが、
   // 開いている部位が 1 つも無い状態が正しい
-  await expect(page.getByTestId('group-item')).toHaveCount(6);
+  await expect(page.getByTestId('group-item')).toHaveCount(7);
   await expect(page.getByTestId('exercise-item')).toHaveCount(0);
 });
 
@@ -1120,8 +1120,8 @@ test('アイコンの SVG が描画されている', async ({ page }) => {
   //   （adr/architecture/help-figures-as-included-svg.md /
   //   adr/architecture/lucide-icons-as-included-svg.md）。個数を固定して黙って消えるのを防ぐ
   await openSettingsSection(page, 'exercises');
-  await expect(page.locator('[data-testid=group-toggle] .icon > svg')).toHaveCount(6);
-  await expect(page.locator('[data-testid=group-edit] .icon > svg')).toHaveCount(6);
+  await expect(page.locator('[data-testid=group-toggle] .icon > svg')).toHaveCount(7);
+  await expect(page.locator('[data-testid=group-edit] .icon > svg')).toHaveCount(7);
 
   await groupItem(page, '胸').getByTestId('group-edit').click();
   await expect(page.locator('[data-testid=settings-sheet-close] .icon > svg')).toHaveCount(1);
@@ -1771,7 +1771,7 @@ test('「種目を追加」シートは既定で全部閉じており、部位�
   await page.getByTestId('add-exercise').click();
   const sheet = page.getByTestId('add-sheet');
 
-  await expect(sheet.getByTestId('pick-group')).toHaveCount(6);
+  await expect(sheet.getByTestId('pick-group')).toHaveCount(7);
   // 閉じている部位の種目は DOM に無い（display:none ではない）
   await expect(sheet.getByTestId('pick-exercise')).toHaveCount(0);
   const toggles = sheet.getByTestId('pick-group-toggle');
@@ -2659,7 +2659,7 @@ test('種目ピッカーは既定で全部閉じており、部位は複数同�
   const legs = routinePickGroup(page, '脚');
 
   // 既定で全部閉じている（開いている部位にしか種目ボタンは無い）
-  await expect(page.getByTestId('routine-group-toggle')).toHaveCount(6);
+  await expect(page.getByTestId('routine-group-toggle')).toHaveCount(7);
   await expect(page.getByTestId('routine-pick')).toHaveCount(0);
   await expect(chest).toHaveAttribute('aria-expanded', 'false');
 
@@ -2706,7 +2706,7 @@ test('シートで開いた部位は、設定タブの種目一覧にも記録�
 
   await openSettingsSection(page, 'exercises');
   const toggles = page.getByTestId('group-toggle');
-  await expect(toggles).toHaveCount(6);
+  await expect(toggles).toHaveCount(7);
   for (let i = 0; i < 6; i++) {
     await expect(toggles.nth(i)).toHaveAttribute('aria-expanded', 'false');
   }
@@ -3088,14 +3088,14 @@ test('★ 設定タブの入口は節の一覧で、中身は入るまで出な�
   await expect(page.getByTestId('settings-add-group')).toHaveCount(0);
   await expect(page.getByTestId('settings-add-routine')).toHaveCount(0);
   // 入る前に件数が読める（入って初めて空だと分かる、を避ける）
-  await expect(page.getByTestId('settings-row-exercises')).toContainText('28');
+  await expect(page.getByTestId('settings-row-exercises')).toContainText('34');
   await expect(page.getByTestId('settings-row-routines')).toContainText('0');
 
   // 節へ入ると h1 がその節名になる（h1 は常に 1 つ）
   await page.getByTestId('settings-row-exercises').click();
   await expect(page.locator('main h1')).toHaveCount(1);
   await expect(page.locator('main h1')).toHaveText('種目');
-  await expect(page.getByTestId('group-item')).toHaveCount(6);
+  await expect(page.getByTestId('group-item')).toHaveCount(7);
   await expect(page.getByTestId('settings-rows')).toHaveCount(0);
 
   // 「‹」でトップへ戻る
@@ -3107,12 +3107,12 @@ test('★ 設定タブの入口は節の一覧で、中身は入るまで出な�
 test('開いていた節はタブを往復しても戻らない', async ({ page }) => {
   // ★ OpenGroupCtx と同じ理由。往復のたびにトップへ戻されると、入り直す手数が毎回要る
   await openSettingsSection(page, 'exercises');
-  await expect(page.getByTestId('group-item')).toHaveCount(6);
+  await expect(page.getByTestId('group-item')).toHaveCount(7);
 
   await blurActive(page);
   await page.getByTestId('tab-record').click();
   await page.getByTestId('tab-settings').click();
 
   await expect(page.locator('main h1')).toHaveText('種目');
-  await expect(page.getByTestId('group-item')).toHaveCount(6);
+  await expect(page.getByTestId('group-item')).toHaveCount(7);
 });

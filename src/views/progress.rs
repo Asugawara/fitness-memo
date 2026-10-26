@@ -10,8 +10,8 @@ use crate::storage;
 
 use super::chart::Chart;
 use super::{
-    cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, grp_name, t, use_dates, use_db, use_drops,
-    use_weight_lines,
+    cur_lang, ex_name, fmt_date, fmt_metric, fmt_set, fmt_value, grp_name, t, use_dates, use_db,
+    use_drops, use_weight_lines,
 };
 use crate::i18n::Lang;
 
@@ -177,12 +177,14 @@ fn earliest_session(d: &Db) -> Option<NaiveDate> {
 }
 
 /// "+120 (+12%)" / "-80 (-8%)" / "±0" / "—"
-fn fmt_delta(last: Option<f64>, prev: Option<f64>) -> String {
+fn fmt_delta(last: Option<f64>, prev: Option<f64>, unit: &str) -> String {
     let (Some(last), Some(prev)) = (last, prev) else {
         return "—".to_string();
     };
     let diff = last - prev;
-    if diff.abs() < 0.5 {
+    // 有酸素の分・km は小数 1 桁なので、整数の指標より細かい差まで見る
+    let fine = fmt_value(1.5, unit) != fmt_metric(1.5);
+    if diff.abs() < if fine { 0.05 } else { 0.5 } {
         return "±0".to_string();
     }
     let sign = if diff > 0.0 { "+" } else { "-" };
@@ -191,7 +193,7 @@ fn fmt_delta(last: Option<f64>, prev: Option<f64>) -> String {
     } else {
         String::new()
     };
-    format!("{sign}{}{pct}", fmt_metric(diff.abs()))
+    format!("{sign}{}{pct}", fmt_value(diff.abs(), unit))
 }
 
 #[component]
@@ -222,7 +224,7 @@ pub fn Progress() -> impl IntoView {
         restored
     }));
     let period = RwSignal::new(Period::M3);
-    let metric = RwSignal::new(Metric::default());
+    let metric_pref = RwSignal::new(Metric::default());
     // ラベルの絞り込み（adr/ux/label-colour-on-the-progress-dots.md）。
     //
     // ★ **保存しない**（`UiState` に足さない）。指標・期間と同じ「今の見方」で、
@@ -304,6 +306,11 @@ pub fn Progress() -> impl IntoView {
             Body::NoPick
         }
     });
+
+    // 有酸素を見ているか。`pick` と `db` の両方に追随する
+    let is_cardio = Memo::new(move |_| db.with(|d| pick.get().is_cardio(d)));
+    // ★ 実際に使う指標。好み（`metric_pref`）は対象が変わっても書き換えない
+    let metric = Memo::new(move |_| metric_pref.get().for_target(is_cardio.get()));
 
     // ★ 単位は選んだ指標だけで決まる（対象種目では決まらない）。
     //   対象を切り替えても軸の意味が変わらないのが、旧 Kind 方式との違い
@@ -447,7 +454,7 @@ pub fn Progress() -> impl IntoView {
             let (from, to) = bounds(period, today, earliest_session(d));
             let unit = m.unit(cur_lang());
             let show = |v: f64| {
-                let n = fmt_metric(v);
+                let n = fmt_value(v, unit);
                 if unit.is_empty() {
                     n
                 } else {
@@ -528,7 +535,7 @@ pub fn Progress() -> impl IntoView {
                 class="seg-btn"
                 class:active=move || metric.get() == m
                 data-testid="metric-btn"
-                on:click=move |_| metric.set(m)
+                on:click=move |_| metric_pref.set(m)
             >
                 {label}
             </button>
@@ -606,7 +613,7 @@ pub fn Progress() -> impl IntoView {
                         <dd data-testid="stat-delta">
                             {move || {
                                 let (last, prev, _, _) = stats.get();
-                                fmt_delta(last, prev)
+                                fmt_delta(last, prev, &unit.get())
                             }}
                         </dd>
                     </div>
@@ -617,7 +624,7 @@ pub fn Progress() -> impl IntoView {
                                 let (_, _, best, _) = stats.get();
                                 best.map_or_else(
                                     || "—".to_string(),
-                                    |v| format!("{} {}", fmt_metric(v), unit.get()),
+                                    |v| format!("{} {}", fmt_value(v, &unit.get()), unit.get()),
                                 )
                             }}
                         </dd>
@@ -629,7 +636,7 @@ pub fn Progress() -> impl IntoView {
                                 let (_, _, _, avg) = stats.get();
                                 avg.map_or_else(
                                     || "—".to_string(),
-                                    |v| format!("{} {}", fmt_metric(v), unit.get()),
+                                    |v| format!("{} {}", fmt_value(v, &unit.get()), unit.get()),
                                 )
                             }}
                         </dd>
@@ -901,10 +908,19 @@ pub fn Progress() -> impl IntoView {
                 // ★ 指標は種目の属性ではなく画面の表示設定なので、対象と並べてここに置く。
                 //   単位もこの選択だけで決まる（種目を切り替えても軸の意味が変わらない）
                 <div class="segmented" role="group" aria-label=t.progress.pick_metric data-testid="metric-select">
-                    {Metric::choices(cur_lang())
-                        .into_iter()
-                        .map(|(m, label)| metric_button(m, label))
-                        .collect::<Vec<_>>()}
+                    {move || {
+                        if is_cardio.get() {
+                            Metric::cardio_choices(cur_lang())
+                                .into_iter()
+                                .map(|(m, label)| metric_button(m, label))
+                                .collect::<Vec<_>>()
+                        } else {
+                            Metric::choices(cur_lang())
+                                .into_iter()
+                                .map(|(m, label)| metric_button(m, label))
+                                .collect::<Vec<_>>()
+                        }
+                    }}
                 </div>
 
                 <div class="segmented" role="group" aria-label=t.progress.pick_period data-testid="period-select">

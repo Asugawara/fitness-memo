@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-08
 - **カテゴリ**: ux
-- **関連**: [キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md), [「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md), [数値入力に `type="number"` を使わない](text-input-not-number.md)
+- **関連**: [キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md), [「前回をコピー」はセットが空のときだけ出す](copy-button-only-when-empty.md), [数値入力に `type="number"` を使わない](text-input-not-number.md), [タップで数値を空にし、触っている欄の真上に ± ボタンを浮かせる](tap-clears-the-number-and-steps-above-the-field.md)（この ADR の摩擦を直した後継）
 
 ## 背景
 

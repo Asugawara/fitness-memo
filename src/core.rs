@@ -9,10 +9,11 @@ use chrono::{Datelike, NaiveDate, TimeDelta};
 
 use crate::i18n::{Lang, ReleaseNote};
 use crate::model::{
-    Db, DropStage, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, Label, LabelId,
-    MAX_DROPS, MAX_INTERVAL_SEC, MAX_LABEL_LEN, MAX_LABELS, MAX_PIN_LEN, MAX_PINS, Routine,
-    RoutineId, SCHEMA, Session, SetEntry,
+    Cardio, Db, DropStage, Exercise, ExerciseId, ExerciseLog, Group, GroupId, IdGen, Label,
+    LabelId, MAX_DROPS, MAX_INTERVAL_SEC, MAX_LABEL_LEN, MAX_LABELS, MAX_PIN_LEN, MAX_PINS,
+    Routine, RoutineId, SCHEMA, Session, SetEntry,
 };
+use crate::presets::CardioField;
 
 /// `Db::sessions` のキー書式。ゼロ埋め ISO なので辞書順 = 時系列順になる。
 pub const DATE_FMT: &str = "%Y-%m-%d";
@@ -43,6 +44,10 @@ pub enum Metric {
     Sets,
     /// Σ回数
     Reps,
+    /// 有酸素: Σ時間（分）。有酸素の種目 / 部位を選んだときだけ出る
+    Time,
+    /// 有酸素: Σ距離（km）。入力した距離が無い区間は 速度 × 時間 で補う
+    Distance,
 }
 
 impl Metric {
@@ -59,6 +64,31 @@ impl Metric {
         ]
     }
 
+    /// 推移タブで**有酸素**を選んだときの 2 択。筋トレの [`Metric::choices`] の代わりに出す。
+    pub fn cardio_choices(lang: Lang) -> [(Metric, &'static str); 2] {
+        let c = &lang.strings().core;
+        [
+            (Metric::Time, c.metric_time),
+            (Metric::Distance, c.metric_distance),
+        ]
+    }
+
+    /// 対象に合う指標へ寄せる。**有酸素の対象に筋トレの指標は無い**（逆も同じ）ので、
+    /// 選んだ指標がその対象の 2 択に無ければ先頭（有酸素は時間、筋トレはボリューム）。
+    /// 好みの指標は保存しているので、対象を戻せばそのまま戻る。
+    pub fn for_target(self, cardio: bool) -> Metric {
+        match (cardio, self.is_cardio()) {
+            (true, false) => Metric::Time,
+            (false, true) => Metric::Volume,
+            _ => self,
+        }
+    }
+
+    /// その指標が有酸素用か。
+    pub fn is_cardio(self) -> bool {
+        matches!(self, Metric::Time | Metric::Distance)
+    }
+
     /// 表示に添える単位。ボリュームは重量と回数の合成量なので単位を持たない。
     pub fn unit(self, lang: Lang) -> &'static str {
         let c = &lang.strings().core;
@@ -66,6 +96,8 @@ impl Metric {
             Metric::Volume => "",
             Metric::Sets => c.unit_sets,
             Metric::Reps => c.unit_reps,
+            Metric::Time => c.unit_min,
+            Metric::Distance => c.unit_km,
         }
     }
 }
@@ -185,6 +217,8 @@ pub fn log_value_of(m: Metric, l: &ExerciseLog, d: Drops) -> f64 {
                         .sum::<f64>()
             }
             Metric::Sets => 1.0 + counted_drops(s, d).len() as f64,
+            Metric::Time => cardio_sec(s).map_or(0.0, |v| f64::from(v) / 60.0),
+            Metric::Distance => cardio_m(s) / 1000.0,
             Metric::Reps => {
                 f64::from(s.reps)
                     + counted_drops(s, d)
@@ -282,6 +316,209 @@ pub fn parse_interval(s: &str) -> Option<u32> {
     s.trim().parse::<u32>().ok()
 }
 
+// ── 有酸素（区間カード）──────────────────────────────────────────────────────
+//
+// 有酸素の 1 区間は `SetEntry { weight: 0, reps: 0, cardio: Some(..) }`。保存単位は
+// 秒とメートルに固定し、分・km への換算はこの節の関数だけが持つ（画面と TSV が同じ式を通る）。
+
+/// 1 区間の時間の上限（秒）。**取り込みの門番**（[`MAX_INTERVAL_SEC`] と同じ立場）。
+/// 24 時間。`u32::MAX` 秒が入ると、合計行がカードの幅を壊す。
+pub const MAX_CARDIO_SEC: u32 = 86_400;
+
+/// 1 区間の距離の上限（メートル）。1000 km。
+pub const MAX_CARDIO_M: u32 = 1_000_000;
+
+/// 速度（km/h）・傾斜（%）・負荷レベルの上限。
+pub const MAX_CARDIO_RATE: f32 = 999.0;
+
+/// 有酸素の区間か。**月の「セット」や 「+ セット」の判定はここを通す。**
+pub fn is_cardio_set(s: &SetEntry) -> bool {
+    s.cardio.is_some()
+}
+
+fn cardio_sec(s: &SetEntry) -> Option<u32> {
+    s.cardio.as_ref().and_then(|c| c.sec)
+}
+
+/// 区間の距離（メートル）。**入力した距離を優先**し、無ければ 速度 × 時間 で補う
+/// （トレッドミルは距離を打たない）。どちらも無ければ 0。
+pub fn cardio_m(s: &SetEntry) -> f64 {
+    let Some(c) = &s.cardio else {
+        return 0.0;
+    };
+    match (c.m, c.kmh, c.sec) {
+        (Some(m), _, _) => f64::from(m),
+        (None, Some(kmh), Some(sec)) => f64::from(kmh) * f64::from(sec) / 3.6,
+        _ => 0.0,
+    }
+}
+
+/// 入力欄の分 → 秒。`7.5` = 450 秒。**空欄・0・負・読めない値は `None`。**
+///
+/// ★ 上限で丸める（[`clean_cardio`] と同じ式）。画面から入る値と取り込みで入る値の規則を
+/// 2 本に割らない。
+pub fn parse_minutes(s: &str) -> Option<u32> {
+    let v = s.trim().replace(',', ".").parse::<f64>().ok()?;
+    if !v.is_finite() || v <= 0.0 {
+        return None;
+    }
+    Some(((v * 60.0).round() as u32).min(MAX_CARDIO_SEC))
+}
+
+/// 秒 → 入力欄の分。`450` → `"7.5"`、`1800` → `"30"`。小数 2 桁で止める。
+pub fn fmt_minutes(sec: u32) -> String {
+    trim_decimal(f64::from(sec) / 60.0, 2)
+}
+
+/// 入力欄の km → メートル。空欄・0・負・読めない値は `None`。
+pub fn parse_km(s: &str) -> Option<u32> {
+    parse_scaled(s, 1000.0)
+}
+
+/// 入力欄の m → メートル。
+pub fn parse_meters(s: &str) -> Option<u32> {
+    parse_scaled(s, 1.0)
+}
+
+fn parse_scaled(s: &str, scale: f64) -> Option<u32> {
+    let v = s.trim().replace(',', ".").parse::<f64>().ok()?;
+    if !v.is_finite() || v <= 0.0 {
+        return None;
+    }
+    Some(((v * scale).round() as u32).min(MAX_CARDIO_M))
+}
+
+/// メートル → 入力欄の km。`2400` → `"2.4"`。
+pub fn fmt_km(m: u32) -> String {
+    trim_decimal(f64::from(m) / 1000.0, 3)
+}
+
+/// 入力欄の速度 / 傾斜 / レベル。**空欄は `None`、`0` は `Some(0.0)`**（傾斜 0% は正当な値）。
+pub fn parse_rate(s: &str) -> Option<f32> {
+    let v = s.trim().replace(',', ".").parse::<f32>().ok()?;
+    (v.is_finite() && v >= 0.0).then_some(v.min(MAX_CARDIO_RATE))
+}
+
+/// `2.50` → `"2.5"`、`3.0` → `"3"`。
+fn trim_decimal(v: f64, places: usize) -> String {
+    let s = format!("{v:.places$}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// 区間の欄の文字列 → 保存する区間。**画面の入力欄と保存の唯一の橋。**
+///
+/// `fields` に出ている欄だけを `texts`（同じ並び）から読み、**出ていない欄は `base` の値を
+/// そのまま残す**（TSV で入った値を、画面に出ない欄だからと黙って落とさない）。
+/// 全欄が空なら `None`（保存しない行）。
+pub fn cardio_from_texts(
+    fields: &[CardioField],
+    texts: &[String],
+    base: &Cardio,
+) -> Option<Cardio> {
+    let mut c = base.clone();
+    for (f, text) in fields.iter().zip(texts) {
+        match f {
+            CardioField::Min => c.sec = parse_minutes(text),
+            CardioField::Km => c.m = parse_km(text),
+            CardioField::Meters => c.m = parse_meters(text),
+            CardioField::Kmh => c.kmh = parse_rate(text),
+            CardioField::Incline => c.incline = parse_rate(text),
+            CardioField::Level => c.level = parse_rate(text),
+        }
+    }
+    let c = clean_cardio(c);
+    (!c.is_blank()).then_some(c)
+}
+
+/// 保存された区間 → 各欄の文字列（[`cardio_from_texts`] の逆）。足りない欄は空。
+pub fn cardio_to_texts(fields: &[CardioField], c: &Cardio) -> [String; 3] {
+    let mut out: [String; 3] = Default::default();
+    for (slot, f) in out.iter_mut().zip(fields) {
+        *slot = match f {
+            CardioField::Min => c.sec.map(fmt_minutes),
+            CardioField::Km => c.m.map(fmt_km),
+            CardioField::Meters => c.m.map(|m| m.to_string()),
+            CardioField::Kmh => c.kmh.map(fmt_weight),
+            CardioField::Incline => c.incline.map(fmt_weight),
+            CardioField::Level => c.level.map(fmt_weight),
+        }
+        .unwrap_or_default();
+    }
+    out
+}
+
+/// 区間の取り込み値を整える。**画面・JSON・TSV が共有する門番。**
+///
+/// 負・非有限の値は欄ごと落とし、上限を超えた値は上限に丸める
+/// （[`MAX_INTERVAL_SEC`] の前例）。`f32` で表せない値が残ると `"kmh":null` が保存され、
+/// 次回起動の `Db` のパースが丸ごと落ちる（[`drop_unrepresentable_weights`] と同じ経路）。
+pub fn clean_cardio(c: Cardio) -> Cardio {
+    let rate = |v: Option<f32>| {
+        v.filter(|x| x.is_finite() && *x >= 0.0)
+            .map(|x| x.min(MAX_CARDIO_RATE))
+    };
+    Cardio {
+        sec: c.sec.map(|v| v.min(MAX_CARDIO_SEC)),
+        m: c.m.map(|v| v.min(MAX_CARDIO_M)),
+        kmh: rate(c.kmh),
+        incline: rate(c.incline),
+        level: rate(c.level),
+    }
+}
+
+/// 全区間に [`clean_cardio`] を通し、**全欄が空になった区間を落とす**
+/// （「全欄空の行は保存しない」。筋トレの「回数が空なら保存しない」に相当）。
+fn clean_cardio_sets(s: &mut Session) {
+    for log in &mut s.logs {
+        log.sets.retain_mut(|set| match set.cardio.take() {
+            None => true,
+            Some(c) => {
+                let c = clean_cardio(c);
+                if c.is_blank() {
+                    false
+                } else {
+                    set.cardio = Some(c);
+                    true
+                }
+            }
+        });
+    }
+}
+
+/// 有酸素の合計行の数字。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CardioTotal {
+    /// 時間の合計（秒）
+    pub sec: u32,
+    /// 距離の合計（メートル。[`cardio_m`] の規則）
+    pub m: u32,
+    /// 距離のある区間だけで割った、1 km あたり / 500 m あたりの秒数
+    pub pace_sec: Option<u32>,
+}
+
+/// 区間の合計。`per_m` はペースの基準距離（1 km なら 1000、ローイングは 500）。
+pub fn cardio_total(sets: &[SetEntry], per_m: f64) -> CardioTotal {
+    let sec: u32 = sets.iter().filter_map(cardio_sec).sum();
+    let m: f64 = sets.iter().map(cardio_m).sum();
+    // ペースは「距離のある区間の時間」÷「その距離」。距離の無い区間を分子に入れると速く見える
+    let (psec, pm) = sets
+        .iter()
+        .filter(|s| cardio_m(s) > 0.0)
+        .fold((0u32, 0.0f64), |(a, b), s| {
+            (a + cardio_sec(s).unwrap_or(0), b + cardio_m(s))
+        });
+    CardioTotal {
+        sec,
+        m: m.round() as u32,
+        pace_sec: (psec > 0 && pm > 0.0).then(|| (f64::from(psec) / pm * per_m).round() as u32),
+    }
+}
+
+/// 秒 → `m:ss`。ペースの表示用。
+pub fn fmt_pace(sec: u32) -> String {
+    format!("{}:{:02}", sec / 60, sec % 60)
+}
+
 // ── メモ（adr/data-model/notes-on-logs-and-sets.md）──────────────────────────
 
 /// 重量と回数だけを見たセット列の一致。**メモを無視する。**
@@ -297,7 +534,11 @@ fn same_sets(a: &[SetEntry], b: &[SetEntry]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same_set(x, y))
 }
 
-/// セット 1 本の同一性。**重量と回数だけ**を見る。
+/// セット 1 本の同一性。**重量と回数と有酸素の区間**を見る。メモ・段・時刻は見ない。
+///
+/// ★ `cardio` は**入れる**（メモ・段・時刻と逆）。有酸素の行は `weight = 0` / `reps = 0` で、
+/// `cardio` が唯一の中身。入れないと 30 分と 5 分の区間が同じセットになり、
+/// [`merge_db`] で片方が黙って消える。
 ///
 /// ★ [`same_sets`] の doc が言う「必ずここを通す」の実体。要素単位で問う場所
 /// （[`merge_set_notes_unordered`] / [`merge_set_drops_unordered`]）が式を書き直すと、
@@ -307,7 +548,29 @@ fn same_sets(a: &[SetEntry], b: &[SetEntry]) -> bool {
 /// 重量は `to_bits` で比べる。`==` は NaN を不一致にするので、
 /// [`drop_unrepresentable_weights`] が先に走る前提が崩れた瞬間に挙動が分かれる。
 fn same_set(a: &SetEntry, b: &SetEntry) -> bool {
-    a.weight.to_bits() == b.weight.to_bits() && a.reps == b.reps
+    a.weight.to_bits() == b.weight.to_bits() && a.reps == b.reps && cardio_key(a) == cardio_key(b)
+}
+
+/// [`SetEntry::cardio`] の同一性キー。`f32` は `to_bits` で比べる（`same_set` の重量と同じ理由）。
+/// 順序比較にも使う（[`same_sets_unordered`] / [`log_rank`]）ので `Ord` なタプルにする。
+type CardioKey = Option<(
+    Option<u32>,
+    Option<u32>,
+    Option<u32>,
+    Option<u32>,
+    Option<u32>,
+)>;
+
+fn cardio_key(s: &SetEntry) -> CardioKey {
+    s.cardio.as_ref().map(|c| {
+        (
+            c.sec,
+            c.m,
+            c.kmh.map(f32::to_bits),
+            c.incline.map(f32::to_bits),
+            c.level.map(f32::to_bits),
+        )
+    })
 }
 
 /// 並びを無視したセット列の一致。**メモは見ない。**
@@ -324,7 +587,10 @@ fn same_sets_unordered(a: &[SetEntry], b: &[SetEntry]) -> bool {
         return false;
     }
     let key = |s: &[SetEntry]| {
-        let mut v: Vec<(u32, u32)> = s.iter().map(|x| (x.weight.to_bits(), x.reps)).collect();
+        let mut v: Vec<(u32, u32, CardioKey)> = s
+            .iter()
+            .map(|x| (x.weight.to_bits(), x.reps, cardio_key(x)))
+            .collect();
         v.sort_unstable();
         v
     };
@@ -701,6 +967,174 @@ fn round1(v: f32) -> f32 {
     (v * 10.0).round() / 10.0
 }
 
+// ── ± ボタンの幅（adr/ux/tap-clears-the-number-and-steps-above-the-field.md）──────
+//
+// ★ 全体の既定（設定 › ± ボタン）と種目ごとの上書き（`Exercise::weight_steps`）の
+//   両方が、この節の規則を通る。画面と取り込みで規則を割らないため、正規化も
+//   ここに 1 本だけ書く（`clean_interval` と同じ理由）。
+
+/// 1 欄に並べる ± の幅の上限（枠の数）。箱が 375px 幅に収まる 6 個（− 3 + 3）が上限。
+pub const MAX_STEPS: usize = 3;
+
+/// 重量の ± の既定（kg）。**2.5 の両側に 1.25 と 5** — ダンベルとプレートの刻みを両方拾う。
+pub const DEFAULT_WEIGHT_STEPS: [f32; MAX_STEPS] = [1.25, 2.5, 5.0];
+
+/// 回数の ± の既定。1 回ずつ。枠の 2 つ目以降は空。
+pub const DEFAULT_REPS_STEPS: [Option<u32>; MAX_STEPS] = [Some(1), None, None];
+
+/// 重量の幅 1 本の上限（kg）。これを超える刻みは ± として意味が無い。
+const MAX_WEIGHT_STEP: f32 = 50.0;
+
+/// 回数の幅 1 本の上限。プランクの秒など「回数欄を秒にも使う」種目に効く範囲。
+const MAX_REPS_STEP: u32 = 100;
+
+/// 重量の幅 1 本を正規化する。**0 以下・上限超え・非有限は `None`**（枠ごと捨てる）。
+/// 0.01 kg 単位に丸める（入力欄の小数は 2 桁まで）。
+///
+/// ★ 全体の枠と種目の幅の両方がこれを通す。片方だけに上限を書くと、
+///   「画面から打てるのに取り込みで落ちる」が起きる。
+pub fn clean_weight_step(w: f32) -> Option<f32> {
+    if !w.is_finite() || w <= 0.0 || w > MAX_WEIGHT_STEP {
+        return None;
+    }
+    let r = (w * 100.0).round() / 100.0;
+    (r > 0.0).then_some(r)
+}
+
+/// 種目の幅（`Exercise::weight_steps`）の正規化。`normalize_exercises` と
+/// `set_weight_steps` と `merge_db` が共有する。
+///
+/// ★ 落ちた値は詰めて、先頭 [`MAX_STEPS`] 本だけ残す。並べ替えない
+///   （箱に並べるときに [`active_steps`] が昇順にする）。
+pub fn clean_weight_steps(steps: Vec<f32>) -> Vec<f32> {
+    steps
+        .into_iter()
+        .filter_map(clean_weight_step)
+        .take(MAX_STEPS)
+        .collect()
+}
+
+/// 保存文字列 → 重量の 3 枠。**`None` は既定（[`DEFAULT_WEIGHT_STEPS`]）。**
+///
+/// 保存は `"1.25,,5"` のように**枠の位置を保つ**（空枠は空欄）。だから空欄は「既定に
+/// 戻す」ではなく「その枠は出さない」になる。`""` は 3 枠とも空。
+pub fn weight_step_slots(saved: Option<&str>) -> [Option<f32>; MAX_STEPS] {
+    match saved {
+        None => DEFAULT_WEIGHT_STEPS.map(Some),
+        Some(s) => step_slots(s, parse_weight_step),
+    }
+}
+
+/// 保存文字列 → 回数の 3 枠。`None` は既定（[`DEFAULT_REPS_STEPS`]）。
+pub fn reps_step_slots(saved: Option<&str>) -> [Option<u32>; MAX_STEPS] {
+    match saved {
+        None => DEFAULT_REPS_STEPS,
+        Some(s) => step_slots(s, parse_reps_step),
+    }
+}
+
+/// 設定の入力欄の重量 → 1 枠。空欄・読めない・範囲外は `None`（その枠は空になる）。
+/// カンマ小数（`2,5`）も読む（[`parse_weight`] と同じ）。
+pub fn parse_weight_step(s: &str) -> Option<f32> {
+    clean_weight_step(parse_weight(s))
+}
+
+/// 設定の入力欄の回数 → 1 枠。1〜100 の整数だけ。
+pub fn parse_reps_step(s: &str) -> Option<u32> {
+    s.trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|r| (1..=MAX_REPS_STEP).contains(r))
+}
+
+/// `"a,b,c"` を 3 枠に割る。足りない枠と読めない枠は `None`（枠の位置は動かさない）。
+fn step_slots<T>(saved: &str, parse: impl Fn(&str) -> Option<T>) -> [Option<T>; MAX_STEPS] {
+    let mut parts = saved.split(',').map(|p| parse(p.trim()));
+    [
+        parts.next().flatten(),
+        parts.next().flatten(),
+        parts.next().flatten(),
+    ]
+}
+
+/// 3 枠を保存文字列にする（[`weight_step_slots`] / [`reps_step_slots`] の逆）。
+pub fn join_step_slots<T: ToString>(slots: &[Option<T>]) -> String {
+    slots
+        .iter()
+        .map(|s| s.as_ref().map(ToString::to_string).unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// 枠のうち値のあるものを、重複を除いて昇順に並べる。**箱に並べるのはこれ。**
+///
+/// ★ 「並べ替えない」と書いた保存順（[`clean_weight_steps`]）と違い、ここでは昇順にする。
+///   箱の見た目は `−大きい順 | 小さい順+` で決まるので、入力の順に依存させない。
+pub fn active_steps<T: Copy + PartialOrd>(slots: &[Option<T>]) -> Vec<T> {
+    let mut out: Vec<T> = Vec::new();
+    for v in slots.iter().flatten() {
+        if !out.contains(v) {
+            out.push(*v);
+        }
+    }
+    out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    out
+}
+
+/// 欄に出す重量の幅。種目に入っていればそれ、3 枠とも空なら全体に従う。
+///
+/// ★ 全体が全部空でも種目の幅は出る（種目だけ `2` と入れた利用者の箱を消さない）。
+///   逆に種目が空で全体も空なら、その欄には ± が出ない。
+pub fn weight_steps_for(ex: Option<&Exercise>, global: &[Option<f32>; MAX_STEPS]) -> Vec<f32> {
+    let own: Vec<Option<f32>> = ex
+        .map(|e| {
+            e.weight_steps
+                .iter()
+                .map(|w| clean_weight_step(*w))
+                .collect()
+        })
+        .unwrap_or_default();
+    let own = active_steps(&own);
+    if own.is_empty() {
+        active_steps(global)
+    } else {
+        own
+    }
+}
+
+/// 重量欄を ± で動かす。**f64 で計算する**（`62.3 + 1.25` を f32 で足すと
+/// `63.550003` になり、入力欄に見苦しい値が出る）。0 未満は 0、0.01 kg に丸める。
+pub fn step_weight(s: &str, delta: f32) -> String {
+    let w = f64::from(parse_weight(s)) + f64::from(delta);
+    let r = (w.max(0.0) * 100.0).round() / 100.0;
+    fmt_weight(r as f32)
+}
+
+/// 回数欄を ± で動かす。空欄は 0 扱い。**1 未満は 1**（0 は「行なし」で、
+/// 押したとたんにセットが黙って消えるため）。
+pub fn step_reps(s: &str, delta: i32) -> String {
+    let r = i64::from(s.trim().parse::<u32>().unwrap_or(0)) + i64::from(delta);
+    r.max(1).to_string()
+}
+
+/// 種目の重量の幅を 3 枠から差し替える（記録タブ・設定の編集シートから呼ぶ）。
+///
+/// ★ 正規化を `views` 側に持たせない理由は [`set_interval`] と同じ。
+pub fn set_weight_steps(db: &mut Db, id: ExerciseId, steps: Vec<f32>) {
+    if let Some(e) = db.exercises.iter_mut().find(|e| e.id == id) {
+        e.weight_steps = clean_weight_steps(steps);
+    }
+}
+
+/// 既存の種目に、取り込み側の重量の幅を足す。**既存が空のときだけ。**
+///
+/// ★ [`fill_interval`] と同じ理由。既存に幅がある（利用者が別端末で決めた）なら上書きしない。
+fn fill_weight_steps(existing: &mut Exercise, incoming: &Exercise) {
+    if existing.weight_steps.is_empty() {
+        existing.weight_steps = clean_weight_steps(incoming.weight_steps.clone());
+    }
+}
+
 /// メインセットの重量から、落とし幅ぶん引いた段の重量。**小数点以下 1 桁。**
 ///
 /// ★ 適用するのは**そのセットの 1 段目だけ**（呼び出し側の責任）。2 段目は落とす元が
@@ -940,6 +1374,8 @@ impl Seed {
                         note,
                         drops,
                         at: _, // 運ばない（adr/ux/copy-carries-the-notes.md 決定 6 / adr/data-model/set-at-typed-today-only.md）
+                        // ★ 運ぶ。有酸素の行はこれが中身 — 運ばないと「前回をコピー」が空の行になる
+                        cardio,
                     } = s;
                     SetEntry {
                         weight: *weight,
@@ -949,6 +1385,7 @@ impl Seed {
                         //   （adr/ux/copy-carries-the-notes.md と同じ規則）
                         drops: drops.clone(),
                         at: None,
+                        cardio: cardio.clone(),
                     }
                 })
                 .collect(),
@@ -1359,6 +1796,16 @@ pub struct Pick {
 }
 
 impl Pick {
+    /// 有酸素を見ているか（部位「有酸素」か、その部位の種目）。指標の 2 択が
+    /// 「時間 / 距離」に切り替わる。
+    pub fn is_cardio(self, db: &Db) -> bool {
+        self.group == Some(crate::presets::CARDIO_GROUP)
+            || self
+                .exercise
+                .and_then(|ex| db.exercise(ex))
+                .is_some_and(|e| e.group_id == crate::presets::CARDIO_GROUP)
+    }
+
     /// 部位か種目のどちらかが選ばれているか。グラフを出すかどうかの判定に使う。
     pub fn is_set(self) -> bool {
         self.group.is_some() || self.exercise.is_some()
@@ -1991,6 +2438,9 @@ fn normalize(db: &mut Db, ids: &mut IdGen) {
         merge_same_day(sessions.entry(date_key(date)).or_default(), session);
     }
     for session in sessions.values_mut() {
+        // ★ 有酸素の区間の門番。`drop_unrepresentable_weights` より先でも後でもよいが、
+        //   全欄空の区間を落とすのは `dedupe_logs`（セットもメモも無いログを刈る）より前
+        clean_cardio_sets(session);
         drop_unrepresentable_weights(session);
         // ★ dedupe_logs より**先**。あちらは空白だけのメモを「ある」と見るので、
         //   先に潰さないと「保存する価値の無いログ」が残る
@@ -2058,6 +2508,7 @@ fn normalize_exercises(db: &mut Db, ids: &mut IdGen) {
         e.pins = clean_pins(std::mem::take(&mut e.pins));
         e.interval_sec = clean_interval(e.interval_sec);
         e.labels = clean_labels(std::mem::take(&mut e.labels), ids);
+        e.weight_steps = clean_weight_steps(std::mem::take(&mut e.weight_steps));
     }
 }
 
@@ -2515,6 +2966,7 @@ fn upgrade_from_sequential(old: legacy::Db, ids: &mut IdGen) -> Db {
                 interval_sec: None,
                 // schema ≤2 にラベルは無い
                 labels: Vec::new(),
+                weight_steps: Vec::new(),
             })
             .collect(),
         // schema ≤2 にトレーニングメニューは存在しない（`legacy::Db` にフィールドが無い）
@@ -2684,7 +3136,7 @@ pub const TSV_MIME: &str = "text/tab-separated-values";
 
 /// 見出し行（日本語）。**この並びと綴りが外部仕様**なので、テストがバイト一致で
 /// 固定している。**1 文字も変えてはいけない** — 過去に書き出したファイルが読めなくなる。
-const TSV_HEADER_JA: [&str; 16] = [
+const TSV_HEADER_JA: [&str; 21] = [
     "日付",
     "部位",
     "種目",
@@ -2722,6 +3174,16 @@ const TSV_HEADER_JA: [&str; 16] = [
     //   `ex_meta_written` に相乗りさせない（させると 2 日目以降が全部落ちる）。
     //   書くのは「そのログの最初の行」だけ（`種目メモ` と同じ「使ったら空にする」）
     "ラベル",
+    // ★ 後から足した 5 列（有酸素の区間）。**位置は末尾**（既存 16 列のインデックスを
+    //   動かさない）。セルは裸の数字で、単位は見出しに入れる（`重量kg` と同じ流儀）。
+    //   `時間` `距離` のようなありふれた綴りにしない — `is_known_header_cell` が
+    //   「うちのファイルか」を見分けるのに使うので、無関係な表が
+    //   「壊れたうちのファイル」に化ける
+    "有酸素秒",
+    "有酸素m",
+    "有酸素km/h",
+    "有酸素傾斜%",
+    "有酸素Lv",
 ];
 
 /// 見出し行（英語）。位置と意味は [`TSV_HEADER_JA`] と 1:1。
@@ -2729,7 +3191,7 @@ const TSV_HEADER_JA: [&str; 16] = [
 /// ★ TSV は版番号を持てないので、**この綴りも足した時点で永久の外部仕様**になる
 /// （adr/storage/tsv-header-follows-the-ui-language.md）。日本語版と同じ強度で
 /// バイト一致テストが固定している。
-const TSV_HEADER_EN: [&str; 16] = [
+const TSV_HEADER_EN: [&str; 21] = [
     "Date",
     "Muscle group",
     "Exercise",
@@ -2749,6 +3211,11 @@ const TSV_HEADER_EN: [&str; 16] = [
     "Pins",
     "Interval sec",
     "Label",
+    "Cardio sec",
+    "Cardio m",
+    "Cardio km/h",
+    "Cardio incline %",
+    "Cardio level",
 ];
 
 /// 書き出しに使う見出し。**UI の言語に従う。**
@@ -2757,7 +3224,7 @@ const TSV_HEADER_EN: [&str; 16] = [
 /// （adr/storage/tsv-export-for-spreadsheets.md）で、読めない言語の列名はその意義を
 /// 失わせる。取り込み側は [`is_known_header_cell`] のとおり日英どちらも受けるので、
 /// 言語を切り替えても過去のファイルは読める。
-pub fn tsv_header_row(lang: Lang) -> [&'static str; 16] {
+pub fn tsv_header_row(lang: Lang) -> [&'static str; 21] {
     match lang {
         Lang::Ja => TSV_HEADER_JA,
         Lang::En => TSV_HEADER_EN,
@@ -2786,13 +3253,33 @@ fn flatten_cell(s: &str) -> String {
 
 /// 1 行書く。★ 引数 11 個の関数を作らないための入れ物（`clippy::too_many_arguments`）。
 fn push_row(out: &mut String, cells: [&str; 16]) {
-    for (i, cell) in cells.iter().enumerate() {
+    push_row_with(out, &cells, &[""; 5]);
+}
+
+/// 有酸素の 5 列を末尾に付けて 1 行書く。**有酸素でない行は `push_row` が空の 5 列を足す**
+/// ので、既存の行を書く場所は 16 セルのまま触らない。
+fn push_row_with(out: &mut String, cells: &[&str], cardio: &[&str]) {
+    for (i, cell) in cells.iter().chain(cardio.iter()).enumerate() {
         if i > 0 {
             out.push('\t');
         }
         out.push_str(&flatten_cell(cell));
     }
     out.push('\n');
+}
+
+/// 有酸素の 5 列のセル。**有酸素でない区間は全部空。** 順は [`TSV_HEADER_JA`] の末尾 5 列。
+fn cardio_cells(s: &SetEntry) -> [String; 5] {
+    let Some(c) = &s.cardio else {
+        return Default::default();
+    };
+    [
+        c.sec.map(|v| v.to_string()).unwrap_or_default(),
+        c.m.map(|v| v.to_string()).unwrap_or_default(),
+        c.kmh.map(fmt_weight).unwrap_or_default(),
+        c.incline.map(fmt_weight).unwrap_or_default(),
+        c.level.map(fmt_weight).unwrap_or_default(),
+    ]
 }
 
 /// `at`（epoch ms）を、その行の日付と**同じ暦日のときだけ** "HH:MM" にする。
@@ -2832,7 +3319,7 @@ fn tsv_time(at: Option<i64>, date: NaiveDate, tz: chrono::FixedOffset) -> String
 ///   （新規インストールに必ず同じ固定 ID で居るので、書かなくても失われない）
 pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
     let mut out = String::new();
-    push_row(&mut out, tsv_header_row(lang));
+    push_row_with(&mut out, &tsv_header_row(lang), &[]);
 
     // 記録とメニューに出てきた種目。末尾のマスタ行から除くのに使う
     // （どちらの行も部位と種目名を書くので、マスタ行を重ねる必要が無い）
@@ -2936,11 +3423,18 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                 } else {
                     String::new()
                 };
-                let reps = set.reps.to_string();
+                // ★ 有酸素の区間は回数を空にする（`0` を書くと旧版が回数 0 の行として
+                //   読みにくる。空なら「メモだけの行」として無害に読み飛ばす）
+                let reps = if set.cardio.is_some() {
+                    String::new()
+                } else {
+                    set.reps.to_string()
+                };
                 let drops = drops_cell(set);
-                push_row(
+                let cardio_cells = cardio_cells(set);
+                push_row_with(
                     &mut out,
-                    [
+                    &[
                         key,
                         group,
                         ex_name,
@@ -2959,6 +3453,7 @@ pub fn export_tsv(db: &Db, tz: chrono::FixedOffset, lang: Lang) -> String {
                         interval_cell,
                         label_cell,
                     ],
+                    &cardio_cells.each_ref().map(String::as_str),
                 );
                 day_weight = "";
                 day_note = "";
@@ -3261,6 +3756,11 @@ struct TsvCols {
     pins: Option<usize>,
     interval: Option<usize>,
     label: Option<usize>,
+    cardio_sec: Option<usize>,
+    cardio_m: Option<usize>,
+    cardio_kmh: Option<usize>,
+    cardio_incline: Option<usize>,
+    cardio_level: Option<usize>,
 }
 
 /// 見出し行 → 列の対応。知らない列は無視する（形式の進化規則 2）。
@@ -3293,6 +3793,11 @@ fn tsv_header(line: &str) -> Option<TsvCols> {
             "メニュー" | "Routine" => &mut cols.routine,
             "ピン" | "Pins" => &mut cols.pins,
             "ラベル" | "Label" => &mut cols.label,
+            "有酸素秒" | "Cardio sec" => &mut cols.cardio_sec,
+            "有酸素m" | "Cardio m" => &mut cols.cardio_m,
+            "有酸素km/h" | "Cardio km/h" => &mut cols.cardio_kmh,
+            "有酸素傾斜%" | "Cardio incline %" => &mut cols.cardio_incline,
+            "有酸素Lv" | "Cardio level" => &mut cols.cardio_level,
             "インターバル秒" | "インターバル" | "Interval sec" | "Interval" => {
                 &mut cols.interval
             }
@@ -3618,7 +4123,38 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
 
         // 回数が空の行はセットを作らない（メモだけの行）。空でないのに読めないなら数える
         let reps_cell = at(cols.reps);
-        if let Some(reps) = parse_cell_count(reps_cell) {
+        // ★ 有酸素の列が 1 つでも読めた行は区間。回数は空でよい（書き出しが空にする）。
+        //   読めない値だけの行はセットを作らず、下の `unread` で数える
+        let cardio = Cardio {
+            sec: parse_cell_count(at(cols.cardio_sec)),
+            m: parse_cell_count(at(cols.cardio_m)),
+            kmh: parse_rate(at(cols.cardio_kmh)),
+            incline: parse_rate(at(cols.cardio_incline)),
+            level: parse_rate(at(cols.cardio_level)),
+        };
+        let cardio_filled = [
+            cols.cardio_sec,
+            cols.cardio_m,
+            cols.cardio_kmh,
+            cols.cardio_incline,
+            cols.cardio_level,
+        ]
+        .into_iter()
+        .any(|c| !at(c).is_empty());
+        if cardio_filled && cardio.is_blank() {
+            unread += 1;
+        } else if !cardio.is_blank() {
+            let no = parse_cell_count(at(cols.set_no)).unwrap_or(u32::MAX);
+            staged.entry((key, ex_id)).or_default().push((
+                no,
+                row,
+                SetEntry {
+                    note: at(cols.set_note).to_string(),
+                    cardio: Some(cardio),
+                    ..SetEntry::default()
+                },
+            ));
+        } else if let Some(reps) = parse_cell_count(reps_cell) {
             let no = parse_cell_count(at(cols.set_no)).unwrap_or(u32::MAX);
             staged.entry((key, ex_id)).or_default().push((
                 no,
@@ -3629,6 +4165,7 @@ fn parse_tsv(raw: &str, ids: &mut IdGen, mine: &Db) -> Result<Db, ImportError> {
                     note: at(cols.set_note).to_string(),
                     drops: parse_drops_cell(at(cols.drop)),
                     at: None, // 取り込みは時刻を持たない
+                    cardio: None,
                 },
             ));
         } else if !reps_cell.is_empty() {
@@ -3923,6 +4460,7 @@ fn resolve_exercise(
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         }
     };
 
@@ -4072,7 +4610,7 @@ impl MergeReport {
 /// セット数だけで比べると `[(60,10),(60,8)]` と `[(62,10),(60,8)]` の勝者が決まらず、
 /// `merge(a, b)` と `merge(b, a)` で結果が変わる（可換でなくなる）。総ボリュームと
 /// セット列の辞書順まで見て、必ず一方に決まるようにする。
-type LogRank = (usize, u64, Vec<(u32, u32)>);
+type LogRank = (usize, u64, Vec<(u32, u32, CardioKey)>);
 
 /// 別名写像で同じ種目に落ちたログを 1 本にまとめる。**強いほうを残す。**
 ///
@@ -4112,7 +4650,7 @@ fn log_rank(l: &ExerciseLog) -> LogRank {
         // 重量は非負なので `to_bits` の順序が値の順序と一致する
         l.sets
             .iter()
-            .map(|s| (s.weight.to_bits(), s.reps))
+            .map(|s| (s.weight.to_bits(), s.reps, cardio_key(s)))
             .collect(),
     )
 }
@@ -4169,6 +4707,7 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             }
             fill_pins(existing, &e);
             fill_interval(existing, &e);
+            fill_weight_steps(existing, &e);
             let (added, dropped) = merge_labels(existing, &e, &mut label_alias);
             report.labels_added += added;
             report.labels_dropped += dropped;
@@ -4179,6 +4718,7 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             exercise_alias.insert(e.id, existing.id);
             fill_pins(existing, &e);
             fill_interval(existing, &e);
+            fill_weight_steps(existing, &e);
             // ★ **同名寄せの枝でも呼ぶ。** 忘れると名前で寄せた種目のラベルだけが
             //   落ちる（一番踏みやすいミス）。3 つ目の新規追加枝は `..e` なので
             //   `labels` が自動で乗る
@@ -4494,6 +5034,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         }
     }
 
@@ -7846,7 +8387,7 @@ mod tests {
         );
         assert_eq!(
             tsv.lines().next().expect("見出し行"),
-            "日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル"
+            "日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル\t有酸素秒\t有酸素m\t有酸素km/h\t有酸素傾斜%\t有酸素Lv"
         );
     }
 
@@ -7861,7 +8402,7 @@ mod tests {
         );
         assert_eq!(
             tsv.lines().next().expect("見出し行"),
-            "Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tDrop set\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec\tLabel"
+            "Date\tMuscle group\tExercise\tSet\tWeight kg\tReps\tDrop set\tBody weight kg\tSet note\tExercise note\tDay note\tTime\tRoutine\tPins\tInterval sec\tLabel\tCardio sec\tCardio m\tCardio km/h\tCardio incline %\tCardio level"
         );
     }
 
@@ -8334,6 +8875,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
@@ -8369,7 +8911,7 @@ mod tests {
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         assert_eq!(tsv.lines().count(), 2, "改行でレコードが割れている: {tsv}");
         let r = rows(&tsv);
-        assert_eq!(r[1].len(), 16, "タブで列がずれている");
+        assert_eq!(r[1].len(), 21, "タブで列がずれている");
         assert_eq!(r[1][col(&r, "セットメモ")], "前半 きつい");
         assert_eq!(r[1][col(&r, "種目メモ")], "1 本目 2 本目");
     }
@@ -8750,6 +9292,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         let tsv = export_tsv(&mine, jst(), crate::i18n::Lang::Ja);
@@ -8802,6 +9345,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\n\
@@ -8849,6 +9393,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         let tsv =
@@ -8888,6 +9433,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         let chest_bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         let set = |weight, reps| SetEntry {
@@ -9472,6 +10018,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         let raw = export_json(&db);
@@ -9526,7 +10073,7 @@ mod tests {
         );
 
         let s = summarize(&db);
-        assert_eq!(s.exercises, 28);
+        assert_eq!(s.exercises, 34);
         assert_eq!(s.days, 1);
         assert_eq!(s.sets, 2);
         assert_eq!(s.first, Some(d(2026, 8, 1)));
@@ -9628,6 +10175,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         db.sessions.insert(
             date_key(d(2026, 8, 1)),
@@ -9687,6 +10235,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         db.sessions.insert(
             date_key(d(2026, 8, 2)),
@@ -9765,13 +10314,13 @@ mod tests {
         let report = merge_db(&mut a, device_b());
 
         assert_eq!(report.groups_added, 0, "プリセットの部位が二重に入った");
-        // 増えてよいのは B 側のユーザー種目 1 件だけ。プリセット 28 件は増えない
+        // 増えてよいのは B 側のユーザー種目 1 件だけ。プリセット 34 件は増えない
         assert_eq!(report.exercises_added, 1, "プリセットの種目が二重に入った");
         assert_eq!(a.groups.len(), groups_before);
         assert_eq!(a.exercises.len(), exercises_before + 1);
         assert_eq!(
             a.exercises.iter().filter(|e| e.id.is_reserved()).count(),
-            28,
+            34,
             "プリセット由来の種目が増減した"
         );
         // 改名は報告されるが、取り込み先の名前を残す
@@ -9905,6 +10454,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         theirs.sessions.insert(
             date_key(d(2026, 9, 9)),
@@ -10040,6 +10590,7 @@ mod tests {
                 pins: Vec::new(),
                 interval_sec: None,
                 labels: Vec::new(),
+                weight_steps: Vec::new(),
             });
         }
         theirs.routines.push(Routine {
@@ -10074,6 +10625,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         theirs.routines.push(Routine {
             id: r(1),
@@ -10263,6 +10815,7 @@ mod tests {
                                     })
                                     .collect(),
                                 at: None,
+                                cardio: None,
                             })
                             .collect(),
                         label: None,
@@ -10756,6 +11309,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         // B は同名の種目を**別の ID** で持ち、A に無い日に記録している
@@ -10769,6 +11323,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         b.sessions.insert(
             date_key(d(2026, 9, 9)),
@@ -10941,6 +11496,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         theirs.exercises.push(Exercise {
@@ -10952,6 +11508,7 @@ mod tests {
             pins: vec!["7".into()],
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         merge_db(&mut mine, theirs);
@@ -11092,6 +11649,7 @@ mod tests {
             pins: vec!["4".into(), "12".into()],
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 
@@ -11191,6 +11749,143 @@ mod tests {
         );
     }
 
+    // ── ± ボタンの幅（adr/ux/tap-clears-the-number-and-steps-above-the-field.md）──
+
+    #[test]
+    fn weight_step_slots_default_and_keep_the_position_of_each_slot() {
+        assert_eq!(
+            weight_step_slots(None),
+            [Some(1.25), Some(2.5), Some(5.0)],
+            "未設定は既定"
+        );
+        assert_eq!(weight_step_slots(Some("")), [None, None, None], "全部空");
+        assert_eq!(
+            weight_step_slots(Some("5,abc,1.25")),
+            [Some(5.0), None, Some(1.25)],
+            "読めない枠は空のまま。後ろの枠の位置は動かさない"
+        );
+        assert_eq!(
+            weight_step_slots(Some("1.25,,5")),
+            [Some(1.25), None, Some(5.0)]
+        );
+    }
+
+    #[test]
+    fn reps_step_slots_accept_only_whole_numbers_from_1_to_100() {
+        assert_eq!(reps_step_slots(None), [Some(1), None, None]);
+        assert_eq!(reps_step_slots(Some("5,0,101")), [Some(5), None, None]);
+        assert_eq!(reps_step_slots(Some("2.5,10,")), [None, Some(10), None]);
+    }
+
+    #[test]
+    fn active_steps_drops_empty_and_duplicate_slots_and_sorts_ascending() {
+        assert_eq!(
+            active_steps(&[Some(5.0), None, Some(1.25)]),
+            vec![1.25, 5.0]
+        );
+        assert_eq!(
+            active_steps(&[Some(2.5), Some(2.5), Some(1.0)]),
+            vec![1.0, 2.5]
+        );
+        assert!(active_steps::<f32>(&[None, None, None]).is_empty());
+    }
+
+    #[test]
+    fn step_weight_adds_and_rounds_without_float_noise() {
+        assert_eq!(step_weight("60", 1.25), "61.25");
+        // f32 で足すと 63.550003 になる。f64 で足して 2 桁に丸める
+        assert_eq!(step_weight("62.3", 1.25), "63.55");
+        assert_eq!(step_weight("0.5", -1.25), "0", "0 未満は 0");
+        assert_eq!(step_weight("", 2.5), "2.5", "空欄は 0 扱い");
+        assert_eq!(step_weight("6,5", 1.25), "7.75", "カンマ小数も読む");
+    }
+
+    #[test]
+    fn step_reps_never_goes_below_one() {
+        assert_eq!(step_reps("1", -1), "1", "0 にすると行が黙って消える");
+        assert_eq!(step_reps("", 1), "1", "空欄は 0 扱い");
+        assert_eq!(step_reps("10", 5), "15");
+        assert_eq!(step_reps("3", -5), "1");
+    }
+
+    #[test]
+    fn weight_steps_for_prefers_the_exercise_then_the_global_default() {
+        let mut ex = crate::presets::seeded_db(crate::i18n::Lang::Ja)
+            .exercises
+            .remove(0);
+        let global = [Some(1.25), Some(2.5), Some(5.0)];
+
+        ex.weight_steps = vec![2.0];
+        assert_eq!(
+            weight_steps_for(Some(&ex), &global),
+            vec![2.0],
+            "種目が勝つ"
+        );
+
+        ex.weight_steps = Vec::new();
+        assert_eq!(
+            weight_steps_for(Some(&ex), &global),
+            vec![1.25, 2.5, 5.0],
+            "種目が空なら全体"
+        );
+        assert!(weight_steps_for(Some(&ex), &[None, None, None]).is_empty());
+
+        ex.weight_steps = vec![2.0];
+        assert_eq!(
+            weight_steps_for(Some(&ex), &[None, None, None]),
+            vec![2.0],
+            "全体が全部空でも種目の幅は出る"
+        );
+    }
+
+    #[test]
+    fn set_weight_steps_and_normalize_agree_and_keep_at_most_three_valid_values() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+
+        let mut through_ui = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_weight_steps(&mut through_ui, bench, vec![0.0, 60.0, 2.0]);
+
+        let mut through_import = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        if let Some(e) = through_import.exercises.iter_mut().find(|e| e.id == bench) {
+            e.weight_steps = vec![0.0, 60.0, 2.0];
+        }
+        normalize_exercises(&mut through_import, &mut IdGen::from_seed(1));
+
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").weight_steps,
+            through_import.exercise(bench).expect("種目").weight_steps,
+            "画面からの書き込みと取り込みで規則がずれている"
+        );
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").weight_steps,
+            vec![2.0],
+            "0 と 50 超は落ち、残りは詰める"
+        );
+
+        set_weight_steps(&mut through_ui, bench, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").weight_steps,
+            vec![1.0, 2.0, 3.0],
+            "4 つ目は落ちる"
+        );
+    }
+
+    #[test]
+    fn fill_weight_steps_only_fills_an_empty_exercise() {
+        let mut existing = crate::presets::seeded_db(crate::i18n::Lang::Ja)
+            .exercises
+            .remove(0);
+        let mut incoming = existing.clone();
+        incoming.weight_steps = vec![5.0];
+
+        fill_weight_steps(&mut existing, &incoming);
+        assert_eq!(existing.weight_steps, vec![5.0], "空なら入る");
+
+        incoming.weight_steps = vec![2.0];
+        fill_weight_steps(&mut existing, &incoming);
+        assert_eq!(existing.weight_steps, vec![5.0], "既存があれば上書きしない");
+    }
+
     /// 空欄まで戻せる（`None` を渡すと未設定に戻る）。戻せないと、間違って打った
     /// 秒数がカードの薄字に永久に残る。
     #[test]
@@ -11266,6 +11961,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         theirs.exercises.push(Exercise {
@@ -11277,6 +11973,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: Some(120),
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         merge_db(&mut mine, theirs);
@@ -11503,6 +12200,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: Some(75),
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 
@@ -12476,6 +13174,7 @@ mod tests {
                 pins: Vec::new(),
                 interval_sec: None,
                 labels,
+                weight_steps: Vec::new(),
             });
             db
         };
@@ -12653,6 +13352,7 @@ mod tests {
                             note: set_note.to_string(),
                             drops: Vec::new(),
                             at: None,
+                            cardio: None,
                         }],
                         at: None,
                         note: String::new(),
@@ -12995,6 +13695,207 @@ mod tests {
         assert!(
             report.is_noop(),
             "何も増えていないので is_noop は真。落ちたことは labels_dropped が言う"
+        );
+    }
+
+    // ── 有酸素 ──────────────────────────────────────────────────────────────
+
+    fn cardio_set(sec: u32, kmh: f32, incline: f32) -> SetEntry {
+        SetEntry {
+            cardio: Some(Cardio {
+                sec: Some(sec),
+                kmh: Some(kmh),
+                incline: Some(incline),
+                ..Cardio::default()
+            }),
+            ..SetEntry::default()
+        }
+    }
+
+    fn treadmill_db(sets: Vec<SetEntry>) -> Db {
+        let mut db = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        let id = ExerciseId::from_bits(0x71);
+        put(
+            &mut db,
+            d(2026, 8, 1),
+            vec![ExerciseLog {
+                exercise_id: id,
+                sets,
+                at: None,
+                note: String::new(),
+                label: None,
+            }],
+        );
+        db
+    }
+
+    #[test]
+    fn cardio_sets_that_differ_are_not_the_same_set() {
+        // ★ 重量も回数も 0 の有酸素では cardio が唯一の中身。入れ忘れると区間の違いが消える
+        assert!(!same_set(
+            &cardio_set(900, 4.8, 12.0),
+            &cardio_set(300, 4.8, 12.0)
+        ));
+        assert!(same_set(
+            &cardio_set(900, 4.8, 12.0),
+            &cardio_set(900, 4.8, 12.0)
+        ));
+        assert!(!same_sets_unordered(
+            &[cardio_set(900, 4.8, 12.0)],
+            &[cardio_set(900, 4.8, 15.0)]
+        ));
+        assert!(same_sets_unordered(
+            &[cardio_set(900, 4.8, 12.0), cardio_set(900, 4.8, 15.0)],
+            &[cardio_set(900, 4.8, 15.0), cardio_set(900, 4.8, 12.0)]
+        ));
+    }
+
+    #[test]
+    fn merge_keeps_a_cardio_interval_that_differs() {
+        let mut mine = treadmill_db(vec![cardio_set(900, 4.8, 12.0)]);
+        let theirs = treadmill_db(vec![cardio_set(900, 4.8, 12.0), cardio_set(900, 4.8, 15.0)]);
+        let report = merge_db(&mut mine, theirs);
+        let sets = &mine.sessions[&date_key(d(2026, 8, 1))].logs[0].sets;
+        assert_eq!(sets.len(), 2, "区間の多いほうが残る");
+        assert!(matches!(report.conflicts[0], Conflict::SetsDiverged { .. }));
+        // 同じ内容を入れ直しても増えない
+        let again = treadmill_db(vec![cardio_set(900, 4.8, 12.0), cardio_set(900, 4.8, 15.0)]);
+        assert!(merge_db(&mut mine, again).is_noop());
+    }
+
+    #[test]
+    fn copy_day_carries_the_cardio_interval() {
+        let mut db = treadmill_db(vec![cardio_set(900, 4.8, 12.0)]);
+        copy_day(&mut db, d(2026, 8, 1), d(2026, 8, 2), None);
+        let copied = &db.sessions[&date_key(d(2026, 8, 2))].logs[0].sets[0];
+        assert_eq!(copied.cardio, cardio_set(900, 4.8, 12.0).cardio);
+        assert_eq!((copied.weight, copied.reps), (0.0, 0));
+    }
+
+    #[test]
+    fn a_cardio_only_day_is_a_trained_day_but_adds_no_volume() {
+        let db = treadmill_db(vec![cardio_set(900, 4.8, 12.0)]);
+        let s = &db.sessions[&date_key(d(2026, 8, 1))];
+        assert!(s.is_trained());
+        // 「合計」は max(0,1) × 0 = 0 で自然に外れる
+        assert_eq!(log_value(Metric::Volume, &s.logs[0]), 0.0);
+        assert!(is_cardio_set(&s.logs[0].sets[0]));
+    }
+
+    #[test]
+    fn cardio_metrics_sum_minutes_and_kilometres() {
+        let db = treadmill_db(vec![cardio_set(900, 4.8, 12.0), cardio_set(900, 4.8, 15.0)]);
+        let l = &db.sessions[&date_key(d(2026, 8, 1))].logs[0];
+        assert_eq!(log_value(Metric::Time, l), 30.0);
+        // 速度 × 時間: 4.8 × 0.5h = 2.4km
+        assert!((log_value(Metric::Distance, l) - 2.4).abs() < 1e-6);
+        // 入力した距離が先
+        let rowing = SetEntry {
+            cardio: Some(Cardio {
+                sec: Some(480),
+                m: Some(2000),
+                ..Cardio::default()
+            }),
+            ..SetEntry::default()
+        };
+        assert_eq!(cardio_m(&rowing), 2000.0);
+        let t = cardio_total(&[rowing], 500.0);
+        assert_eq!((t.sec, t.m, t.pace_sec), (480, 2000, Some(120)));
+        assert_eq!(fmt_pace(120), "2:00");
+    }
+
+    #[test]
+    fn metric_follows_the_target_kind() {
+        assert_eq!(Metric::Sets.for_target(true), Metric::Time);
+        assert_eq!(Metric::Distance.for_target(true), Metric::Distance);
+        assert_eq!(Metric::Time.for_target(false), Metric::Volume);
+        assert_eq!(Metric::Reps.for_target(false), Metric::Reps);
+    }
+
+    #[test]
+    fn cardio_text_parsing_and_formatting() {
+        assert_eq!(parse_minutes("7.5"), Some(450));
+        assert_eq!(parse_minutes(""), None);
+        assert_eq!(parse_minutes("0"), None);
+        assert_eq!(parse_minutes("99999"), Some(MAX_CARDIO_SEC));
+        assert_eq!(fmt_minutes(450), "7.5");
+        assert_eq!(fmt_minutes(1800), "30");
+        assert_eq!(parse_km("2.4"), Some(2400));
+        assert_eq!(fmt_km(2400), "2.4");
+        assert_eq!(parse_rate("0"), Some(0.0), "傾斜 0% は正当な値");
+        assert_eq!(parse_rate(""), None);
+        assert_eq!(parse_rate("-3"), None);
+    }
+
+    #[test]
+    fn hidden_cardio_fields_survive_an_edit() {
+        let fields = crate::presets::cardio_fields(ExerciseId::from_bits(0x76));
+        let base = Cardio {
+            sec: Some(600),
+            m: Some(1000),
+            kmh: Some(9.0),
+            ..Cardio::default()
+        };
+        let texts = cardio_to_texts(fields, &base);
+        let back = cardio_from_texts(fields, &texts, &base).expect("中身がある");
+        assert_eq!(back, base, "画面に出ない km/h を落とさない");
+        let blank = cardio_from_texts(fields, &[], &Cardio::default());
+        assert!(blank.is_none(), "全欄空は保存しない");
+    }
+
+    #[test]
+    fn normalize_clamps_cardio_values_and_drops_blank_intervals() {
+        let huge = SetEntry {
+            cardio: Some(Cardio {
+                sec: Some(u32::MAX),
+                m: Some(u32::MAX),
+                kmh: Some(-1.0),
+                ..Cardio::default()
+            }),
+            ..SetEntry::default()
+        };
+        let blank = SetEntry {
+            cardio: Some(Cardio::default()),
+            ..SetEntry::default()
+        };
+        let db = treadmill_db(vec![huge, blank, cardio_set(60, 5.0, 0.0)]);
+        let raw = serde_json::to_string(&db).expect("書ける");
+        let got = migrate(&raw, &mut IdGen::from_seed(1)).expect("読める");
+        let sets = &got.sessions[&date_key(d(2026, 8, 1))].logs[0].sets;
+        assert_eq!(sets.len(), 2, "全欄空の区間は落ちる");
+        let c = sets[0].cardio.as_ref().expect("残る");
+        assert_eq!(
+            (c.sec, c.m, c.kmh),
+            (Some(MAX_CARDIO_SEC), Some(MAX_CARDIO_M), None)
+        );
+    }
+
+    #[test]
+    fn tsv_round_trips_cardio_intervals_and_stays_readable_without_the_columns() {
+        let db = treadmill_db(vec![cardio_set(450, 4.8, 0.0), cardio_set(900, 5.0, 12.5)]);
+        let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
+        let r = rows(&tsv);
+        assert_eq!(r[1][col(&r, "回数")], "", "旧版が回数 0 の行として読まない");
+        assert_eq!(r[1][col(&r, "有酸素秒")], "450");
+        assert_eq!(r[2][col(&r, "有酸素傾斜%")], "12.5");
+        let back = parse_tsv(&tsv, &mut IdGen::from_seed(2), &Db::default()).expect("読める");
+        let sets = &back.sessions[&date_key(d(2026, 8, 1))].logs[0].sets;
+        let want = [cardio_set(450, 4.8, 0.0), cardio_set(900, 5.0, 12.5)];
+        assert_eq!(sets.len(), 2);
+        for (got, want) in sets.iter().zip(&want) {
+            assert!(same_set(got, want), "{got:?} != {want:?}");
+        }
+        // 英語の見出しでも往復する
+        let en = export_tsv(&db, jst(), crate::i18n::Lang::En);
+        assert!(parse_tsv(&en, &mut IdGen::from_seed(2), &Db::default()).is_ok());
+        // 有酸素の列が無い旧ファイルは今までどおり読める
+        let old =
+            "日付\t部位\t種目\tセット\t重量kg\t回数\n2026-08-01\t胸\tベンチプレス\t1\t60\t10\n";
+        let got = parse_tsv(old, &mut IdGen::from_seed(3), &Db::default()).expect("読める");
+        assert!(
+            got.sessions
+                .values()
+                .all(|s| s.logs[0].sets[0].cardio.is_none())
         );
     }
 }

@@ -116,7 +116,8 @@ fn month_data(db: &Db, first: NaiveDate) -> MonthData {
         }
         if let Some(s) = session {
             for log in &s.logs {
-                out.sets += log.sets.len();
+                // ★ 有酸素の区間は「セット」に数えない（筋トレのセット数の月合計）
+                out.sets += log.sets.iter().filter(|s| !core::is_cardio_set(s)).count();
                 out.volume += core::log_value(Metric::Volume, log);
             }
         }

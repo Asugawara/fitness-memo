@@ -218,7 +218,7 @@ test('旧キー v1 の記録を引き継いで v3 に書き、v1 は消さない
   expect(migrated.exercises.map((e) => e.name)).toContain('レガシーベンチ');
   expect(migrated.sessions['2020-01-02'].logs[0].sets).toEqual([{ weight: 60, reps: 10 }]);
   // 旧形式のプリセットで上書きされていない（引き継ぎであって初期化ではない）
-  expect(migrated.groups.map((g) => g.name)).toEqual(['胸']);
+  expect(migrated.groups.map((g) => g.name)).toEqual(['胸', '有酸素']);
 });
 
 // ★ 旧キーは「全損に対する唯一の退路」（adr/storage/storage-key-per-schema-generation.md）。現行キーが壊れたときに
@@ -247,7 +247,7 @@ test('v3 が壊れていても健全な v2 があればそこから復元する'
   // プリセットに落ちていない = v2 から復元できている
   const db = await page.evaluate(() => JSON.parse(localStorage.getItem('fitness-memo/v3')));
   expect(db.exercises.map((e) => e.name)).toContain('生き残りベンチ');
-  expect(db.groups.map((g) => g.name)).toEqual(['胸']);
+  expect(db.groups.map((g) => g.name)).toEqual(['胸', '有酸素']);
 
   // 壊れていた v3 は退避されている（黙って捨てない）
   const backups = await page.evaluate(() =>

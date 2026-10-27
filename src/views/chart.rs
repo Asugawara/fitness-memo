@@ -27,7 +27,7 @@ use leptos::prelude::*;
 
 use crate::chart_layout::{GRID_Y, X0, Y0, Y1, layout, n};
 
-use super::{cur_lang, fmt_date, fmt_metric, fmt_weight, t};
+use super::{cur_lang, fmt_date, fmt_value, fmt_weight, t};
 
 /// "8/8"
 fn fmt_md(d: NaiveDate) -> String {
@@ -42,7 +42,7 @@ fn fmt_md(d: NaiveDate) -> String {
 /// （実測: "2,954,576" が x=-11.6 で描画され "954,576" に見える）。単なる見切れではなく
 /// 数値の誤読なので、桁区切りを増やす代わりに単位を切り替えて文字数を頭打ちにする。
 /// 6桁到達時点で既に "999,999"（7文字）が幅を超えるため、閾値は6桁（10^5）に置く。
-fn fmt_axis_label(v: f64) -> String {
+fn fmt_axis_label(v: f64, unit: &str) -> String {
     const TIERS: [(f64, f64, &str); 3] = [
         (1e9, 1e9, "B"),
         (1e6, 1e6, "M"),
@@ -63,7 +63,7 @@ fn fmt_axis_label(v: f64) -> String {
             };
         }
     }
-    fmt_metric(v)
+    fmt_value(v, unit)
 }
 
 /// 体重の表記。`60.0 → "60"`、`62.5 → "62.5"`。
@@ -133,8 +133,8 @@ pub fn Chart(
                     .map(|((_, from, _), (_, to, _))| {
                         (fmt_date(*from, lang), fmt_date(*to, lang))
                     });
-                let max = fmt_metric(l.max);
                 let unit = unit.get();
+                let max = fmt_value(l.max, &unit);
                 let metric_part = l.y_values.map(|_| (max.as_str(), unit.as_str()));
                 let weight = l
                     .weight
@@ -200,7 +200,7 @@ pub fn Chart(
                                                 y=n(*y + 3.5)
                                                 text-anchor="end"
                                             >
-                                                {fmt_axis_label(value)}
+                                                {fmt_axis_label(value, &unit)}
                                             </text>
                                         }
                                     })
@@ -398,7 +398,7 @@ pub fn Chart(
                     .map(|b| {
                         let metric = b
                             .value
-                            .map(|v| view! { <strong>{format!("{} {}", fmt_metric(v), unit)}</strong> });
+                            .map(|v| view! { <strong>{format!("{} {}", fmt_value(v, &unit), unit)}</strong> });
                         let weight = b
                             .weight
                             .map(|w| {

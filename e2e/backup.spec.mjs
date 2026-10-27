@@ -130,7 +130,7 @@ test('書き出しは共有シートに files だけを .tsv で渡す', async (
   expect(shared.type).toBe(TSV_MIME);
   // 見出しは外部仕様（cargo test がバイト一致で固定しているのと同じ並び）
   expect(shared.text.split('\n')[0]).toBe(
-    '日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル',
+    '日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル\t有酸素秒\t有酸素m\t有酸素km/h\t有酸素傾斜%\t有酸素Lv',
   );
   // 保存形式は JSON のまま（書き出し形式とは別。adr/storage/tsv-export-for-spreadsheets.md）
   const stored = await page.evaluate((k) => localStorage.getItem(k), KEY);
@@ -152,7 +152,7 @@ test('ダウンロード経路は 1 タップで .tsv を落とす', async ({ pa
   const path = await download.path();
   const body = await readFile(path, 'utf8');
   expect(body.split('\n')[0]).toBe(
-    '日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル',
+    '日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル\t有酸素秒\t有酸素m\t有酸素km/h\t有酸素傾斜%\t有酸素Lv',
   );
 });
 
@@ -205,7 +205,7 @@ test('共有が使えない端末はクリップボードへ落ち、コピー�
   );
   const copied = await page.evaluate(() => window.__copied);
   expect(copied.split('\n')[0]).toBe(
-    '日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル',
+    '日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル\t有酸素秒\t有酸素m\t有酸素km/h\t有酸素傾斜%\t有酸素Lv',
   );
 });
 
@@ -236,7 +236,7 @@ test('救済のコピーが成功すると copied の文言と TSV が残る', a
   );
   const copied = await page.evaluate(() => window.__copied);
   expect(copied.split('\n')[0]).toBe(
-    '日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル',
+    '日付\t部位\t種目\tセット\t重量kg\t回数\tドロップ\t体重kg\tセットメモ\t種目メモ\t体調メモ\t時刻\tメニュー\tピン\tインターバル秒\tラベル\t有酸素秒\t有酸素m\t有酸素km/h\t有酸素傾斜%\t有酸素Lv',
   );
 });
 

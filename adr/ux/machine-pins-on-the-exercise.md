@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-08-19
 - **カテゴリ**: ux
-- **関連**: [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（入口を共有する相手）, [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md)（スコープの対比）, [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [数値入力に `type="number"` を使わない](text-input-not-number.md), [表計算で開ける TSV で書き出す](../storage/tsv-export-for-spreadsheets.md), [取り込みは「足すだけ」に固定する](../storage/import-is-merge-only.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（住み分けの相手）, [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](interval-seconds-on-the-exercise.md)（この ADR の制約と作法をそのまま継いだ隣人）, [チップでラベルを選ぶと履歴とコピーが切り替わる](label-chips-switch-the-history-and-the-copy.md)（決定 9 の隣人だが逆の判断をした相手）
+- **関連**: [メモは種目カードのトグル 1 つで開き、閉じても薄字で残す](exercise-and-set-notes-behind-one-toggle.md)（入口を共有する相手）, [種目メモとセットメモを `ExerciseLog` / `SetEntry` に持たせ、空のメモは書き出さない](../data-model/notes-on-logs-and-sets.md)（スコープの対比）, [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](destructive-affordance-quiet-at-rest.md), [数値入力に `type="number"` を使わない](text-input-not-number.md), [表計算で開ける TSV で書き出す](../storage/tsv-export-for-spreadsheets.md), [取り込みは「足すだけ」に固定する](../storage/import-is-merge-only.md), [UI の状態を `Db` に入れず別キーに置く](../storage/ui-state-in-separate-key.md), [コピーは種目メモとセットメモを持ち込む（体調メモと体重は持ち込まない）](copy-carries-the-notes.md)（住み分けの相手）, [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](interval-seconds-on-the-exercise.md)（この ADR の制約と作法をそのまま継いだ隣人）, [チップでラベルを選ぶと履歴とコピーが切り替わる](label-chips-switch-the-history-and-the-copy.md)（決定 9 の隣人だが逆の判断をした相手）, [タップで数値を空にし、触っている欄の真上に ± ボタンを浮かせる](tap-clears-the-number-and-steps-above-the-field.md)（種目に貼り付けた「± の幅」の隣人）
 
 ## 背景
 

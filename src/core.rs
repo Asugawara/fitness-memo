@@ -967,6 +967,174 @@ fn round1(v: f32) -> f32 {
     (v * 10.0).round() / 10.0
 }
 
+// ── ± ボタンの幅（adr/ux/tap-clears-the-number-and-steps-above-the-field.md）──────
+//
+// ★ 全体の既定（設定 › ± ボタン）と種目ごとの上書き（`Exercise::weight_steps`）の
+//   両方が、この節の規則を通る。画面と取り込みで規則を割らないため、正規化も
+//   ここに 1 本だけ書く（`clean_interval` と同じ理由）。
+
+/// 1 欄に並べる ± の幅の上限（枠の数）。箱が 375px 幅に収まる 6 個（− 3 + 3）が上限。
+pub const MAX_STEPS: usize = 3;
+
+/// 重量の ± の既定（kg）。**2.5 の両側に 1.25 と 5** — ダンベルとプレートの刻みを両方拾う。
+pub const DEFAULT_WEIGHT_STEPS: [f32; MAX_STEPS] = [1.25, 2.5, 5.0];
+
+/// 回数の ± の既定。1 回ずつ。枠の 2 つ目以降は空。
+pub const DEFAULT_REPS_STEPS: [Option<u32>; MAX_STEPS] = [Some(1), None, None];
+
+/// 重量の幅 1 本の上限（kg）。これを超える刻みは ± として意味が無い。
+const MAX_WEIGHT_STEP: f32 = 50.0;
+
+/// 回数の幅 1 本の上限。プランクの秒など「回数欄を秒にも使う」種目に効く範囲。
+const MAX_REPS_STEP: u32 = 100;
+
+/// 重量の幅 1 本を正規化する。**0 以下・上限超え・非有限は `None`**（枠ごと捨てる）。
+/// 0.01 kg 単位に丸める（入力欄の小数は 2 桁まで）。
+///
+/// ★ 全体の枠と種目の幅の両方がこれを通す。片方だけに上限を書くと、
+///   「画面から打てるのに取り込みで落ちる」が起きる。
+pub fn clean_weight_step(w: f32) -> Option<f32> {
+    if !w.is_finite() || w <= 0.0 || w > MAX_WEIGHT_STEP {
+        return None;
+    }
+    let r = (w * 100.0).round() / 100.0;
+    (r > 0.0).then_some(r)
+}
+
+/// 種目の幅（`Exercise::weight_steps`）の正規化。`normalize_exercises` と
+/// `set_weight_steps` と `merge_db` が共有する。
+///
+/// ★ 落ちた値は詰めて、先頭 [`MAX_STEPS`] 本だけ残す。並べ替えない
+///   （箱に並べるときに [`active_steps`] が昇順にする）。
+pub fn clean_weight_steps(steps: Vec<f32>) -> Vec<f32> {
+    steps
+        .into_iter()
+        .filter_map(clean_weight_step)
+        .take(MAX_STEPS)
+        .collect()
+}
+
+/// 保存文字列 → 重量の 3 枠。**`None` は既定（[`DEFAULT_WEIGHT_STEPS`]）。**
+///
+/// 保存は `"1.25,,5"` のように**枠の位置を保つ**（空枠は空欄）。だから空欄は「既定に
+/// 戻す」ではなく「その枠は出さない」になる。`""` は 3 枠とも空。
+pub fn weight_step_slots(saved: Option<&str>) -> [Option<f32>; MAX_STEPS] {
+    match saved {
+        None => DEFAULT_WEIGHT_STEPS.map(Some),
+        Some(s) => step_slots(s, parse_weight_step),
+    }
+}
+
+/// 保存文字列 → 回数の 3 枠。`None` は既定（[`DEFAULT_REPS_STEPS`]）。
+pub fn reps_step_slots(saved: Option<&str>) -> [Option<u32>; MAX_STEPS] {
+    match saved {
+        None => DEFAULT_REPS_STEPS,
+        Some(s) => step_slots(s, parse_reps_step),
+    }
+}
+
+/// 設定の入力欄の重量 → 1 枠。空欄・読めない・範囲外は `None`（その枠は空になる）。
+/// カンマ小数（`2,5`）も読む（[`parse_weight`] と同じ）。
+pub fn parse_weight_step(s: &str) -> Option<f32> {
+    clean_weight_step(parse_weight(s))
+}
+
+/// 設定の入力欄の回数 → 1 枠。1〜100 の整数だけ。
+pub fn parse_reps_step(s: &str) -> Option<u32> {
+    s.trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|r| (1..=MAX_REPS_STEP).contains(r))
+}
+
+/// `"a,b,c"` を 3 枠に割る。足りない枠と読めない枠は `None`（枠の位置は動かさない）。
+fn step_slots<T>(saved: &str, parse: impl Fn(&str) -> Option<T>) -> [Option<T>; MAX_STEPS] {
+    let mut parts = saved.split(',').map(|p| parse(p.trim()));
+    [
+        parts.next().flatten(),
+        parts.next().flatten(),
+        parts.next().flatten(),
+    ]
+}
+
+/// 3 枠を保存文字列にする（[`weight_step_slots`] / [`reps_step_slots`] の逆）。
+pub fn join_step_slots<T: ToString>(slots: &[Option<T>]) -> String {
+    slots
+        .iter()
+        .map(|s| s.as_ref().map(ToString::to_string).unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// 枠のうち値のあるものを、重複を除いて昇順に並べる。**箱に並べるのはこれ。**
+///
+/// ★ 「並べ替えない」と書いた保存順（[`clean_weight_steps`]）と違い、ここでは昇順にする。
+///   箱の見た目は `−大きい順 | 小さい順+` で決まるので、入力の順に依存させない。
+pub fn active_steps<T: Copy + PartialOrd>(slots: &[Option<T>]) -> Vec<T> {
+    let mut out: Vec<T> = Vec::new();
+    for v in slots.iter().flatten() {
+        if !out.contains(v) {
+            out.push(*v);
+        }
+    }
+    out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    out
+}
+
+/// 欄に出す重量の幅。種目に入っていればそれ、3 枠とも空なら全体に従う。
+///
+/// ★ 全体が全部空でも種目の幅は出る（種目だけ `2` と入れた利用者の箱を消さない）。
+///   逆に種目が空で全体も空なら、その欄には ± が出ない。
+pub fn weight_steps_for(ex: Option<&Exercise>, global: &[Option<f32>; MAX_STEPS]) -> Vec<f32> {
+    let own: Vec<Option<f32>> = ex
+        .map(|e| {
+            e.weight_steps
+                .iter()
+                .map(|w| clean_weight_step(*w))
+                .collect()
+        })
+        .unwrap_or_default();
+    let own = active_steps(&own);
+    if own.is_empty() {
+        active_steps(global)
+    } else {
+        own
+    }
+}
+
+/// 重量欄を ± で動かす。**f64 で計算する**（`62.3 + 1.25` を f32 で足すと
+/// `63.550003` になり、入力欄に見苦しい値が出る）。0 未満は 0、0.01 kg に丸める。
+pub fn step_weight(s: &str, delta: f32) -> String {
+    let w = f64::from(parse_weight(s)) + f64::from(delta);
+    let r = (w.max(0.0) * 100.0).round() / 100.0;
+    fmt_weight(r as f32)
+}
+
+/// 回数欄を ± で動かす。空欄は 0 扱い。**1 未満は 1**（0 は「行なし」で、
+/// 押したとたんにセットが黙って消えるため）。
+pub fn step_reps(s: &str, delta: i32) -> String {
+    let r = i64::from(s.trim().parse::<u32>().unwrap_or(0)) + i64::from(delta);
+    r.max(1).to_string()
+}
+
+/// 種目の重量の幅を 3 枠から差し替える（記録タブ・設定の編集シートから呼ぶ）。
+///
+/// ★ 正規化を `views` 側に持たせない理由は [`set_interval`] と同じ。
+pub fn set_weight_steps(db: &mut Db, id: ExerciseId, steps: Vec<f32>) {
+    if let Some(e) = db.exercises.iter_mut().find(|e| e.id == id) {
+        e.weight_steps = clean_weight_steps(steps);
+    }
+}
+
+/// 既存の種目に、取り込み側の重量の幅を足す。**既存が空のときだけ。**
+///
+/// ★ [`fill_interval`] と同じ理由。既存に幅がある（利用者が別端末で決めた）なら上書きしない。
+fn fill_weight_steps(existing: &mut Exercise, incoming: &Exercise) {
+    if existing.weight_steps.is_empty() {
+        existing.weight_steps = clean_weight_steps(incoming.weight_steps.clone());
+    }
+}
+
 /// メインセットの重量から、落とし幅ぶん引いた段の重量。**小数点以下 1 桁。**
 ///
 /// ★ 適用するのは**そのセットの 1 段目だけ**（呼び出し側の責任）。2 段目は落とす元が
@@ -2340,6 +2508,7 @@ fn normalize_exercises(db: &mut Db, ids: &mut IdGen) {
         e.pins = clean_pins(std::mem::take(&mut e.pins));
         e.interval_sec = clean_interval(e.interval_sec);
         e.labels = clean_labels(std::mem::take(&mut e.labels), ids);
+        e.weight_steps = clean_weight_steps(std::mem::take(&mut e.weight_steps));
     }
 }
 
@@ -2797,6 +2966,7 @@ fn upgrade_from_sequential(old: legacy::Db, ids: &mut IdGen) -> Db {
                 interval_sec: None,
                 // schema ≤2 にラベルは無い
                 labels: Vec::new(),
+                weight_steps: Vec::new(),
             })
             .collect(),
         // schema ≤2 にトレーニングメニューは存在しない（`legacy::Db` にフィールドが無い）
@@ -4290,6 +4460,7 @@ fn resolve_exercise(
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         }
     };
 
@@ -4536,6 +4707,7 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             }
             fill_pins(existing, &e);
             fill_interval(existing, &e);
+            fill_weight_steps(existing, &e);
             let (added, dropped) = merge_labels(existing, &e, &mut label_alias);
             report.labels_added += added;
             report.labels_dropped += dropped;
@@ -4546,6 +4718,7 @@ pub fn merge_db(mine: &mut Db, theirs: Db) -> MergeReport {
             exercise_alias.insert(e.id, existing.id);
             fill_pins(existing, &e);
             fill_interval(existing, &e);
+            fill_weight_steps(existing, &e);
             // ★ **同名寄せの枝でも呼ぶ。** 忘れると名前で寄せた種目のラベルだけが
             //   落ちる（一番踏みやすいミス）。3 つ目の新規追加枝は `..e` なので
             //   `labels` が自動で乗る
@@ -4861,6 +5034,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         }
     }
 
@@ -8701,6 +8875,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
         let r = rows(&tsv);
@@ -9117,6 +9292,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         let tsv = export_tsv(&mine, jst(), crate::i18n::Lang::Ja);
@@ -9169,6 +9345,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         let tsv = "日付\t部位\t種目\tセット\t重量kg\t回数\n\
@@ -9216,6 +9393,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         let tsv =
@@ -9255,6 +9433,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         let chest_bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
         let set = |weight, reps| SetEntry {
@@ -9839,6 +10018,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         let raw = export_json(&db);
@@ -9995,6 +10175,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         db.sessions.insert(
             date_key(d(2026, 8, 1)),
@@ -10054,6 +10235,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         db.sessions.insert(
             date_key(d(2026, 8, 2)),
@@ -10272,6 +10454,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         theirs.sessions.insert(
             date_key(d(2026, 9, 9)),
@@ -10407,6 +10590,7 @@ mod tests {
                 pins: Vec::new(),
                 interval_sec: None,
                 labels: Vec::new(),
+                weight_steps: Vec::new(),
             });
         }
         theirs.routines.push(Routine {
@@ -10441,6 +10625,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         theirs.routines.push(Routine {
             id: r(1),
@@ -11124,6 +11309,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         // B は同名の種目を**別の ID** で持ち、A に無い日に記録している
@@ -11137,6 +11323,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         b.sessions.insert(
             date_key(d(2026, 9, 9)),
@@ -11309,6 +11496,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         theirs.exercises.push(Exercise {
@@ -11320,6 +11508,7 @@ mod tests {
             pins: vec!["7".into()],
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         merge_db(&mut mine, theirs);
@@ -11460,6 +11649,7 @@ mod tests {
             pins: vec!["4".into(), "12".into()],
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 
@@ -11559,6 +11749,143 @@ mod tests {
         );
     }
 
+    // ── ± ボタンの幅（adr/ux/tap-clears-the-number-and-steps-above-the-field.md）──
+
+    #[test]
+    fn weight_step_slots_default_and_keep_the_position_of_each_slot() {
+        assert_eq!(
+            weight_step_slots(None),
+            [Some(1.25), Some(2.5), Some(5.0)],
+            "未設定は既定"
+        );
+        assert_eq!(weight_step_slots(Some("")), [None, None, None], "全部空");
+        assert_eq!(
+            weight_step_slots(Some("5,abc,1.25")),
+            [Some(5.0), None, Some(1.25)],
+            "読めない枠は空のまま。後ろの枠の位置は動かさない"
+        );
+        assert_eq!(
+            weight_step_slots(Some("1.25,,5")),
+            [Some(1.25), None, Some(5.0)]
+        );
+    }
+
+    #[test]
+    fn reps_step_slots_accept_only_whole_numbers_from_1_to_100() {
+        assert_eq!(reps_step_slots(None), [Some(1), None, None]);
+        assert_eq!(reps_step_slots(Some("5,0,101")), [Some(5), None, None]);
+        assert_eq!(reps_step_slots(Some("2.5,10,")), [None, Some(10), None]);
+    }
+
+    #[test]
+    fn active_steps_drops_empty_and_duplicate_slots_and_sorts_ascending() {
+        assert_eq!(
+            active_steps(&[Some(5.0), None, Some(1.25)]),
+            vec![1.25, 5.0]
+        );
+        assert_eq!(
+            active_steps(&[Some(2.5), Some(2.5), Some(1.0)]),
+            vec![1.0, 2.5]
+        );
+        assert!(active_steps::<f32>(&[None, None, None]).is_empty());
+    }
+
+    #[test]
+    fn step_weight_adds_and_rounds_without_float_noise() {
+        assert_eq!(step_weight("60", 1.25), "61.25");
+        // f32 で足すと 63.550003 になる。f64 で足して 2 桁に丸める
+        assert_eq!(step_weight("62.3", 1.25), "63.55");
+        assert_eq!(step_weight("0.5", -1.25), "0", "0 未満は 0");
+        assert_eq!(step_weight("", 2.5), "2.5", "空欄は 0 扱い");
+        assert_eq!(step_weight("6,5", 1.25), "7.75", "カンマ小数も読む");
+    }
+
+    #[test]
+    fn step_reps_never_goes_below_one() {
+        assert_eq!(step_reps("1", -1), "1", "0 にすると行が黙って消える");
+        assert_eq!(step_reps("", 1), "1", "空欄は 0 扱い");
+        assert_eq!(step_reps("10", 5), "15");
+        assert_eq!(step_reps("3", -5), "1");
+    }
+
+    #[test]
+    fn weight_steps_for_prefers_the_exercise_then_the_global_default() {
+        let mut ex = crate::presets::seeded_db(crate::i18n::Lang::Ja)
+            .exercises
+            .remove(0);
+        let global = [Some(1.25), Some(2.5), Some(5.0)];
+
+        ex.weight_steps = vec![2.0];
+        assert_eq!(
+            weight_steps_for(Some(&ex), &global),
+            vec![2.0],
+            "種目が勝つ"
+        );
+
+        ex.weight_steps = Vec::new();
+        assert_eq!(
+            weight_steps_for(Some(&ex), &global),
+            vec![1.25, 2.5, 5.0],
+            "種目が空なら全体"
+        );
+        assert!(weight_steps_for(Some(&ex), &[None, None, None]).is_empty());
+
+        ex.weight_steps = vec![2.0];
+        assert_eq!(
+            weight_steps_for(Some(&ex), &[None, None, None]),
+            vec![2.0],
+            "全体が全部空でも種目の幅は出る"
+        );
+    }
+
+    #[test]
+    fn set_weight_steps_and_normalize_agree_and_keep_at_most_three_valid_values() {
+        let bench = crate::presets::preset_exercise_id("ベンチプレス").expect("プリセット");
+
+        let mut through_ui = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        set_weight_steps(&mut through_ui, bench, vec![0.0, 60.0, 2.0]);
+
+        let mut through_import = crate::presets::seeded_db(crate::i18n::Lang::Ja);
+        if let Some(e) = through_import.exercises.iter_mut().find(|e| e.id == bench) {
+            e.weight_steps = vec![0.0, 60.0, 2.0];
+        }
+        normalize_exercises(&mut through_import, &mut IdGen::from_seed(1));
+
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").weight_steps,
+            through_import.exercise(bench).expect("種目").weight_steps,
+            "画面からの書き込みと取り込みで規則がずれている"
+        );
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").weight_steps,
+            vec![2.0],
+            "0 と 50 超は落ち、残りは詰める"
+        );
+
+        set_weight_steps(&mut through_ui, bench, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(
+            through_ui.exercise(bench).expect("種目").weight_steps,
+            vec![1.0, 2.0, 3.0],
+            "4 つ目は落ちる"
+        );
+    }
+
+    #[test]
+    fn fill_weight_steps_only_fills_an_empty_exercise() {
+        let mut existing = crate::presets::seeded_db(crate::i18n::Lang::Ja)
+            .exercises
+            .remove(0);
+        let mut incoming = existing.clone();
+        incoming.weight_steps = vec![5.0];
+
+        fill_weight_steps(&mut existing, &incoming);
+        assert_eq!(existing.weight_steps, vec![5.0], "空なら入る");
+
+        incoming.weight_steps = vec![2.0];
+        fill_weight_steps(&mut existing, &incoming);
+        assert_eq!(existing.weight_steps, vec![5.0], "既存があれば上書きしない");
+    }
+
     /// 空欄まで戻せる（`None` を渡すと未設定に戻る）。戻せないと、間違って打った
     /// 秒数がカードの薄字に永久に残る。
     #[test]
@@ -11634,6 +11961,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: None,
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         let mut theirs = crate::presets::seeded_db(crate::i18n::Lang::Ja);
         theirs.exercises.push(Exercise {
@@ -11645,6 +11973,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: Some(120),
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
 
         merge_db(&mut mine, theirs);
@@ -11871,6 +12200,7 @@ mod tests {
             pins: Vec::new(),
             interval_sec: Some(75),
             labels: Vec::new(),
+            weight_steps: Vec::new(),
         });
         let tsv = export_tsv(&db, jst(), crate::i18n::Lang::Ja);
 
@@ -12844,6 +13174,7 @@ mod tests {
                 pins: Vec::new(),
                 interval_sec: None,
                 labels,
+                weight_steps: Vec::new(),
             });
             db
         };

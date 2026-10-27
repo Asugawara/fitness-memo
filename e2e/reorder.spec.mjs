@@ -657,7 +657,11 @@ test('★ ドラッグしてもタブバーが消えず、掴むとキーボー�
   await fillSet(push, 0, { reps: 20 });
 
   // 入力欄にフォーカスを残したまま掴む（トレ中はこれが普通）
-  await push.getByTestId('set-reps').focus();
+  // ★ 掴むカード自身の 1 行目にフォーカスを置くと、欄の上に浮く ± の箱が見出し（掴み口）の中央に
+  //   重なり、指が ± に落ちる（adr/ux/tap-clears-the-number-and-steps-above-the-field.md）。
+  //   このテストが見るのは「キーボードが開いた状態で掴んでも kb-open が残らない」ことなので、
+  //   開いた状態は別のカードの欄で作る
+  await bench.getByTestId('set-reps').focus();
   await expect(page.getByTestId('tab-record')).toBeHidden();
 
   await dragCard(page, 'プッシュアップ', -((await bench.boundingBox()).height + 40));

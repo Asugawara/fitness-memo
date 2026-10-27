@@ -178,7 +178,10 @@ test('「+ 区間」は直前の行を写して時間欄にフォーカスする
   await expect(card.getByTestId('add-set')).toHaveText('+ 区間');
   const second = rows.nth(1);
   await expect(second.getByTestId('cardio-min')).toBeFocused();
-  await expect(second.getByTestId('cardio-min')).toHaveValue('15');
+  // ★ フォーカスした時間欄はタップと同じく空になり、写した値は薄字で残る
+  //   （adr/ux/tap-clears-the-number-and-steps-above-the-field.md）。そのまま打てば置き換わる
+  await expect(second.getByTestId('cardio-min')).toHaveValue('');
+  await expect(second.getByTestId('cardio-min')).toHaveAttribute('placeholder', '15');
   await expect(second.getByTestId('cardio-kmh')).toHaveValue('4.8');
   await expect(second.getByTestId('cardio-incline')).toHaveValue('12');
   // ドロップの口と重量の入れ忘れ警告は出ない
@@ -186,6 +189,8 @@ test('「+ 区間」は直前の行を写して時間欄にフォーカスする
   await expect(card.getByTestId('weight-missing')).toHaveCount(0);
 
   await second.getByTestId('cardio-incline').fill('15');
+  // 何も打たずに離れた時間欄は写した値に戻る
+  await expect(second.getByTestId('cardio-min')).toHaveValue('15');
   await expect(card.getByTestId('cardio-total')).toContainText('30分');
 });
 

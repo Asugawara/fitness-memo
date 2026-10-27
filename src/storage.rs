@@ -496,6 +496,16 @@ struct UiState {
     /// 一度 `true` になったら、部位を消されても二度と足さない。
     #[serde(default)]
     cardio_group_added: bool,
+    /// ± ボタンの重量の 3 枠（全体の既定）。`None` は既定（`core::DEFAULT_WEIGHT_STEPS`）。
+    ///
+    /// ★ 文字列で持つ。`"1.25,,5"` のように枠の位置を保つので、数値の配列にすると
+    ///   空枠が表せない。解釈は `core::weight_step_slots`（ホストのテストが届く側）。
+    ///   `lang` / `history` と同じく、知らない値が入っても `UiState` 全体は落とさない。
+    #[serde(default)]
+    weight_steps: Option<String>,
+    /// ± ボタンの回数の 3 枠（全体の既定）。書き方と理由は `weight_steps` と同じ。
+    #[serde(default)]
+    reps_steps: Option<String>,
 }
 
 fn ui_state() -> UiState {
@@ -583,6 +593,30 @@ pub fn drop_pct() -> f32 {
 pub fn save_drop_pct(pct: f32) {
     update_ui(|u| {
         u.drop_pct = Some(f64::from(pct));
+    });
+}
+
+/// ± ボタンの重量の 3 枠（全体の既定）。未設定は既定の 3 本。
+pub fn weight_steps() -> [Option<f32>; core::MAX_STEPS] {
+    core::weight_step_slots(ui_state().weight_steps.as_deref())
+}
+
+/// その 3 枠を保存する。クリック 1 回きりなので debounce しない。
+pub fn save_weight_steps(slots: &[Option<f32>; core::MAX_STEPS]) {
+    update_ui(|u| {
+        u.weight_steps = Some(core::join_step_slots(slots));
+    });
+}
+
+/// ± ボタンの回数の 3 枠（全体の既定）。未設定は既定の 1。
+pub fn reps_steps() -> [Option<u32>; core::MAX_STEPS] {
+    core::reps_step_slots(ui_state().reps_steps.as_deref())
+}
+
+/// その 3 枠を保存する。
+pub fn save_reps_steps(slots: &[Option<u32>; core::MAX_STEPS]) {
+    update_ui(|u| {
+        u.reps_steps = Some(core::join_step_slots(slots));
     });
 }
 

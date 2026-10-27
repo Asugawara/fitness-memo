@@ -91,6 +91,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [記録タブをカレンダー + 選択日エディタの単一画面にする](ux/record-tab-calendar-with-day-editor.md) | 採用 |
 | [セット追加は直前行の重量をコピーして回数欄へフォーカスする](ux/set-entry-prefill-and-focus.md) | 採用（削除確認の判定は [セット削除は確認を挟まない（カード削除の確認は残す）](ux/set-delete-without-confirmation.md) で改訂） |
 | [有酸素のカードは 1 行 = 1 区間、欄は機種ごとに最大 3 つ](ux/cardio-card-fields-per-machine.md) | 採用 |
+| [タップで数値を空にし、触っている欄の真上に ± ボタンを浮かせる](ux/tap-clears-the-number-and-steps-above-the-field.md) | 採用 |
 | [1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](ux/copy-whole-day-menu.md) | 採用（候補の出所は [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) で拡張） |
 | [ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする](ux/install-guide-banner-and-sheet.md) | 採用 |
 | [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](ux/destructive-affordance-quiet-at-rest.md) | 採用 |

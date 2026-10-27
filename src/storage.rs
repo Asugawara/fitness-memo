@@ -107,6 +107,39 @@ fn store() -> Option<web_sys::Storage> {
 ///   `App` が `LangCtx` を provide する前に決めた値をそのまま渡す
 ///   （adr/storage/preset-names-are-user-data-seeded-once.md）。
 pub fn load(lang: Lang) -> (Db, Option<String>) {
+    let (mut db, note) = load_raw(lang);
+    // ★ 退避できていない原本が現行キーに残っているときは触らない（`save` が上書きする）。
+    //   印も書かないので、次の起動でやり直す
+    if note.as_deref() != Some(lang.strings().boot.rescue_failed) {
+        add_cardio_group_once(&mut db, lang);
+    }
+    (db, note)
+}
+
+/// 既存の利用者にも部位「有酸素」を**1 回だけ**足す。
+///
+/// ★ 印は `Db` ではなく `UiState::cardio_group_added` に置く。部位の削除は物理削除
+///   （`views::settings::delete_group`）なので、「部位が無い」だけでは「消した」と
+///   「まだ足していない」を区別できない。`Db` に印を持たせると、(1) 有酸素を使わない
+///   利用者の JSON まで 1 キー増えてバイト一致が崩れ、(2) `merge_db` に印の合流規則が
+///   要り、(3) 印の無い古いバックアップを復元した瞬間に消した部位が復活する。
+///   UI 設定なら端末ごとに 1 回で、復元・取り込みで巻き戻らない。
+///
+/// ★ 初回起動（`seeded_db` が最初から持っている）でも印を書く。書かないと、その人が
+///   部位を消した次の起動で足し直してしまう。
+fn add_cardio_group_once(db: &mut Db, lang: Lang) {
+    if ui_state().cardio_group_added {
+        return;
+    }
+    // ★ 足したなら**その場で保存する**。印だけ書いて `Db` が次の編集まで保存されないと、
+    //   その間に閉じた人は「印はあるのに部位が無い」状態になり、二度と足されない
+    if presets::seed_cardio(db, lang) {
+        save(db);
+    }
+    update_ui(|u| u.cardio_group_added = true);
+}
+
+fn load_raw(lang: Lang) -> (Db, Option<String>) {
     let Some(store) = store() else {
         return (
             presets::seeded_db(lang),
@@ -459,6 +492,20 @@ struct UiState {
     ///   届く側）に任せる。
     #[serde(default)]
     release_seen: Option<i64>,
+    /// 部位「有酸素」を既存の利用者に足し終えたか（[`add_cardio_group_once`]）。
+    /// 一度 `true` になったら、部位を消されても二度と足さない。
+    #[serde(default)]
+    cardio_group_added: bool,
+    /// ± ボタンの重量の 3 枠（全体の既定）。`None` は既定（`core::DEFAULT_WEIGHT_STEPS`）。
+    ///
+    /// ★ 文字列で持つ。`"1.25,,5"` のように枠の位置を保つので、数値の配列にすると
+    ///   空枠が表せない。解釈は `core::weight_step_slots`（ホストのテストが届く側）。
+    ///   `lang` / `history` と同じく、知らない値が入っても `UiState` 全体は落とさない。
+    #[serde(default)]
+    weight_steps: Option<String>,
+    /// ± ボタンの回数の 3 枠（全体の既定）。書き方と理由は `weight_steps` と同じ。
+    #[serde(default)]
+    reps_steps: Option<String>,
 }
 
 fn ui_state() -> UiState {
@@ -546,6 +593,30 @@ pub fn drop_pct() -> f32 {
 pub fn save_drop_pct(pct: f32) {
     update_ui(|u| {
         u.drop_pct = Some(f64::from(pct));
+    });
+}
+
+/// ± ボタンの重量の 3 枠（全体の既定）。未設定は既定の 3 本。
+pub fn weight_steps() -> [Option<f32>; core::MAX_STEPS] {
+    core::weight_step_slots(ui_state().weight_steps.as_deref())
+}
+
+/// その 3 枠を保存する。クリック 1 回きりなので debounce しない。
+pub fn save_weight_steps(slots: &[Option<f32>; core::MAX_STEPS]) {
+    update_ui(|u| {
+        u.weight_steps = Some(core::join_step_slots(slots));
+    });
+}
+
+/// ± ボタンの回数の 3 枠（全体の既定）。未設定は既定の 1。
+pub fn reps_steps() -> [Option<u32>; core::MAX_STEPS] {
+    core::reps_step_slots(ui_state().reps_steps.as_deref())
+}
+
+/// その 3 枠を保存する。
+pub fn save_reps_steps(slots: &[Option<u32>; core::MAX_STEPS]) {
+    update_ui(|u| {
+        u.reps_steps = Some(core::join_step_slots(slots));
     });
 }
 

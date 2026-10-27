@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = process.env.E2E_BASE || '/';
 
-// 図を持つ章。**12 章すべてが持つ**ので、`src/manual.rs` の `MANUAL_CHAPTERS` と
+// 図を持つ章。**13 章すべてが持つ**ので、`src/manual.rs` の `MANUAL_CHAPTERS` と
 // 同じ順・同じ長さで並べる（章順で並べるのは、失敗したときに「何章目で落ちたか」を
 // 画面の並びから追えるようにするため）。
 const FIG_CHAPTERS = [
@@ -27,6 +27,7 @@ const FIG_CHAPTERS = [
   'progress-labels',
   'exercise-memo',
   'drop-sets',
+  'cardio',
   'empty-day',
   'accordions',
   'reorder',
@@ -257,10 +258,10 @@ test('アコーディオン: 既定で全部閉じ、1 つ開くと前が閉じ�
   await openManual(page);
 
   const toggles = page.getByTestId('man-toggle');
-  await expect(toggles).toHaveCount(12);
+  await expect(toggles).toHaveCount(13);
   await expect(page.getByTestId('man-body')).toHaveCount(0);
   const states = await toggles.evaluateAll((els) => els.map((el) => el.getAttribute('aria-expanded')));
-  expect(states).toEqual(Array(12).fill('false'));
+  expect(states).toEqual(Array(13).fill('false'));
 
   await openChapter(page, 'chart-readout');
   await expect(page.getByTestId('man-body')).toHaveCount(1);
@@ -406,12 +407,12 @@ test('タブ往復で開いた章が保たれ、可視域に入っている', as
 
 // 8. 全章に本文と図がある ──────────────────────────────────────────────────
 //
-// ★ かつては「図が無い章にも本文がある」を見ていたが、全 12 章が図を持つように
+// ★ かつては「図が無い章にも本文がある」を見ていたが、全 13 章が図を持つように
 //   なって被写体が消えた。**消さずに向きを変える** — 本文（箇条書き）が 1 つ以上あり、
 //   図がちょうど 1 枚あることを全章で見る。図の中身（読める / 寸法が合う）は 3 と 4 が
 //   持つので、ここが見るのは「どの章にも両方がある」だけ。
 
-test('全 12 章に本文と図がある', async ({ page }) => {
+test('全 13 章に本文と図がある', async ({ page }) => {
   await page.goto('./');
   await openManual(page);
 

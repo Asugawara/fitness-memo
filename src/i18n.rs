@@ -386,6 +386,19 @@ pub struct Settings {
     /// 削除の確認。**「同じ名前で作り直しても戻らない」を必ず含める** —
     /// 参照は ID なので、消すと過去の記録はそのラベルから永久に外れる（本物の罠）
     pub delete_label_confirm: &'static str,
+    /// 設定タブの「± ボタン」の行名。
+    pub row_steps: &'static str,
+    /// 節の注記。何のための箱かと、空欄の扱いを書く。
+    pub steps_note: &'static str,
+    /// 節の枠の行の見出し（重量 / 回数）。
+    pub steps_weight: &'static str,
+    pub steps_reps: &'static str,
+    /// 全部空のときの行の右端。
+    pub steps_none: &'static str,
+    /// 節の注記。種目ごとの幅の場所を書く。
+    pub steps_exercise_note: &'static str,
+    /// 種目の編集シートの欄名。
+    pub field_steps: &'static str,
 }
 
 const JA_SETTINGS: Settings = Settings {
@@ -444,6 +457,13 @@ const JA_SETTINGS: Settings = Settings {
     label_add: "ラベルを追加",
     duplicate_label: "同じ名前のラベルがあります",
     delete_label_confirm: "このラベルを削除します。過去の記録は消えませんが、同じ名前で作り直しても過去の記録には戻りません",
+    row_steps: "± ボタン",
+    steps_note: "欄をタップすると、欄の上に − / ＋ が出ます。その幅をここで決めます。重量と回数はそれぞれ 3 つまで。空欄の枠は出しません。全部空にすると、その欄には − / ＋ が出なくなります（タップで空になる動きは残ります）",
+    steps_weight: "重量",
+    steps_reps: "回数",
+    steps_none: "なし",
+    steps_exercise_note: "種目ごとの重量の幅は、種目 › 編集 で変えられます",
+    field_steps: "± の幅 (kg)",
 };
 
 const EN_SETTINGS: Settings = Settings {
@@ -502,6 +522,13 @@ const EN_SETTINGS: Settings = Settings {
     label_add: "Add a label",
     duplicate_label: "A label with that name already exists.",
     delete_label_confirm: "Delete this label? Your records stay, but making a label with the same name again will not bring them back to it.",
+    row_steps: "± buttons",
+    steps_note: "Tap a field and − / + appear above it. Set their steps here: up to three each for weight and reps. Blank slots are not shown; if all are blank, that field shows no − / +. Tapping still clears the field.",
+    steps_weight: "Weight",
+    steps_reps: "Reps",
+    steps_none: "None",
+    steps_exercise_note: "Weight steps for each exercise can be set under Exercises › Edit.",
+    field_steps: "± step (kg)",
 };
 
 // ── core.rs ─────────────────────────────────────────────────────────────────
@@ -513,6 +540,11 @@ pub struct Core {
     /// 指標に添える単位。**ボリュームは重量と回数の合成量なので単位を持たない**
     pub unit_sets: &'static str,
     pub unit_reps: &'static str,
+    /// 有酸素の指標（推移タブで有酸素の種目を選んだときの 2 択）と単位
+    pub metric_time: &'static str,
+    pub metric_distance: &'static str,
+    pub unit_min: &'static str,
+    pub unit_km: &'static str,
     /// 経過表示（日粒度）
     pub today: &'static str,
     pub yesterday: &'static str,
@@ -533,6 +565,10 @@ const JA_CORE: Core = Core {
     metric_reps: "回数",
     unit_sets: "セット",
     unit_reps: "回",
+    metric_time: "時間",
+    metric_distance: "距離",
+    unit_min: "分",
+    unit_km: "km",
     today: "今日",
     yesterday: "昨日",
     just_now: "たった今",
@@ -550,6 +586,10 @@ const EN_CORE: Core = Core {
     metric_reps: "Reps",
     unit_sets: "sets",
     unit_reps: "reps",
+    metric_time: "Time",
+    metric_distance: "Distance",
+    unit_min: "min",
+    unit_km: "km",
     today: "Today",
     yesterday: "Yesterday",
     just_now: "Just now",
@@ -778,6 +818,16 @@ pub struct Day {
     pub weight_missing: &'static str,
     pub reps_missing: &'static str,
     pub add_set: &'static str,
+    /// 有酸素のカード（adr 無し: 部位「有酸素」の種目だけ）。行 = 区間
+    pub add_interval: &'static str,
+    pub cardio_missing: &'static str,
+    pub cardio_total: &'static str,
+    pub cardio_time: &'static str,
+    pub cardio_speed: &'static str,
+    pub cardio_incline: &'static str,
+    pub cardio_level: &'static str,
+    pub cardio_distance: &'static str,
+    pub delete_interval: &'static str,
     /// マシンのピン。**ラベル 1 語で種目メモと読み分ける**
     /// （adr/ux/machine-pins-on-the-exercise.md 決定 3）
     pub pins: &'static str,
@@ -832,6 +882,15 @@ const JA_DAY: Day = Day {
     weight_missing: "重量未入力",
     reps_missing: "回数を入れると保存されます",
     add_set: "+ セット",
+    add_interval: "+ 区間",
+    cardio_missing: "どれか 1 つ入れると保存されます",
+    cardio_total: "計",
+    cardio_time: "時間（分）",
+    cardio_speed: "速度（km/h）",
+    cardio_incline: "傾斜（%）",
+    cardio_level: "レベル",
+    cardio_distance: "距離",
+    delete_interval: "この区間を削除",
     pins: "ピン",
     pin_value: "ピンの番号",
     pin_delete: "このピンを削除",
@@ -876,6 +935,15 @@ const EN_DAY: Day = Day {
     weight_missing: "No weight yet",
     reps_missing: "Enter reps and this set is saved",
     add_set: "+ Set",
+    add_interval: "+ Interval",
+    cardio_missing: "Fill in any field and this interval is saved",
+    cardio_total: "Total",
+    cardio_time: "Time (min)",
+    cardio_speed: "Speed (km/h)",
+    cardio_incline: "Incline (%)",
+    cardio_level: "Level",
+    cardio_distance: "Distance",
+    delete_interval: "Delete this interval",
     pins: "Pins",
     pin_value: "Pin number",
     pin_delete: "Delete this pin",
@@ -1078,6 +1146,7 @@ const JA_MANUAL: Manual = Manual {
                 "セットメモは今日その行に書いた内容が優先。空の行にだけ前回のメモが入ります。",
                 "体重とその日の体調メモは持ち込みません。",
                 "コピーで入ったセットには時刻が付きません。重量か回数を打ち直した行にだけ、その時刻が入ります。",
+                "直すときは欄をタップすると空になるので、そのまま打てます。何も打たずに離れれば元に戻ります。欄の上に出る − / ＋ の幅は設定タブの『± ボタン』で、種目ごとには種目の編集で変えられます。",
             ],
             fig_alt: "空のカードと「前回をコピー」",
             fig: Some((762, 618)),
@@ -1156,6 +1225,20 @@ const JA_MANUAL: Manual = Manual {
             ],
             fig_alt: "段が2つ入ったセット行",
             fig: Some((710, 510)),
+        },
+        ChapterText {
+            title: "有酸素を記録する",
+            body: &[
+                "「種目を追加」で部位「有酸素」を開き、機種を選びます。カードには、その機種の欄が出ます。",
+                "1 行が 1 区間です。時間・速度・傾斜などを打つと、カードの下の合計の行に、計算できる距離やペースが出ます。",
+                "途中で速度や傾斜を変えたら「+ 区間」を押します。直前の行の値が写り、時間欄にフォーカスが移るので、変えた欄だけ打ち直せます。",
+                "時間は分で打ちます。7.5 と打てば 7 分 30 秒として保存されます。",
+                "単位は km・km/h・%・m に固定です。設定では変わりません。",
+                "有酸素の行には重量と回数が無いので、「前回をコピー」は区間をそのまま持ち込みます。",
+                "推移タブでは、有酸素の種目を時間（分）か距離（km）でグラフにします。",
+            ],
+            fig_alt: "2 区間と合計",
+            fig: Some((762, 676)),
         },
         ChapterText {
             title: "空の日から始める",
@@ -1283,6 +1366,7 @@ const EN_MANUAL: Manual = Manual {
                 "A set's note keeps what you typed today; the previous note fills only empty rows.",
                 "Body weight and the day's condition note are never copied.",
                 "Copied sets carry no time. Only a row whose weight or reps you retype gets the time you typed it.",
+                "To fix a value, tap the field: it clears, so you can type straight over it. Leave it without typing and the value comes back. The − / + steps above the field are set under Settings › ± buttons, and per exercise under Exercises › Edit.",
             ],
             fig_alt: "An empty card with Copy last time",
             fig: Some((762, 618)),
@@ -1363,6 +1447,20 @@ const EN_MANUAL: Manual = Manual {
             fig: Some((710, 510)),
         },
         ChapterText {
+            title: "Logging cardio",
+            body: &[
+                "Pick the Cardio group in \"+ Add exercise\", then a machine. The card shows that machine's fields.",
+                "One row is one interval. Fill in the minutes, speed, incline and so on; the total row below the card works out the distance or pace it can.",
+                "When you change the speed or incline partway through, tap \"+ Interval\". The row copies the previous values and the minutes field takes focus, so you only retype what changed.",
+                "Minutes are typed as minutes: 7.5 is saved as 7 min 30 s.",
+                "The units are fixed at km, km/h, % and m. Settings don't change them.",
+                "A cardio row has no weight or reps, so \"Copy last time\" carries the intervals across as they are.",
+                "On the Progress tab, a cardio exercise is charted by time (min) or distance (km).",
+            ],
+            fig_alt: "2 intervals and their total",
+            fig: Some((762, 676)),
+        },
+        ChapterText {
             title: "Starting from an empty day",
             body: &[
                 "The candidate list only appears on a day with no cards yet.",
@@ -1387,7 +1485,7 @@ const EN_MANUAL: Manual = Manual {
                 "\"+ Save this day as a routine\" only appears once the day has logged sets — an empty card alone isn't enough.",
             ],
             fig_alt: "The Add exercise sheet, one group open",
-            fig: Some((786, 994)),
+            fig: Some((786, 1030)),
         },
         ChapterText {
             title: "Reordering",
@@ -1674,6 +1772,21 @@ pub struct ReleaseNote {
 ///   `<slug>-<release id>`（例 `weight-line-9`）
 /// - **既存 id 1〜5 は基準より前のものなので触らない**（文言もフィールド割当も）
 pub const RELEASES: &[ReleaseNote] = &[
+    ReleaseNote {
+        id: 7,
+        date: "2026-10-27",
+        items: &[ReleaseItem {
+            ja: "有酸素を記録できるようにしました。種目を追加 → 有酸素 から機種を選ぶと、時間・速度・傾斜などを 1 行で打てます。途中で変えたら「+ 区間」で行を足せます。",
+            en: "Cardio can now be recorded. Add an exercise from the Cardio group and pick a machine, then fill in time, speed, incline and so on in one row. Changed something partway through? \"+ Interval\" adds another row.",
+            fig: Some(ReleaseFig {
+                id: "cardio-card",
+                alt_ja: "有酸素のカード",
+                alt_en: "A cardio card",
+                size_ja: (762, 676),
+                size_en: (762, 676),
+            }),
+        }],
+    },
     ReleaseNote {
         id: 6,
         date: "2026-09-22",
@@ -2027,6 +2140,28 @@ impl Lang {
                 "{n} archived {} do not appear on the Record tab",
                 plural(n, "exercise", "exercises")
             ),
+        }
+    }
+
+    /// ± ボタンの `aria-label`。`n` は幅の絶対値（"2.5" / "1"）、`up` は増やす側か。
+    pub fn step_aria(self, n: &str, up: bool, weight: bool) -> String {
+        match (self, weight, up) {
+            (Lang::Ja, true, true) => format!("重量を{n}kg増やす"),
+            (Lang::Ja, true, false) => format!("重量を{n}kg減らす"),
+            (Lang::Ja, false, true) => format!("回数を{n}増やす"),
+            (Lang::Ja, false, false) => format!("回数を{n}減らす"),
+            (Lang::En, true, true) => format!("Add {n} kg"),
+            (Lang::En, true, false) => format!("Subtract {n} kg"),
+            (Lang::En, false, true) => format!("Add {n} to reps"),
+            (Lang::En, false, false) => format!("Subtract {n} from reps"),
+        }
+    }
+
+    /// 種目の編集シートの「± の幅」欄の注記。空欄のときに使われる全体の幅を括弧で見せる。
+    pub fn exercise_steps_note(self, global: &str) -> String {
+        match self {
+            Lang::Ja => format!("空欄なら全体の幅（{global}）を使います"),
+            Lang::En => format!("Blank uses the overall steps ({global})."),
         }
     }
 

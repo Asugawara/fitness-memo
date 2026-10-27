@@ -311,6 +311,8 @@ const FIGS = [
   { id: 'accordions', pad: 0, scroll: false, setup: setupAccordions },
   { id: 'backup', pad: 0, scroll: false, setup: setupBackup },
   { id: 'copy-last', pad: 8, setup: setupCopyLast },
+  // ★ 当日に 1 枚足す図。`copy-last` の後・`whats-new` の前（`whats-new` は FIGS の最後）
+  { id: 'cardio', pad: 8, setup: setupCardio },
   // ★ 帯は画面幅いっぱいなので `accordions` / `backup` と同じく pad 0（足すと左右が
   //   はみ出す）。setup が自分で先頭へ戻すので中央寄せもしない
   { id: 'whats-new', pad: 0, scroll: false, setup: setupWhatsNew },
@@ -326,6 +328,7 @@ const FIGS = [
  */
 const WN_FIGS = [
   { id: 'weight-line', pad: { top: 4, right: 4, bottom: 0, left: 4 }, setup: setupWeightLine, teardown: teardownWeightLine },
+  { id: 'cardio-card', pad: 8, setup: setupCardio },
 ];
 
 /**
@@ -974,6 +977,42 @@ async function setupCopyLast(page, { ids }) {
 
   const card = page.locator(`#card-${ids.byName(name).id}`);
   await card.getByTestId('copy-last').waitFor({ state: 'visible' });
+  return [card];
+}
+
+/**
+ * 章 12「有酸素を記録する」と新機能のお知らせの図。被写体は**記録タブのトレッドミルのカード**
+ * （区間 2 行と、距離・時間を出す合計の行）。
+ *
+ * ★ 有酸素の種目は `SEED` に無いので、`setupCopyLast` と同じく種目シートから UI で足して打つ。
+ *   区間の値は `setupCopyLast` の懸垂と違い、行ごとに打つ（「+ 区間」が直前の行を写す）。
+ */
+async function setupCardio(page, { ids }) {
+  const name = 'トレッドミル';
+  await gotoTab(page, 'tab-record', 'screen-record');
+  await selectDay(page, DAY_TODAY);
+  await page.getByTestId('add-exercise').click();
+  await page.getByTestId('add-sheet').waitFor({ state: 'visible' });
+  const { group, exercise } = ids.pickIndex(name);
+  await page.getByTestId('pick-group-toggle').nth(group).click();
+  await page.getByTestId('pick-group').nth(group).getByTestId('pick-exercise').nth(exercise).click();
+  await page.getByTestId('add-sheet').waitFor({ state: 'hidden' });
+  await settle(page);
+
+  const card = page.locator(`#card-${ids.byName(name).id}`);
+  const rows = card.getByTestId('set-row');
+  await rows.first().getByTestId('cardio-min').fill('15');
+  await rows.first().getByTestId('cardio-kmh').fill('4.8');
+  await rows.first().getByTestId('cardio-incline').fill('12');
+  await card.getByTestId('add-set').click();
+  await waitFor(async () => (await rows.count()) === 2, '区間の行が 2 本出る');
+  // 2 行目は直前の行（15 分・4.8 km/h・12%）を写したまま。傾斜だけ 15 % に変える
+  await rows.nth(1).getByTestId('cardio-incline').fill('15');
+  // フォーカスが入力欄に残ると `.kb-open` が付いて下の図の並びが変わるので外す（e2e と同じ）
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+  await waitFor(async () => (await card.getByTestId('cardio-total').count()) === 1, '合計の行が出る');
   return [card];
 }
 

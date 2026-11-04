@@ -30,8 +30,8 @@ use super::icon::{self, icon};
 use super::{
     Sheet, cur_lang, ex_name, fmt_clock, fmt_date, fmt_metric, fmt_set, fmt_weight, ghost_in,
     ghost_out, grp_name, kb_blur, kb_focus, keep_in_place_then_reveal, now_ms, parse_reps,
-    parse_weight, scroll_into_view_if_needed, scroll_to_id, t, use_dates, use_db, use_drop_pct,
-    use_history_count, use_kb, use_steps, viewport_top,
+    parse_weight, reveal_edge_stepper, scroll_into_view_if_needed, scroll_to_id, t, use_dates,
+    use_db, use_drop_pct, use_history_count, use_kb, use_steps, viewport_top,
 };
 
 /// 選択日に並べているカード 1 枚。
@@ -223,7 +223,12 @@ fn show_value(node: NodeRef<leptos::html::Input>, text: &str) {
 /// ★ ボタンは `tabindex="-1"` にして、`mousedown` の既定動作を止める。フォーカスを奪うと
 ///   入力欄が blur して、キーボードが閉じてしまう。
 /// ★ 表示は CSS（`.num-wrap:focus-within`）に任せる。普段の画面には出ない。
-fn stepper(steps: &[f32], weight: bool, on_step: impl Fn(f32) + Copy + 'static) -> AnyView {
+fn stepper(
+    steps: &[f32],
+    weight: bool,
+    side: core::StepperSide,
+    on_step: impl Fn(f32) + Copy + 'static,
+) -> AnyView {
     if steps.is_empty() {
         return ().into_any();
     }
@@ -247,6 +252,27 @@ fn stepper(steps: &[f32], weight: bool, on_step: impl Fn(f32) + Copy + 'static) 
             </button>
         }
     };
+    // ★ 端に寄せた 2 段（`.stepper-edge`）。幅ごとに ＋ → − の順に並べ、CSS の列流しで
+    //   同じ幅が縦に揃う（`+1.25 −1.25 +2.5 −2.5 +5 −5`）。区切り線は置かない
+    if side != core::StepperSide::Above {
+        let pairs: Vec<AnyView> = steps
+            .iter()
+            .flat_map(|v| [button(*v, true).into_any(), button(*v, false).into_any()])
+            .collect();
+        let left = side == core::StepperSide::Left;
+        return view! {
+            <div
+                class="stepper stepper-edge"
+                class:stepper-left=left
+                class:stepper-right=!left
+                data-side=side.tag()
+                data-testid="stepper"
+            >
+                {pairs}
+            </div>
+        }
+        .into_any();
+    }
     let minus: Vec<AnyView> = steps
         .iter()
         .rev()
@@ -254,7 +280,12 @@ fn stepper(steps: &[f32], weight: bool, on_step: impl Fn(f32) + Copy + 'static) 
         .collect();
     let plus: Vec<AnyView> = steps.iter().map(|v| button(*v, true).into_any()).collect();
     view! {
-        <div class="stepper" class:stepper-reps=!weight data-testid="stepper">
+        <div
+            class="stepper"
+            class:stepper-reps=!weight
+            data-side=side.tag()
+            data-testid="stepper"
+        >
             {minus}
             <span class="stepper-div" aria-hidden="true"></span>
             {plus}
@@ -1343,6 +1374,7 @@ fn ExerciseCard(
                 .collect::<Vec<f32>>()
         })
     });
+    let side = Memo::new(move |_| steps.with(|s| s.side));
 
     // ★ この種目が普段「重量を使う」種目かを**実データから**判定する。
     //
@@ -2506,6 +2538,7 @@ fn ExerciseCard(
                                         on:keydown=nudge_row
                                         on:focusin=move |ev| {
                                             ghost_in(&ev);
+                                            reveal_edge_stepper(&ev, side.get_untracked());
                                             kb_focus(kb)
                                         }
                                         on:focusout=move |ev| {
@@ -2532,7 +2565,7 @@ fn ExerciseCard(
                                             commit();
                                         }
                                     />
-                                    {move || stepper(&weight_steps.get(), true, nudge_weight)}
+                                    {move || stepper(&weight_steps.get(), true, side.get(), nudge_weight)}
                                     </span>
                                     <span class="unit">"kg"</span>
                                     <span class="times">"×"</span>
@@ -2548,6 +2581,7 @@ fn ExerciseCard(
                                         on:keydown=nudge_row
                                         on:focusin=move |ev| {
                                             ghost_in(&ev);
+                                            reveal_edge_stepper(&ev, side.get_untracked());
                                             kb_focus(kb)
                                         }
                                         on:focusout=move |ev| {
@@ -2572,7 +2606,7 @@ fn ExerciseCard(
                                             commit();
                                         }
                                     />
-                                    {move || stepper(&reps_steps.get(), false, nudge_reps)}
+                                    {move || stepper(&reps_steps.get(), false, side.get(), nudge_reps)}
                                     </span>
                                     // 回数欄に単位は添えない。プランクの 60 に「回」と付くほうが
                                     // 嘘になるし、それが秒だと分かるのは種目名からで表記からではない
@@ -2768,6 +2802,7 @@ fn ExerciseCard(
                                                     on:keydown=nudge_row
                                                     on:focusin=move |ev| {
                                                         ghost_in(&ev);
+                                                        reveal_edge_stepper(&ev, side.get_untracked());
                                                         kb_focus(kb)
                                                     }
                                                     on:focusout=move |ev| {
@@ -2781,7 +2816,7 @@ fn ExerciseCard(
                                                         );
                                                     }
                                                 />
-                                                {move || stepper(&weight_steps.get(), true, nudge_drop_weight)}
+                                                {move || stepper(&weight_steps.get(), true, side.get(), nudge_drop_weight)}
                                                 </span>
                                                 <span class="unit">"kg"</span>
                                                 <span class="times">"×"</span>
@@ -2797,6 +2832,7 @@ fn ExerciseCard(
                                                     on:keydown=nudge_row
                                                     on:focusin=move |ev| {
                                                         ghost_in(&ev);
+                                                        reveal_edge_stepper(&ev, side.get_untracked());
                                                         kb_focus(kb)
                                                     }
                                                     on:focusout=move |ev| {
@@ -2810,7 +2846,7 @@ fn ExerciseCard(
                                                         );
                                                     }
                                                 />
-                                                {move || stepper(&reps_steps.get(), false, nudge_drop_reps)}
+                                                {move || stepper(&reps_steps.get(), false, side.get(), nudge_drop_reps)}
                                                 </span>
                                                 // ★ 段の行にも足す口を置く。位置は
                                                 //   メインセット行と同じ（回数欄の隣）だが、

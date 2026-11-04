@@ -266,6 +266,8 @@ pub fn use_drop_pct() -> RwSignal<f32> {
 pub struct Steps {
     pub weight: [Option<f32>; crate::core::MAX_STEPS],
     pub reps: [Option<u32>; crate::core::MAX_STEPS],
+    /// ± ボタンの位置（左端 / 欄の上 / 右端）。既定は欄の上。
+    pub side: crate::core::StepperSide,
 }
 
 /// [`Steps`] を文脈に載せる。`DropPctCtx` と同じ理由で、種目カードの枚数ぶん読まれる。
@@ -294,6 +296,27 @@ pub fn ghost_in(ev: &web_sys::Event) {
     if !v.is_empty() {
         input.set_placeholder(&v);
         input.set_value("");
+    }
+}
+
+/// 端に寄せた 2 段の箱（`StepperSide::Left` / `Right`）は欄の上 2 行ぶん伸びるので、
+/// 欄が画面の上端近くにあると上が切れる（種目を足した直後の 1 行目など）。欄の上端が
+/// 104px より上なら、その差だけ下へスクロールして箱の上端を画面内に入れる。
+///
+/// ★ `Above` は今の箱（欄の真上の 1 段）なので何もしない。既定の画面は 1px も動かない。
+pub fn reveal_edge_stepper(ev: &web_sys::Event, side: crate::core::StepperSide) {
+    if side == crate::core::StepperSide::Above {
+        return;
+    }
+    let Some(input) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok())
+    else {
+        return;
+    };
+    let top = input.get_bounding_client_rect().top();
+    if top < 104.0 {
+        window().scroll_by_with_x_and_y(0.0, top - 104.0);
     }
 }
 
@@ -919,6 +942,7 @@ pub fn App() -> impl IntoView {
     provide_context(StepsCtx(RwSignal::new(Steps {
         weight: storage::weight_steps(),
         reps: storage::reps_steps(),
+        side: storage::stepper_side(),
     })));
     provide_context(WeightLinesCtx(RwSignal::new(storage::weight_lines())));
     // ★ 起動時に 1 回だけ評価する（上の HistoryCtx と同じ位置・同じ理由）。既読を

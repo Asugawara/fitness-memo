@@ -267,3 +267,107 @@ test('8. ★ 種目の編集で 1 / 2 を入れると、その種目だけ箱が
   const unused = db.exercises.filter((e) => e.name !== 'ベンチプレス');
   for (const e of unused) expect(e).not.toHaveProperty('weight_steps');
 });
+
+// ── 端に寄せる 2 段（adr/ux/stepper-on-the-thumb-side.md）─────────────────────
+
+/** 設定の「位置」を押す（`side` は left / above / right）。 */
+async function setSide(page, side) {
+  await inSteps(page, async () => {
+    await page.locator(`[data-testid="steps-side-btn"][data-side="${side}"]`).click();
+  });
+}
+
+/** 箱の矩形（表示されるまで待つ）。箱は欄にフォーカスがあるあいだだけ出る。 */
+async function boxRect(locator) {
+  await expect(locator).toBeVisible();
+  return locator.boundingBox();
+}
+
+test('9. ★ 右端：箱は行の右端に付き、＋ の真上に − が来る。history と位置が保存される', async ({ page }) => {
+  await page.evaluate((key) => {
+    localStorage.setItem(key, JSON.stringify({ history: 2, drop_pct: 25 }));
+  }, UI_KEY);
+  await page.reload();
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+
+  await setSide(page, 'right');
+  const { row } = await cardWithOneSet(page);
+  await row.getByTestId('set-weight').click();
+
+  const box = row.getByTestId('stepper').first();
+  await expect(box).toHaveAttribute('data-side', 'right');
+  const rowRect = await row.boundingBox();
+  const boxRectNow = await boxRect(box);
+  expect(Math.abs(boxRectNow.x + boxRectNow.width - (rowRect.x + rowRect.width))).toBeLessThanOrEqual(1);
+
+  const plus = stepBtn(box, '+2.5').first();
+  const minus = stepBtn(box, '-2.5').first();
+  const pr = await plus.boundingBox();
+  const mr = await minus.boundingBox();
+  expect(Math.abs(pr.x - mr.x)).toBeLessThanOrEqual(1);
+  expect(pr.y).toBeLessThan(mr.y);
+
+  const ui = await uiState(page);
+  expect(ui.stepper_side).toBe('right');
+  expect(ui.history).toBe(2);
+  expect(ui.drop_pct).toBe(25);
+});
+
+test('10. ★ 右端の ＋2.5 は 1 回で値を変え、フォーカスは欄に残る', async ({ page }) => {
+  await setSide(page, 'right');
+  const { row } = await cardWithOneSet(page);
+  const weight = row.getByTestId('set-weight');
+  await weight.click();
+  await expect(weight).toHaveValue('');
+
+  await stepBtn(row, '+2.5').click();
+  await expect(weight).toHaveValue('62.5');
+  await expect(weight).toBeFocused();
+});
+
+test('11. ★ 左端：箱の左端は行の左端に付く。ドロップの段でも同じ x', async ({ page }) => {
+  await setSide(page, 'left');
+  const { card, row } = await cardWithOneSet(page);
+  const rowRect = await row.boundingBox();
+
+  await row.getByTestId('set-weight').click();
+  const mainBox = await boxRect(row.getByTestId('stepper').first());
+  expect(Math.abs(mainBox.x - rowRect.x)).toBeLessThanOrEqual(1);
+  await blurActive(page);
+
+  await row.getByTestId('drop-add').click();
+  const dropWeight = row.getByTestId('drop-weight');
+  await dropWeight.click();
+  const dropRow = card.getByTestId('drop-row');
+  const dropBox = await boxRect(dropRow.getByTestId('stepper').first());
+  expect(Math.abs(dropBox.x - rowRect.x)).toBeLessThanOrEqual(1);
+});
+
+test('12. ★ 右端：1 行目の欄が画面の上へ寄っていても、箱の上端は画面内に入る', async ({ page }) => {
+  // 種目を 1 つだけにすると、種目を足した直後はページの末尾に居て、その位置から先へは
+  // スクロールできない。画面の高さを 500px にすると、1 行目の欄は上端から約 72px に来る
+  await page.setViewportSize({ width: 390, height: 500 });
+  await setSide(page, 'right');
+  const card = await addExercise(page, 'ベンチプレス');
+  const weight = card.getByTestId('set-row').nth(0).getByTestId('set-weight');
+
+  // 前提：欄の上端が 104px 未満になっていないと、この試験は何も見ていない
+  const before = await weight.boundingBox();
+  expect(before.y, '前提：欄の上端が 104px 未満になっていること').toBeLessThan(104);
+
+  await weight.click();
+  const box = card.getByTestId('set-row').nth(0).getByTestId('stepper').first();
+  await expect.poll(async () => (await box.boundingBox())?.y ?? -1).toBeGreaterThanOrEqual(0);
+});
+
+test('13. 既定（未設定）は data-side="above" で、重量の箱の左端は欄の左端に揃う（今のまま）', async ({ page }) => {
+  const { row } = await cardWithOneSet(page);
+  const weight = row.getByTestId('set-weight');
+  await weight.click();
+  const box = row.getByTestId('stepper').first();
+  await expect(box).toHaveAttribute('data-side', 'above');
+  const boxR = await boxRect(box);
+  const wr = await weight.boundingBox();
+  expect(Math.abs(boxR.x - wr.x)).toBeLessThanOrEqual(1);
+  expect((await uiState(page)).stepper_side).toBeNull();
+});

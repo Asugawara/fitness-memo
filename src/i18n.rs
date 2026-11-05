@@ -397,6 +397,13 @@ pub struct Settings {
     pub steps_none: &'static str,
     /// 節の注記。種目ごとの幅の場所を書く。
     pub steps_exercise_note: &'static str,
+    /// 節の「位置」の見出しと、3 択の文字。並びは画面の並び（左端 / 欄の上 / 右端）。
+    pub steps_side: &'static str,
+    pub side_left: &'static str,
+    pub side_above: &'static str,
+    pub side_right: &'static str,
+    /// 位置の注記。片手で持つときの使い道を 1 行で書く。
+    pub steps_side_note: &'static str,
     /// 種目の編集シートの欄名。
     pub field_steps: &'static str,
 }
@@ -458,11 +465,16 @@ const JA_SETTINGS: Settings = Settings {
     duplicate_label: "同じ名前のラベルがあります",
     delete_label_confirm: "このラベルを削除します。過去の記録は消えませんが、同じ名前で作り直しても過去の記録には戻りません",
     row_steps: "± ボタン",
-    steps_note: "欄をタップすると、欄の上に − / ＋ が出ます。その幅をここで決めます。重量と回数はそれぞれ 3 つまで。空欄の枠は出しません。全部空にすると、その欄には − / ＋ が出なくなります（タップで空になる動きは残ります）",
+    steps_note: "欄をタップすると − / ＋ が出ます。その幅をここで決めます。重量と回数はそれぞれ 3 つまで。空欄の枠は出しません。全部空にすると、その欄には − / ＋ が出なくなります（タップで空になる動きは残ります）",
     steps_weight: "重量",
     steps_reps: "回数",
     steps_none: "なし",
     steps_exercise_note: "種目ごとの重量の幅は、種目 › 編集 で変えられます",
+    steps_side: "位置",
+    side_left: "左端",
+    side_above: "欄の上",
+    side_right: "右端",
+    steps_side_note: "片手で持つときは、持つ手の側に寄せると親指で届きます",
     field_steps: "± の幅 (kg)",
 };
 
@@ -523,11 +535,16 @@ const EN_SETTINGS: Settings = Settings {
     duplicate_label: "A label with that name already exists.",
     delete_label_confirm: "Delete this label? Your records stay, but making a label with the same name again will not bring them back to it.",
     row_steps: "± buttons",
-    steps_note: "Tap a field and − / + appear above it. Set their steps here: up to three each for weight and reps. Blank slots are not shown; if all are blank, that field shows no − / +. Tapping still clears the field.",
+    steps_note: "Tap a field and − / + appear. Set their steps here: up to three each for weight and reps. Blank slots are not shown; if all are blank, that field shows no − / +. Tapping still clears the field.",
     steps_weight: "Weight",
     steps_reps: "Reps",
     steps_none: "None",
     steps_exercise_note: "Weight steps for each exercise can be set under Exercises › Edit.",
+    steps_side: "Position",
+    side_left: "Left edge",
+    side_above: "Above field",
+    side_right: "Right edge",
+    steps_side_note: "Holding the phone in one hand? Put them on that side so your thumb can reach.",
     field_steps: "± step (kg)",
 };
 
@@ -1146,7 +1163,7 @@ const JA_MANUAL: Manual = Manual {
                 "セットメモは今日その行に書いた内容が優先。空の行にだけ前回のメモが入ります。",
                 "体重とその日の体調メモは持ち込みません。",
                 "コピーで入ったセットには時刻が付きません。重量か回数を打ち直した行にだけ、その時刻が入ります。",
-                "直すときは欄をタップすると空になるので、そのまま打てます。何も打たずに離れれば元に戻ります。欄の上に出る − / ＋ の幅は設定タブの『± ボタン』で、種目ごとには種目の編集で変えられます。",
+                "直すときは欄をタップすると空になるので、そのまま打てます。何も打たずに離れれば元に戻ります。欄の上に出る − / ＋ の幅と位置（左端・右端・欄の上）は設定タブの『± ボタン』で、種目ごとには種目の編集で変えられます。",
             ],
             fig_alt: "空のカードと「前回をコピー」",
             fig: Some((762, 618)),
@@ -1366,7 +1383,7 @@ const EN_MANUAL: Manual = Manual {
                 "A set's note keeps what you typed today; the previous note fills only empty rows.",
                 "Body weight and the day's condition note are never copied.",
                 "Copied sets carry no time. Only a row whose weight or reps you retype gets the time you typed it.",
-                "To fix a value, tap the field: it clears, so you can type straight over it. Leave it without typing and the value comes back. The − / + steps above the field are set under Settings › ± buttons, and per exercise under Exercises › Edit.",
+                "To fix a value, tap the field: it clears, so you can type straight over it. Leave it without typing and the value comes back. The − / + steps and their position (left edge, right edge or above the field) are set under Settings › ± buttons, and per exercise under Exercises › Edit.",
             ],
             fig_alt: "An empty card with Copy last time",
             fig: Some((762, 618)),

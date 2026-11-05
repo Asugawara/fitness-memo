@@ -731,8 +731,51 @@ pub fn Settings() -> impl IntoView {
                             }
                         })
                         .collect::<Vec<_>>();
+                    // ★ 位置。言語ページと同じ同値ガード → 保存 → シグナル（`pick` の規則）。
+                    //   並びは画面の並びと同じ（左端 / 欄の上 / 右端）
+                    let pick_side = move |side: core::StepperSide| {
+                        if steps.with_untracked(|s| s.side) == side {
+                            return;
+                        }
+                        storage::save_stepper_side(side);
+                        steps.update(|s| s.side = side);
+                    };
+                    let side_buttons = [
+                        (core::StepperSide::Left, t.settings.side_left),
+                        (core::StepperSide::Above, t.settings.side_above),
+                        (core::StepperSide::Right, t.settings.side_right),
+                    ]
+                    .into_iter()
+                    .map(|(side, label)| {
+                        view! {
+                            <button
+                                class="seg-btn"
+                                class:active=move || steps.with(|s| s.side == side)
+                                aria-pressed=move || steps.with(|s| (s.side == side).to_string())
+                                data-testid="steps-side-btn"
+                                data-side=side.tag()
+                                on:click=move |_| pick_side(side)
+                            >
+                                {label}
+                            </button>
+                        }
+                    })
+                    .collect::<Vec<_>>();
                     view! {
                         {back_head(t.settings.row_steps, move || go(SettingsPage::Root))}
+
+                        <p class="settings-note muted">{t.settings.steps_side}</p>
+                        <div
+                            class="segmented"
+                            role="group"
+                            aria-label=t.settings.steps_side
+                            data-testid="steps-side"
+                        >
+                            {side_buttons}
+                        </div>
+                        <p class="settings-note muted" data-testid="steps-side-note">
+                            {t.settings.steps_side_note}
+                        </p>
 
                         <p class="settings-note muted" data-testid="steps-note">
                             {t.settings.steps_note}

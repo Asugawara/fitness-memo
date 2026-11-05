@@ -1066,6 +1066,36 @@ pub fn join_step_slots<T: ToString>(slots: &[Option<T>]) -> String {
         .join(",")
 }
 
+/// ± の箱の位置（設定 › ± ボタン）。`Above` は今の「欄の上」。`Left` / `Right` は
+/// 持つ手の側の画面端へ寄せ、幅ごとに ＋ → − の 2 段にする（adr/ux/stepper-on-the-thumb-side.md）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum StepperSide {
+    #[default]
+    Above,
+    Left,
+    Right,
+}
+
+impl StepperSide {
+    /// 保存・`data-side` に使う綴り。
+    pub fn tag(self) -> &'static str {
+        match self {
+            StepperSide::Above => "above",
+            StepperSide::Left => "left",
+            StepperSide::Right => "right",
+        }
+    }
+}
+
+/// 保存文字列 → 箱の位置。`"left"` / `"right"` 以外（未設定・知らない値）は `Above`。
+pub fn stepper_side_setting(saved: Option<&str>) -> StepperSide {
+    match saved {
+        Some("left") => StepperSide::Left,
+        Some("right") => StepperSide::Right,
+        _ => StepperSide::Above,
+    }
+}
+
 /// 枠のうち値のあるものを、重複を除いて昇順に並べる。**箱に並べるのはこれ。**
 ///
 /// ★ 「並べ替えない」と書いた保存順（[`clean_weight_steps`]）と違い、ここでは昇順にする。
@@ -11768,6 +11798,20 @@ mod tests {
             weight_step_slots(Some("1.25,,5")),
             [Some(1.25), None, Some(5.0)]
         );
+    }
+
+    #[test]
+    fn stepper_side_setting_falls_back_to_above() {
+        assert_eq!(stepper_side_setting(None), StepperSide::Above);
+        assert_eq!(stepper_side_setting(Some("left")), StepperSide::Left);
+        assert_eq!(stepper_side_setting(Some("right")), StepperSide::Right);
+        assert_eq!(
+            stepper_side_setting(Some("LEFT")),
+            StepperSide::Above,
+            "大文字は読まない"
+        );
+        assert_eq!(stepper_side_setting(Some("x")), StepperSide::Above);
+        assert_eq!(StepperSide::default().tag(), "above");
     }
 
     #[test]

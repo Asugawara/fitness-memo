@@ -345,8 +345,14 @@ test('11. ★ 左端：箱の左端は行の左端に付く。ドロップの段
 
 test('12. ★ 右端：1 行目の欄が画面の上へ寄っていても、箱の上端は画面内に入る', async ({ page }) => {
   // 種目を 1 つだけにすると、種目を足した直後はページの末尾に居て、その位置から先へは
-  // スクロールできない。画面の高さを 500px にすると、1 行目の欄は上端から約 72px に来る
-  await page.setViewportSize({ width: 390, height: 500 });
+  // スクロールできない。画面の高さを 400px にすると、1 行目の欄は上端から約 70〜82px に来る。
+  //
+  // ★ 500px ではなく 400px なのは Pixel 7 のため。Pixel 7 の UA ではカードの下の
+  //   install-hint が出ない（storage_may_split() が false）ので、カードより下の余白が
+  //   chromium / iPhone より約 98px 短く、末尾までスクロールしても欄が 170.5px までしか
+  //   上がらない（実測。500px だと前提の 104px に届かない）。400px なら 3 project とも
+  //   104px を割る（Pixel 7 は 70.5px）
+  await page.setViewportSize({ width: 390, height: 400 });
   await setSide(page, 'right');
   const card = await addExercise(page, 'ベンチプレス');
   const weight = card.getByTestId('set-row').nth(0).getByTestId('set-weight');

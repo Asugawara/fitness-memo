@@ -506,6 +506,10 @@ struct UiState {
     /// ± ボタンの回数の 3 枠（全体の既定）。書き方と理由は `weight_steps` と同じ。
     #[serde(default)]
     reps_steps: Option<String>,
+    /// ± ボタンの位置（`"left"` / `"right"`）。`None` と知らない値は「欄の上」。
+    /// 書き方と理由は `weight_steps` と同じ（文字列で持ち、解釈は core 側）。
+    #[serde(default)]
+    stepper_side: Option<String>,
 }
 
 fn ui_state() -> UiState {
@@ -605,6 +609,18 @@ pub fn weight_steps() -> [Option<f32>; core::MAX_STEPS] {
 pub fn save_weight_steps(slots: &[Option<f32>; core::MAX_STEPS]) {
     update_ui(|u| {
         u.weight_steps = Some(core::join_step_slots(slots));
+    });
+}
+
+/// ± ボタンの位置。未設定は「欄の上」。
+pub fn stepper_side() -> core::StepperSide {
+    core::stepper_side_setting(ui_state().stepper_side.as_deref())
+}
+
+/// ± ボタンの位置を保存する。クリックのたびに 1 回きりなので debounce しない。
+pub fn save_stepper_side(side: core::StepperSide) {
+    update_ui(|u| {
+        u.stepper_side = Some(side.tag().to_string());
     });
 }
 

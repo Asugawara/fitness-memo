@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-10-27
 - **カテゴリ**: ux
-- **関連**: [セット追加は直前行の重量をコピーして回数欄へフォーカスする](set-entry-prefill-and-focus.md)（この ADR が直した摩擦の出どころ）, [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](machine-pins-on-the-exercise.md)（種目に貼り付く設定の作法）, [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](interval-seconds-on-the-exercise.md)（同じ作法の隣人）, [数値入力に `type="number"` を使わない](text-input-not-number.md)（テンキーを自前で持たない理由）, [キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md)（キーボードを閉じない条件）
+- **関連**: [セット追加は直前行の重量をコピーして回数欄へフォーカスする](set-entry-prefill-and-focus.md)（この ADR が直した摩擦の出どころ）, [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](machine-pins-on-the-exercise.md)（種目に貼り付く設定の作法）, [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](interval-seconds-on-the-exercise.md)（同じ作法の隣人）, [数値入力に `type="number"` を使わない](text-input-not-number.md)（テンキーを自前で持たない理由）, [キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md)（キーボードを閉じない条件）, [± の箱は設定で持つ手の側の端へ 2 段で寄せられる](stepper-on-the-thumb-side.md)（この ADR の箱を端へ寄せる後続。既定は「欄の上」のまま）
 
 ## 背景
 

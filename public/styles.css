@@ -1035,6 +1035,20 @@ h3 {
   transform: translateX(-50%);
 }
 
+/* 端に寄せる 2 段（adr/ux/stepper-on-the-thumb-side.md） */
+.num-wrap:has(> .stepper-edge) { position: static; }
+.set-row:has(.stepper-edge),
+.drop-row:has(.stepper-edge) { position: relative; }
+.stepper.stepper-edge {
+  grid-template-rows: 44px 44px;
+  grid-auto-flow: column;
+  grid-auto-columns: 44px;
+}
+.num-wrap:focus-within .stepper.stepper-edge { display: grid; }
+.stepper.stepper-right { left: auto; right: 0; }
+.stepper.stepper-left { left: 0; }
+.drop-row .stepper.stepper-left { left: -44px; } /* 段の字下げ 44px を戻し、メイン行の左端に揃える */
+
 .num-wrap:focus-within .stepper {
   display: flex;
 }

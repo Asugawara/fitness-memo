@@ -402,6 +402,8 @@ pub struct Settings {
     pub side_left: &'static str,
     pub side_above: &'static str,
     pub side_right: &'static str,
+    /// キーボードの真上（adr/ux/stepper-above-the-keyboard.md）。並びの末尾に置く。
+    pub side_keyboard: &'static str,
     /// 位置の注記。片手で持つときの使い道を 1 行で書く。
     pub steps_side_note: &'static str,
     /// 種目の編集シートの欄名。
@@ -474,6 +476,7 @@ const JA_SETTINGS: Settings = Settings {
     side_left: "左端",
     side_above: "欄の上",
     side_right: "右端",
+    side_keyboard: "キーボードの上",
     steps_side_note: "片手で持つときは、持つ手の側に寄せると親指で届きます",
     field_steps: "± の幅 (kg)",
 };
@@ -544,6 +547,7 @@ const EN_SETTINGS: Settings = Settings {
     side_left: "Left edge",
     side_above: "Above field",
     side_right: "Right edge",
+    side_keyboard: "Above keys",
     steps_side_note: "Holding the phone in one hand? Put them on that side so your thumb can reach.",
     field_steps: "± step (kg)",
 };
@@ -1163,7 +1167,7 @@ const JA_MANUAL: Manual = Manual {
                 "セットメモは今日その行に書いた内容が優先。空の行にだけ前回のメモが入ります。",
                 "体重とその日の体調メモは持ち込みません。",
                 "コピーで入ったセットには時刻が付きません。重量か回数を打ち直した行にだけ、その時刻が入ります。",
-                "直すときは欄をタップすると空になるので、そのまま打てます。何も打たずに離れれば元に戻ります。欄の上に出る − / ＋ の幅と位置（左端・右端・欄の上）は設定タブの『± ボタン』で、種目ごとには種目の編集で変えられます。",
+                "直すときは欄をタップすると空になるので、そのまま打てます。何も打たずに離れれば元に戻ります。欄の上に出る − / ＋ の幅と位置（左端・右端・欄の上・キーボードの上）は設定タブの『± ボタン』で、種目ごとには種目の編集で変えられます。",
             ],
             fig_alt: "空のカードと「前回をコピー」",
             fig: Some((762, 618)),

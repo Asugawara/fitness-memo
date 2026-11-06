@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-10-27
 - **カテゴリ**: ux
-- **関連**: [セット追加は直前行の重量をコピーして回数欄へフォーカスする](set-entry-prefill-and-focus.md)（この ADR が直した摩擦の出どころ）, [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](machine-pins-on-the-exercise.md)（種目に貼り付く設定の作法）, [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](interval-seconds-on-the-exercise.md)（同じ作法の隣人）, [数値入力に `type="number"` を使わない](text-input-not-number.md)（テンキーを自前で持たない理由）, [キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md)（キーボードを閉じない条件）, [± の箱は設定で持つ手の側の端へ 2 段で寄せられる](stepper-on-the-thumb-side.md)（この ADR の箱を端へ寄せる後続。既定は「欄の上」のまま）
+- **関連**: [セット追加は直前行の重量をコピーして回数欄へフォーカスする](set-entry-prefill-and-focus.md)（この ADR が直した摩擦の出どころ）, [マシンのピンは種目に持たせ、メモのトグルに相乗りさせる](machine-pins-on-the-exercise.md)（種目に貼り付く設定の作法）, [インターバルは秒の整数 1 つを種目に持たせ、ピンの下に並べる](interval-seconds-on-the-exercise.md)（同じ作法の隣人）, [数値入力に `type="number"` を使わない](text-input-not-number.md)（テンキーを自前で持たない理由）, [キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md)（キーボードを閉じない条件）, [± の箱は設定で持つ手の側の端へ 2 段で寄せられる](stepper-on-the-thumb-side.md)（この ADR の箱を端へ寄せる後続。既定は「欄の上」のまま）, [キーボードの上に ± の箱を 4 つ目の位置として足す](stepper-above-the-keyboard.md)（「キーボードの真上のバー」の却下を、既定を変えずに選択肢として採った後続）
 
 ## 背景
 
@@ -71,7 +71,7 @@ wger（OSS）・Strong・JEFIT・Boostcamp は、資料やコードで確かめ�
 
 - **全選択（`setSelectionRange`）**：iOS はタップ後にキャレットを置き直すので効いたり効かなかったりし、選択ハンドルも出る
 - **全行に ± を常設**：3 セットで行が 150px → 288px。1 行目の余白は約 44px しかない
-- **キーボードの真上のバー**：`visualViewport` 追従が要り、[キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md) が避けた iOS の不具合を踏む
+- **キーボードの真上のバー**：`visualViewport` 追従が要り、[キーボード表示中はボトムタブを隠す](../pwa/hide-tabs-when-keyboard-open.md) が避けた iOS の不具合を踏む。後に選択肢として採った（既定にはしない。理由は [キーボードの上に ± の箱を 4 つ目の位置として足す](stepper-above-the-keyboard.md)）
 - **自前のテンキー**：[数値入力に `type="number"` を使わない](text-input-not-number.md) で却下済み
 - **種目ごとの幅を TSV に載せる**：TSV は記録の書き出しで、外部の表計算が列名で読む仕様。UI の刻みは記録ではないので列を増やさない（JSON バックアップには入る）
 - **プリセット種目に既定の幅を配る**：ラベルと同じ理由（`Exercise::labels` の doc）。使わない人の画面とデータを動かさない

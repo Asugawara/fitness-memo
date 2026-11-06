@@ -1068,12 +1068,16 @@ pub fn join_step_slots<T: ToString>(slots: &[Option<T>]) -> String {
 
 /// ± の箱の位置（設定 › ± ボタン）。`Above` は今の「欄の上」。`Left` / `Right` は
 /// 持つ手の側の画面端へ寄せ、幅ごとに ＋ → − の 2 段にする（adr/ux/stepper-on-the-thumb-side.md）。
+///
+/// `Keyboard` は画面下端のキーボードの真上に全幅 1 列で出す（adr/ux/stepper-above-the-keyboard.md）。
+/// 旧版は `"keyboard"` を知らず `Above` に落ちる（`stepper_side_setting` のフォールバック）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum StepperSide {
     #[default]
     Above,
     Left,
     Right,
+    Keyboard,
 }
 
 impl StepperSide {
@@ -1083,17 +1087,28 @@ impl StepperSide {
             StepperSide::Above => "above",
             StepperSide::Left => "left",
             StepperSide::Right => "right",
+            StepperSide::Keyboard => "keyboard",
         }
     }
 }
 
-/// 保存文字列 → 箱の位置。`"left"` / `"right"` 以外（未設定・知らない値）は `Above`。
+/// 保存文字列 → 箱の位置。`"left"` / `"right"` / `"keyboard"` 以外（未設定・知らない値）は `Above`。
 pub fn stepper_side_setting(saved: Option<&str>) -> StepperSide {
     match saved {
         Some("left") => StepperSide::Left,
         Some("right") => StepperSide::Right,
+        Some("keyboard") => StepperSide::Keyboard,
         _ => StepperSide::Above,
     }
+}
+
+/// キーボードが画面の下からどれだけ食っているか（px）。箱の `bottom` に入れる値。
+///
+/// `inner_h` は `window.innerHeight`、`vv_h` / `vv_top` は visual viewport の高さと上端。
+/// iOS は visual viewport だけ縮むので、`inner_h − vv_h − vv_top` が食われた分になる。
+/// 負にはしない（ピンチズームや実機の丸めで負になりうる）。
+pub fn kb_inset(inner_h: f64, vv_h: f64, vv_top: f64) -> f64 {
+    (inner_h - vv_h - vv_top).max(0.0)
 }
 
 /// 枠のうち値のあるものを、重複を除いて昇順に並べる。**箱に並べるのはこれ。**
@@ -11806,12 +11821,26 @@ mod tests {
         assert_eq!(stepper_side_setting(Some("left")), StepperSide::Left);
         assert_eq!(stepper_side_setting(Some("right")), StepperSide::Right);
         assert_eq!(
+            stepper_side_setting(Some("keyboard")),
+            StepperSide::Keyboard
+        );
+        assert_eq!(
             stepper_side_setting(Some("LEFT")),
             StepperSide::Above,
             "大文字は読まない"
         );
         assert_eq!(stepper_side_setting(Some("x")), StepperSide::Above);
         assert_eq!(StepperSide::default().tag(), "above");
+        assert_eq!(StepperSide::Keyboard.tag(), "keyboard");
+    }
+
+    #[test]
+    fn kb_inset_is_the_part_of_the_screen_the_keyboard_covers() {
+        assert_eq!(kb_inset(844.0, 544.0, 0.0), 300.0);
+        // ピンチズームなどで負になる組み合わせでも 0 に丸める
+        assert_eq!(kb_inset(844.0, 844.0, 10.0), 0.0);
+        // visual viewport が上へずれていれば、その分も食われた扱いにする
+        assert_eq!(kb_inset(844.0, 500.0, 20.0), 324.0);
     }
 
     #[test]

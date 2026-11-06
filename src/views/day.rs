@@ -254,11 +254,24 @@ fn stepper(
     };
     // ★ 端に寄せた 2 段（`.stepper-edge`）。幅ごとに ＋ → − の順に並べ、CSS の列流しで
     //   同じ幅が縦に揃う（`+1.25 −1.25 +2.5 −2.5 +5 −5`）。区切り線は置かない
+    //   `Keyboard`（キーボードの上）も同じ並びで、上の段に ＋、下の段に −（adr/ux/stepper-above-the-keyboard.md）
     if side != core::StepperSide::Above {
         let pairs: Vec<AnyView> = steps
             .iter()
             .flat_map(|v| [button(*v, true).into_any(), button(*v, false).into_any()])
             .collect();
+        if side == core::StepperSide::Keyboard {
+            return view! {
+                <div
+                    class="stepper stepper-kb"
+                    data-side=side.tag()
+                    data-testid="stepper"
+                >
+                    {pairs}
+                </div>
+            }
+            .into_any();
+        }
         let left = side == core::StepperSide::Left;
         return view! {
             <div

@@ -744,6 +744,7 @@ pub fn Settings() -> impl IntoView {
                         (core::StepperSide::Left, t.settings.side_left),
                         (core::StepperSide::Above, t.settings.side_above),
                         (core::StepperSide::Right, t.settings.side_right),
+                        (core::StepperSide::Keyboard, t.settings.side_keyboard),
                     ]
                     .into_iter()
                     .map(|(side, label)| {

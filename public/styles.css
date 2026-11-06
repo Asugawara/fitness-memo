@@ -1049,6 +1049,27 @@ h3 {
 .stepper.stepper-left { left: 0; }
 .drop-row .stepper.stepper-left { left: -44px; } /* 段の字下げ 44px を戻し、メイン行の左端に揃える */
 
+/* キーボードの上（adr/ux/stepper-above-the-keyboard.md）。画面幅いっぱいの 2 段（上 ＋ / 下 −）。
+   `.stepper.stepper-reps` の left / transform は、後に書いたこの節が打ち消す */
+.stepper.stepper-kb {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--kb-inset, 0px);
+  width: auto;
+  transform: none;
+  z-index: 3;
+  border-radius: 0;
+  border-width: 1px 0 0;
+  padding: 4px max(4px, env(safe-area-inset-right)) 4px max(4px, env(safe-area-inset-left));
+  display: none;
+  grid-template-rows: 44px 44px;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+}
+.num-wrap:focus-within .stepper.stepper-kb { display: grid; }
+.stepper-kb .step-btn { min-width: 44px; }
+
 .num-wrap:focus-within .stepper {
   display: flex;
 }

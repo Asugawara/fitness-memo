@@ -308,6 +308,15 @@ pub fn reveal_edge_stepper(ev: &web_sys::Event, side: crate::core::StepperSide) 
     if side == crate::core::StepperSide::Above {
         return;
     }
+    if side == crate::core::StepperSide::Keyboard {
+        if let Some(field) = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        {
+            keep_field_above_kb_bar(&field);
+        }
+        return;
+    }
     let Some(input) = ev
         .target()
         .and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok())
@@ -412,6 +421,81 @@ pub fn kb_blur(kb: KbCtx) {
     match set_timeout_with_handle(move || open.set(false), Duration::from_millis(150)) {
         Ok(handle) => KB_TIMER.set(Some(handle)),
         Err(_) => open.set(false),
+    }
+}
+
+/// キーボードの上の箱（`StepperSide::Keyboard`）の下端を、キーボードの高さに合わせる。
+///
+/// visual viewport の `resize` / `scroll` で `core::kb_inset` を計算し、`--kb-inset` に書く
+/// （CSS の `.stepper-kb { bottom: var(--kb-inset) }`）。`App` から 1 回だけ呼ぶ。
+///
+/// ★ `visual_viewport()` が無い環境では何もしない（箱は画面の下端に付くだけ）。
+/// ★ リスナーは `App` が生きている間ずっと要るので `Closure::forget` で手放さない
+///   （`App` は 1 回しか作られず、外すタイミングが無い）。
+pub fn watch_kb_inset() {
+    let Some(vv) = window().visual_viewport() else {
+        return;
+    };
+    apply_kb_inset(&vv);
+    let on_change = {
+        let vv = vv.clone();
+        wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+            apply_kb_inset(&vv);
+            if let Some(field) = document().active_element() {
+                keep_field_above_kb_bar(&field);
+            }
+        })
+    };
+    let on_scroll = {
+        let vv = vv.clone();
+        wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+            apply_kb_inset(&vv);
+        })
+    };
+    let _ = vv.add_event_listener_with_callback("resize", on_change.as_ref().unchecked_ref());
+    let _ = vv.add_event_listener_with_callback("scroll", on_scroll.as_ref().unchecked_ref());
+    on_change.forget();
+    on_scroll.forget();
+}
+
+/// `--kb-inset` を今の visual viewport から書く。
+fn apply_kb_inset(vv: &web_sys::VisualViewport) {
+    let inner = window()
+        .inner_height()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let inset = crate::core::kb_inset(inner, vv.height(), vv.offset_top());
+    if let Some(root) = document()
+        .document_element()
+        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        let _ = root
+            .style()
+            .set_property("--kb-inset", &format!("{inset}px"));
+    }
+}
+
+/// 欄が、同じ `.num-wrap` の中のキーボード上の箱（`.stepper-kb`）に覆われていれば、
+/// 差だけ下へスクロールして欄を箱の上に出す（8px の余白つき）。
+///
+/// `field` が入力欄でなければ何もしない。箱が無い（キーボード上の設定でない）場合も何もしない。
+/// 呼び出し元は欄の `focusin`（[`reveal_edge_stepper`]）と visual viewport の `resize`。
+/// 後者は iOS がキーボードを開き切ってから `resize` を送るため、そこでも判定し直す。
+pub fn keep_field_above_kb_bar(field: &web_sys::Element) {
+    if !field.is_instance_of::<web_sys::HtmlInputElement>() {
+        return;
+    }
+    let Ok(Some(wrap)) = field.closest(".num-wrap") else {
+        return;
+    };
+    let Ok(Some(bar)) = wrap.query_selector(".stepper-kb") else {
+        return;
+    };
+    let field_bottom = field.get_bounding_client_rect().bottom();
+    let bar_top = bar.get_bounding_client_rect().top();
+    if field_bottom > bar_top {
+        window().scroll_by_with_x_and_y(0.0, field_bottom - bar_top + 8.0);
     }
 }
 
@@ -929,6 +1013,8 @@ pub fn App() -> impl IntoView {
 
     let kb = KbCtx(RwSignal::new(false));
     provide_context(kb);
+    // ★ キーボードの上の箱の高さ（`--kb-inset`）。`visual_viewport` が無ければ何もしない
+    watch_kb_inset();
 
     // ★ 設定タブの外に置く（タブ往復で閉じない / トップへ戻らないため）。
     //   理由は OpenGroupCtx と SettingsPage を参照

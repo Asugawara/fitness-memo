@@ -93,6 +93,7 @@ GitHub Pages の branch deploy は公開ディレクトリが `/` か `/docs` �
 | [有酸素のカードは 1 行 = 1 区間、欄は機種ごとに最大 3 つ](ux/cardio-card-fields-per-machine.md) | 採用 |
 | [タップで数値を空にし、触っている欄の真上に ± ボタンを浮かせる](ux/tap-clears-the-number-and-steps-above-the-field.md) | 採用 |
 | [± の箱は設定で持つ手の側の端へ 2 段で寄せられる](ux/stepper-on-the-thumb-side.md) | 採用 |
+| [± の箱の位置に「キーボードの上」を 4 つ目として足す（既定は欄の上のまま）](ux/stepper-above-the-keyboard.md) | 採用 |
 | [1 日分のメニューは候補リストから 1 タップで丸ごとコピーする](ux/copy-whole-day-menu.md) | 採用（候補の出所は [保存したメニューから始める（種目タブを設定タブに改める）](ux/start-from-a-saved-routine.md) で拡張） |
 | [ホーム画面への追加の案内を記録タブ末尾のバナー + 手順シートにする](ux/install-guide-banner-and-sheet.md) | 採用 |
 | [破壊的操作は静止時に警告色を持たない（カード削除をフッタへ畳む）](ux/destructive-affordance-quiet-at-rest.md) | 採用 |

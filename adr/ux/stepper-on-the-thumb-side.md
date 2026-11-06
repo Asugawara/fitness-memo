@@ -3,7 +3,7 @@
 - **状態**: 採用
 - **日付**: 2026-11-04
 - **カテゴリ**: ux
-- **関連**: [タップで数値を空にし、触っている欄の真上に ± ボタンを浮かせる](tap-clears-the-number-and-steps-above-the-field.md)（この ADR が箱の位置を決めた。既定はそのまま「欄の上」）, [数値入力に `type="number"` を使わない](text-input-not-number.md)（テンキーを足さない理由）
+- **関連**: [タップで数値を空にし、触っている欄の真上に ± ボタンを浮かせる](tap-clears-the-number-and-steps-above-the-field.md)（この ADR が箱の位置を決めた。既定はそのまま「欄の上」）, [キーボードの上に ± の箱を 4 つ目の位置として足す](stepper-above-the-keyboard.md)（後から足した位置。同じ 2 段の並び）, [数値入力に `type="number"` を使わない](text-input-not-number.md)（テンキーを足さない理由）
 
 ## 背景
 

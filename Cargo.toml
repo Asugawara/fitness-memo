@@ -59,6 +59,9 @@ web-sys = { version = "0.3", features = [
     "Clipboard",           # Navigator::clipboard → writeText（unstable フラグ不要）
     # ── お知らせの図（views::whatsnew）──
     "ErrorEvent",          # tachys 経由で偶然有効だが方針に従い明示。<img on:error> の型
+    # ── キーボードの上の箱（adr/ux/stepper-above-the-keyboard.md）──
+    "VisualViewport",      # Window::visual_viewport → キーボードが食った高さ（--kb-inset）
+    "CssStyleDeclaration", # HtmlElement::style → documentElement.style.setProperty("--kb-inset")
 ] }
 
 [profile.release]

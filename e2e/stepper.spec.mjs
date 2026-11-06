@@ -377,3 +377,131 @@ test('13. 既定（未設定）は data-side="above" で、重量の箱の左端
   expect(Math.abs(boxR.x - wr.x)).toBeLessThanOrEqual(1);
   expect((await uiState(page)).stepper_side).toBeNull();
 });
+
+// ── キーボードの上（adr/ux/stepper-above-the-keyboard.md）────────────────────
+//
+// 箱は画面幅いっぱいの 2 段（上 ＋ / 下 −）。Playwright にはキーボードが無いので、
+// キーボードが出ている状態は `--kb-inset` が 0 の「画面の下端」で見る。
+
+/** 箱の中のボタンを DOM の順に `data-delta` で返す。 */
+const deltasOf = (box) => box.locator('[data-testid="step-btn"]').evaluateAll((els) => els.map((e) => e.dataset.delta));
+
+test('14. ★ キーボードの上：位置ボタンは 375px に収まり、箱は画面幅いっぱい・下端に付く。＋が上段、−が下段', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 700 });
+  await page.evaluate((key) => {
+    localStorage.setItem(key, JSON.stringify({ history: 2, drop_pct: 25 }));
+  }, UI_KEY);
+  await page.reload();
+  await expect(page.getByTestId('screen-record')).toBeVisible();
+
+  await inSteps(page, async () => {
+    const group = page.getByTestId('steps-side');
+    const fits = await group.evaluate((el) => el.scrollWidth <= el.clientWidth);
+    expect(fits, '位置ボタンの 4 つが 375px に収まる').toBe(true);
+    await page.locator('[data-testid="steps-side-btn"][data-side="keyboard"]').click();
+  });
+
+  const { row } = await cardWithOneSet(page);
+  await row.getByTestId('set-weight').click();
+
+  const box = row.getByTestId('stepper').first();
+  await expect(box).toHaveAttribute('data-side', 'keyboard');
+  const r = await boxRect(box);
+  const vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+  expect(Math.abs(r.x), '箱は左端から').toBeLessThanOrEqual(1);
+  expect(Math.abs(r.width - vp.w), '箱の幅 = innerWidth').toBeLessThanOrEqual(1);
+  expect(Math.abs(r.y + r.height - vp.h), '箱の下端 = innerHeight').toBeLessThanOrEqual(1);
+
+  expect(await deltasOf(box)).toEqual(['+1.25', '-1.25', '+2.5', '-2.5', '+5', '-5']);
+  const plus = stepBtn(box, '+2.5');
+  const minus = stepBtn(box, '-2.5');
+  const pr = await plus.boundingBox();
+  const mr = await minus.boundingBox();
+  expect(pr.y, '＋ が上の段').toBeLessThan(mr.y);
+  expect(Math.abs(pr.x - mr.x), '同じ幅の ＋ と − は同じ列').toBeLessThanOrEqual(1);
+
+  const ui = await uiState(page);
+  expect(ui.stepper_side).toBe('keyboard');
+  expect(ui.history).toBe(2);
+  expect(ui.drop_pct).toBe(25);
+});
+
+test('15. ★ キーボードの上の ＋2.5 は 1 回で値を変え、フォーカスは欄に残る', async ({ page }) => {
+  await setSide(page, 'keyboard');
+  const { row } = await cardWithOneSet(page);
+  const weight = row.getByTestId('set-weight');
+  await weight.click();
+  await expect(weight).toHaveValue('');
+
+  await stepBtn(row, '+2.5').click();
+  await expect(weight).toHaveValue('62.5');
+  await expect(weight).toBeFocused();
+});
+
+test('16. ★ 画面の一番下にある欄にフォーカスしても、欄の下端が箱の上端より上に出る', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 400 });
+  await setSide(page, 'keyboard');
+  const card = await addExercise(page, 'ベンチプレス');
+  const weight = card.getByTestId('set-row').nth(0).getByTestId('set-weight');
+  const box = card.getByTestId('set-row').nth(0).getByTestId('stepper').first();
+  // 欄の下に文書の高さが要る。1 種目だけだと欄は画面の上の方までしか上がらないので、
+  // 下にもう 1 種目足してから、1 種目目の欄を「スクロールで画面の一番下」へ送る
+  await addExercise(page, 'スクワット');
+  await weight.evaluate((el) => el.scrollIntoView({ block: 'end' }));
+
+  // 前提：欄が箱の置かれる帯（画面下端から 96px）に重なる位置にある
+  const before = await weight.boundingBox();
+  expect(before.y + before.height, '前提：欄が箱の帯に重なる').toBeGreaterThan(400 - 96);
+
+  await weight.click();
+  await expect(box).toBeVisible();
+  const fieldR = await weight.boundingBox();
+  const boxR = await box.boundingBox();
+  expect(fieldR.y + fieldR.height, '欄の下端 ≤ 箱の上端').toBeLessThanOrEqual(boxR.y + 1);
+});
+
+test('17. 回数の箱・ドロップの段の箱も、画面幅いっぱい・下端に付く（＋1 が上段）', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 700 });
+  await setSide(page, 'keyboard');
+  const { card, row } = await cardWithOneSet(page);
+  const vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+
+  // 回数欄の箱（重量欄の箱は同じ行にあるが、フォーカス中の欄の箱だけ出る）
+  const repsWrap = row.locator('.num-wrap').nth(1);
+  await row.getByTestId('set-reps').click();
+  const repsBox = await boxRect(repsWrap.getByTestId('stepper'));
+  expect(Math.abs(repsBox.width - vp.w)).toBeLessThanOrEqual(1);
+  expect(Math.abs(repsBox.y + repsBox.height - vp.h)).toBeLessThanOrEqual(1);
+  // 最小の値の組（既定は 1）は ＋ が上、− が下で、最初の組が +1 / −1
+  const repsDeltas = await deltasOf(repsWrap.getByTestId('stepper'));
+  expect(repsDeltas.slice(0, 2)).toEqual(['+1', '-1']);
+  await blurActive(page);
+
+  await row.getByTestId('drop-add').click();
+  await card.getByTestId('drop-row').getByTestId('drop-weight').click();
+  const dropBox = await boxRect(card.getByTestId('drop-row').getByTestId('stepper').first());
+  expect(Math.abs(dropBox.width - vp.w)).toBeLessThanOrEqual(1);
+  expect(Math.abs(dropBox.y + dropBox.height - vp.h)).toBeLessThanOrEqual(1);
+});
+
+test('18. ★ キーボードの上（Chromium）：visual viewport を縮めると、箱の下端が visual viewport の下端に付く', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'CDP の setPageScaleFactor は Chromium のみ');
+  await setSide(page, 'keyboard');
+  const { row } = await cardWithOneSet(page);
+  await row.getByTestId('set-weight').click();
+  const box = row.getByTestId('stepper').first();
+  await expect(box).toBeVisible();
+
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 2 });
+
+  // 前提：visual viewport が実際に縮んでいること（縮まなければ、この試験は何も見ていない）
+  await expect.poll(() => page.evaluate(() => window.visualViewport.height)).toBeLessThan(
+    await page.evaluate(() => window.innerHeight) - 1,
+  );
+  await expect.poll(() => page.evaluate(() => parseFloat(document.documentElement.style.getPropertyValue('--kb-inset')) || 0)).toBeGreaterThan(0);
+
+  const bottom = await page.evaluate(() => window.visualViewport.offsetTop + window.visualViewport.height);
+  const r = await boxRect(box);
+  expect(Math.abs(r.y + r.height - bottom)).toBeLessThanOrEqual(1);
+});
